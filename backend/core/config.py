@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # Twilio (Missed Call → WhatsApp)
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_PHONE_NUMBER: str = ""  # Your purchased Twilio number
+    TWILIO_PHONE_NUMBER: str = "+61348236219"  # Your purchased Twilio number
 
     class Config:
         case_sensitive = True

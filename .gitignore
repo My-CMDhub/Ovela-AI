@@ -53,3 +53,6 @@ __pycache__/
 # Local Documentation (Do not push)
 future-plan/
 memory_bank/
+
+# guide files
+backend/redeploy-guide.md
