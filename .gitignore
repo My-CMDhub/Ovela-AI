@@ -47,5 +47,9 @@ next-env.d.ts
 
 #virtual env
 venv/
+.venv/
 __pycache__/
-.next/
+
+# Local Documentation (Do not push)
+future-plan/
+memory_bank/
