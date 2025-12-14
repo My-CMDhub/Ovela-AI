@@ -1,0 +1,13 @@
+{
+  "name": "waitlist-email-function",
+  "version": "1.0.0",
+  "description": "Sends welcome emails to waitlist signups via Resend",
+  "main": "src/main.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/main.js"
+  },
+  "dependencies": {
+    "node-appwrite": "^14.0.0"
+  }
+}
