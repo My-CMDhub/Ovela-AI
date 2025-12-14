@@ -47,5 +47,6 @@ next-env.d.ts
 
 #virtual env
 venv/
+.venv
 __pycache__/
 .next/
