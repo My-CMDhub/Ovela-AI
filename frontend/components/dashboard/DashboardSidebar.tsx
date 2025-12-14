@@ -26,6 +26,8 @@ import { Route } from "@/components/animate-ui/icons/route";
 import { Layers } from "@/components/animate-ui/icons/layers";
 import { ChartColumn } from "@/components/animate-ui/icons/chart-column";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/dashboard/bookings", label: "Bookings", icon: Calendar },
@@ -45,7 +47,7 @@ export default function DashboardSidebar() {
     useEffect(() => {
         const fetchPendingCount = async () => {
             try {
-                const res = await fetch("http://localhost:8000/api/dashboard/requests/pending-count");
+                const res = await fetch(`${API_URL}/api/dashboard/requests/pending-count`);
                 const data = await res.json();
                 setPendingCount(data.count || 0);
             } catch (error) {

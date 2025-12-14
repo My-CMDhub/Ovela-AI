@@ -16,6 +16,8 @@ interface BookingRequest {
     created_at?: string;
 }
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 export default function RequestsPage() {
     const [requests, setRequests] = useState<BookingRequest[]>([]);
     const [filter, setFilter] = useState<string>("pending");
@@ -32,8 +34,8 @@ export default function RequestsPage() {
         setLoading(true);
         try {
             const url = filter
-                ? `http://localhost:8000/api/dashboard/requests?status=${filter}`
-                : "http://localhost:8000/api/dashboard/requests";
+                ? `${API_URL}/api/dashboard/requests?status=${filter}`
+                : `${API_URL}/api/dashboard/requests`;
             const res = await fetch(url);
             const data = await res.json();
             setRequests(data.requests || []);
@@ -51,7 +53,7 @@ export default function RequestsPage() {
     const handleApprove = async (id: string) => {
         setActionLoading(id);
         try {
-            await fetch(`http://localhost:8000/api/dashboard/requests/${id}/approve`, {
+            await fetch(`${API_URL}/api/dashboard/requests/${id}/approve`, {
                 method: "PATCH",
             });
             fetchRequests();
@@ -76,7 +78,7 @@ export default function RequestsPage() {
         setActionLoading(rejectingId);
         try {
             const reasonParam = rejectReason ? `?reason=${encodeURIComponent(rejectReason)}` : "";
-            await fetch(`http://localhost:8000/api/dashboard/requests/${rejectingId}/reject${reasonParam}`, {
+            await fetch(`${API_URL}/api/dashboard/requests/${rejectingId}/reject${reasonParam}`, {
                 method: "PATCH",
             });
             setShowRejectModal(false);
