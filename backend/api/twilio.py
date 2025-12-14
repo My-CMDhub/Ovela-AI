@@ -53,10 +53,11 @@ async def handle_call_status(
     Handle call status callbacks from Twilio.
     Triggered when call ends - check if it was missed/no-answer.
     """
-    logger.info(f"Call status update: {CallSid} from {From} - Status: {CallStatus}")
+    logger.info(f"📞 Call status update: {CallSid} from {From} - Status: {CallStatus}, Duration: {CallDuration}s")
     
     # Normalize phone number (remove + prefix for WhatsApp)
     caller_phone = From.replace("+", "")
+    logger.info(f"Normalized phone: {caller_phone}")
     
     # If call was completed but short, or no-answer, send WhatsApp
     if CallStatus in ["completed", "no-answer", "busy", "failed"]:
@@ -99,16 +100,17 @@ I'm the virtual assistant here to help you book an appointment. Just let me know
 I'll forward your request to the team and they'll confirm your booking! 💅"""
 
             await meta_service.send_text_message(caller_phone, message)
-            logger.info(f"Sent WhatsApp intro to {caller_phone} (rejection_context: {has_recent_rejection})")
+            logger.info(f"✅ Sent WhatsApp intro to {caller_phone} (rejection_context: {has_recent_rejection})")
             
             # NOTE: We do NOT create a booking request or send email here.
             # Email is only sent when the customer provides full booking details
             # and the AI submits a booking request via submit_booking_request tool.
             
         except Exception as e:
-            logger.error(f"Error handling missed call: {e}")
+            import traceback
+            logger.error(f"❌ Error handling missed call from {caller_phone}: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+    else:
+        logger.info(f"Call status {CallStatus} - not sending WhatsApp message")
     
     return {"status": "ok"}
-
-
-
