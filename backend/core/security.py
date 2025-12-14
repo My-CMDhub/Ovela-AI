@@ -2,6 +2,9 @@
 Security utilities to prevent sensitive data exposure in logs
 """
 import re
+from fastapi import HTTPException, Security
+from fastapi.security.api_key import APIKeyHeader
+from core.config import settings
 
 def sanitize_for_logging(text: str, max_length: int = 200) -> str:
     """
@@ -40,3 +43,24 @@ def safe_error_message(exception: Exception) -> str:
     safe_msg = sanitize_for_logging(error_msg)
     
     return f"{error_type}: {safe_msg}"
+
+
+
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+async def verify_dashboard_access(api_key: str = Security(api_key_header)):
+    """
+    Verify that the request has the correct internal API key.
+    Used to protect dashboard endpoints from public access.
+    """
+    if not settings.DASHBOARD_API_KEY:
+        # If no key set, allow access (or log warning)
+        # For production, we should enforce this given the sensitive data
+        return True
+        
+    if api_key != settings.DASHBOARD_API_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="Could not validate credentials"
+        )
+    return True

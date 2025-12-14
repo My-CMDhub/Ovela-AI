@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     APPWRITE_PROJECT_ID: str
     APPWRITE_API_KEY: str
 
+    # Optional Security Keys
+    DASHBOARD_API_KEY: Optional[str] = None  # Internal key for dashboard access
+
     # Resend
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "hello@ovela.dev"

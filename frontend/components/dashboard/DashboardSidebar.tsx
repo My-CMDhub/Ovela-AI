@@ -47,9 +47,13 @@ export default function DashboardSidebar() {
     useEffect(() => {
         const fetchPendingCount = async () => {
             try {
-                const res = await fetch(`${API_URL}/api/dashboard/requests/pending-count`);
+                const res = await fetch(`${API_URL}/api/dashboard/requests/pending-count`, {
+                    headers: {
+                        "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "",
+                    }
+                });
                 const data = await res.json();
-                setPendingCount(data.count || 0);
+                if (data.count !== undefined) setPendingCount(data.count);
             } catch (error) {
                 console.error("Failed to fetch pending count:", error);
             }

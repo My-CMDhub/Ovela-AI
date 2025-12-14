@@ -29,11 +29,13 @@ export default function BookingsPage() {
     const fetchBookings = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/bookings?status=${filter}`);
+            const res = await fetch(`${API_URL}/api/dashboard/bookings?status=${filter}`, {
+                headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
+            });
             const data = await res.json();
 
             if (data.success) {
-                setBookings(data.bookings || []);
+                setBookings(data.bookings);
             }
         } catch (error) {
             console.error("Error fetching bookings:", error);

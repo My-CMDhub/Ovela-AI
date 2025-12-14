@@ -55,6 +55,7 @@ export default function RequestsPage() {
         try {
             await fetch(`${API_URL}/api/dashboard/requests/${id}/approve`, {
                 method: "PATCH",
+                headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
             });
             fetchRequests();
         } catch (error) {
@@ -80,6 +81,7 @@ export default function RequestsPage() {
             const reasonParam = rejectReason ? `?reason=${encodeURIComponent(rejectReason)}` : "";
             await fetch(`${API_URL}/api/dashboard/requests/${rejectingId}/reject${reasonParam}`, {
                 method: "PATCH",
+                headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
             });
             setShowRejectModal(false);
             setRejectingId(null);

@@ -42,8 +42,12 @@ export default function DashboardPage() {
     const fetchDashboardData = useCallback(async () => {
         try {
             const [statsRes, bookingsRes] = await Promise.all([
-                fetch(`${API_URL}/api/dashboard/stats`).then(r => r.json()).catch(() => null),
-                fetch(`${API_URL}/api/dashboard/bookings/today`).then(r => r.json()).catch(() => null)
+                fetch(`${API_URL}/api/dashboard/stats`, {
+                    headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
+                }).then(r => r.json()).catch(() => null),
+                fetch(`${API_URL}/api/dashboard/bookings/today`, {
+                    headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
+                }).then(r => r.json()).catch(() => null)
             ]);
 
             if (statsRes?.success) setUpcomingCount(statsRes.upcoming_appointments || 0);

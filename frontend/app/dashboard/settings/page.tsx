@@ -63,7 +63,9 @@ export default function SettingsPage() {
 
     const fetchSettings = async () => {
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/settings`);
+            const res = await fetch(`${API_URL}/api/dashboard/settings`, {
+                headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
+            });
             const data = await res.json();
             if (data.success && data.settings) {
                 setSettings({ ...DEFAULT_SETTINGS, ...data.settings });
@@ -77,13 +79,15 @@ export default function SettingsPage() {
 
     const fetchIndustryLock = async () => {
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/settings/industry-lock`);
+            const res = await fetch(`${API_URL}/api/dashboard/settings/industry-lock`, {
+                headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
+            });
             const data = await res.json();
             if (data.success) {
                 setIndustryLocked(data.locked);
             }
         } catch (error) {
-            console.error("Error fetching industry lock:", error);
+            console.error("Error fetching lock status:", error);
         }
     };
 
@@ -93,7 +97,10 @@ export default function SettingsPage() {
         try {
             const res = await fetch(`${API_URL}/api/dashboard/settings`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || ""
+                },
                 body: JSON.stringify(settings)
             });
             const data = await res.json();

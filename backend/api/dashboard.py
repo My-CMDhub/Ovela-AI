@@ -2,15 +2,16 @@
 Dashboard API Routes
 Provides endpoints for the business owner dashboard to fetch data.
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from services.appwrite import db_service
 from services.email import email_service
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from core.security import verify_dashboard_access
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_dashboard_access)])
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
 
