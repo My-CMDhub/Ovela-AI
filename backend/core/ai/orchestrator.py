@@ -13,6 +13,7 @@ from core.config import settings
 from .prompts import build_enhanced_prompt
 from .tools import TOOLS
 from .handlers import execute_tool
+from core.security import safe_error_message
 
 client = OpenAI(api_key=settings.OPENAI_API_KEY)
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ async def generate_response(history: list, customer_context: str = "", customer_
         return assistant_message.content
         
     except Exception as e:
-        logger.error(f"OpenAI Error: {e}")
+        logger.error(f"OpenAI API Error: {safe_error_message(e)}")
         return "I'm having a little trouble right now. Please try again in a moment."
 
 
