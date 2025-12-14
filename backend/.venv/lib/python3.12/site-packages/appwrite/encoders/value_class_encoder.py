@@ -1,0 +1,157 @@
+import json
+from ..enums.authenticator_type import AuthenticatorType
+from ..enums.authentication_factor import AuthenticationFactor
+from ..enums.o_auth_provider import OAuthProvider
+from ..enums.browser import Browser
+from ..enums.credit_card import CreditCard
+from ..enums.flag import Flag
+from ..enums.theme import Theme
+from ..enums.timezone import Timezone
+from ..enums.output import Output
+from ..enums.relationship_type import RelationshipType
+from ..enums.relation_mutate import RelationMutate
+from ..enums.index_type import IndexType
+from ..enums.runtime import Runtime
+from ..enums.template_reference_type import TemplateReferenceType
+from ..enums.vcs_reference_type import VCSReferenceType
+from ..enums.deployment_download_type import DeploymentDownloadType
+from ..enums.execution_method import ExecutionMethod
+from ..enums.name import Name
+from ..enums.message_priority import MessagePriority
+from ..enums.smtp_encryption import SmtpEncryption
+from ..enums.framework import Framework
+from ..enums.build_runtime import BuildRuntime
+from ..enums.adapter import Adapter
+from ..enums.compression import Compression
+from ..enums.image_gravity import ImageGravity
+from ..enums.image_format import ImageFormat
+from ..enums.password_hash import PasswordHash
+from ..enums.messaging_provider_type import MessagingProviderType
+from ..enums.database_type import DatabaseType
+from ..enums.attribute_status import AttributeStatus
+from ..enums.column_status import ColumnStatus
+from ..enums.index_status import IndexStatus
+from ..enums.deployment_status import DeploymentStatus
+from ..enums.execution_trigger import ExecutionTrigger
+from ..enums.execution_status import ExecutionStatus
+from ..enums.health_antivirus_status import HealthAntivirusStatus
+from ..enums.health_check_status import HealthCheckStatus
+from ..enums.message_status import MessageStatus
+
+class ValueClassEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, AuthenticatorType):
+            return o.value
+
+        if isinstance(o, AuthenticationFactor):
+            return o.value
+
+        if isinstance(o, OAuthProvider):
+            return o.value
+
+        if isinstance(o, Browser):
+            return o.value
+
+        if isinstance(o, CreditCard):
+            return o.value
+
+        if isinstance(o, Flag):
+            return o.value
+
+        if isinstance(o, Theme):
+            return o.value
+
+        if isinstance(o, Timezone):
+            return o.value
+
+        if isinstance(o, Output):
+            return o.value
+
+        if isinstance(o, RelationshipType):
+            return o.value
+
+        if isinstance(o, RelationMutate):
+            return o.value
+
+        if isinstance(o, IndexType):
+            return o.value
+
+        if isinstance(o, Runtime):
+            return o.value
+
+        if isinstance(o, TemplateReferenceType):
+            return o.value
+
+        if isinstance(o, VCSReferenceType):
+            return o.value
+
+        if isinstance(o, DeploymentDownloadType):
+            return o.value
+
+        if isinstance(o, ExecutionMethod):
+            return o.value
+
+        if isinstance(o, Name):
+            return o.value
+
+        if isinstance(o, MessagePriority):
+            return o.value
+
+        if isinstance(o, SmtpEncryption):
+            return o.value
+
+        if isinstance(o, Framework):
+            return o.value
+
+        if isinstance(o, BuildRuntime):
+            return o.value
+
+        if isinstance(o, Adapter):
+            return o.value
+
+        if isinstance(o, Compression):
+            return o.value
+
+        if isinstance(o, ImageGravity):
+            return o.value
+
+        if isinstance(o, ImageFormat):
+            return o.value
+
+        if isinstance(o, PasswordHash):
+            return o.value
+
+        if isinstance(o, MessagingProviderType):
+            return o.value
+
+        if isinstance(o, DatabaseType):
+            return o.value
+
+        if isinstance(o, AttributeStatus):
+            return o.value
+
+        if isinstance(o, ColumnStatus):
+            return o.value
+
+        if isinstance(o, IndexStatus):
+            return o.value
+
+        if isinstance(o, DeploymentStatus):
+            return o.value
+
+        if isinstance(o, ExecutionTrigger):
+            return o.value
+
+        if isinstance(o, ExecutionStatus):
+            return o.value
+
+        if isinstance(o, HealthAntivirusStatus):
+            return o.value
+
+        if isinstance(o, HealthCheckStatus):
+            return o.value
+
+        if isinstance(o, MessageStatus):
+            return o.value
+
+        return super().default(o)
