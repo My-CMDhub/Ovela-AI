@@ -39,6 +39,9 @@ async def execute_tool(tool_name: str, tool_args: dict, customer_id: str = None,
     elif tool_name == "report_violation":
         return await _handle_report_violation(tool_args, customer_id)
     
+    elif tool_name == "request_human_callback":
+        return await _handle_request_human_callback(tool_args, whatsapp_id)
+    
     return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
 
@@ -352,3 +355,104 @@ async def _handle_report_violation(tool_args: dict, customer_id: str) -> str:
             logger.error(f"Error logging violation: {e}")
     
     return json.dumps({"violation_reported": True, "message": "Violation logged."})
+
+
+# In-memory store for callback request cooldowns (in production, use Redis or DB)
+_callback_cooldowns = {}
+
+async def _handle_request_human_callback(tool_args: dict, whatsapp_id: str) -> str:
+    """Handle customer request to speak to a human. Sends email notification with 30-min cooldown."""
+    reason = tool_args.get("reason", "Customer prefers human support")
+    urgency = tool_args.get("urgency", "medium")
+    
+    if not whatsapp_id:
+        return json.dumps({
+            "notified": False,
+            "error": "Unable to identify customer."
+        })
+    
+    # Check 30-minute cooldown
+    now = datetime.now(MELBOURNE_TZ)
+    last_request_time = _callback_cooldowns.get(whatsapp_id)
+    
+    if last_request_time:
+        time_since_last = (now - last_request_time).total_seconds()
+        cooldown_seconds = 30 * 60  # 30 minutes
+        
+        if time_since_last < cooldown_seconds:
+            remaining_minutes = int((cooldown_seconds - time_since_last) / 60)
+            return json.dumps({
+                "notified": False,
+                "already_requested": True,
+                "remaining_minutes": remaining_minutes,
+                "message": f"I've already notified the team about your callback request. They should call you within 30 minutes. If you haven't heard back after 30 minutes, let me know and I'll send another notification. You can also try calling them directly."
+            })
+    
+    # Get business settings
+    business_settings = db_service.get_all_settings()
+    owner_email = business_settings.get("owner_email") if business_settings else None
+    business_name = (business_settings.get("business_name") if business_settings else None) or "Your Business"
+    business_phone = business_settings.get("business_phone") if business_settings else None
+    
+    if not owner_email:
+        # No owner email configured - provide alternative
+        if business_phone:
+            return json.dumps({
+                "notified": False,
+                "no_email_configured": True,
+                "business_phone": business_phone,
+                "message": f"I'm unable to send a notification right now, but you can call {business_name} directly at {business_phone}."
+            })
+        return json.dumps({
+            "notified": False,
+            "error": "Unable to send notification. Please try calling the business directly."
+        })
+    
+    # Get customer name from database
+    customer_name = "Customer"
+    try:
+        customer = db_service._make_request(
+            "GET",
+            f"/databases/ovela_db/collections/customers/documents",
+            params={"queries": [json.dumps({"method": "equal", "attribute": "phone_number", "values": [whatsapp_id]})]}
+        )
+        if customer and customer.get("documents"):
+            customer_name = customer["documents"][0].get("name", "Customer")
+    except Exception as e:
+        logger.error(f"Error fetching customer name: {e}")
+    
+    # Send email notification
+    try:
+        await email_service.send_human_callback_request(
+            owner_email=owner_email,
+            customer_name=customer_name,
+            customer_phone=whatsapp_id,
+            reason=reason,
+            urgency=urgency,
+            business_phone=business_phone
+        )
+        
+        # Record the request time for cooldown
+        _callback_cooldowns[whatsapp_id] = now
+        
+        logger.info(f"Callback request sent for {whatsapp_id}: {reason}")
+        
+        response_data = {
+            "notified": True,
+            "message": f"I've notified the {business_name} team about your request. Someone will call you back within 30 minutes."
+        }
+        
+        # Add business phone for reference
+        if business_phone:
+            response_data["business_phone"] = business_phone
+            response_data["message"] += f" If you need to reach them urgently, you can also call directly at {business_phone}."
+        
+        return json.dumps(response_data)
+        
+    except Exception as e:
+        logger.error(f"Failed to send callback notification: {e}")
+        return json.dumps({
+            "notified": False,
+            "error": "Failed to send notification. Please try again or call the business directly."
+        })
+

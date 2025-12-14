@@ -263,5 +263,41 @@ class EmailService:
         sender = "Ovela Notifications <notifications@ovela.dev>"
         return await self.send_email(owner_email, subject, html, from_email=sender)
 
+    async def send_human_callback_request(self, owner_email: str, customer_name: str, customer_phone: str, reason: str, urgency: str = "medium", business_phone: str = None):
+        """Notify business owner that a customer wants to speak to a human."""
+        if not owner_email:
+            logger.warning("No owner email provided for callback request")
+            return False
+        
+        urgency_labels = {"low": "🟢 Low", "medium": "🟡 Medium", "high": "🔴 High"}
+        urgency_display = urgency_labels.get(urgency, "🟡 Medium")
+        
+        subject = f"📞 Customer Callback Request - {customer_name}"
+        if urgency == "high":
+            subject = f"🔴 URGENT: Customer Callback Request - {customer_name}"
+        
+        # Build steps
+        steps = [
+            f"<strong>Customer:</strong> {customer_name}",
+            f"<strong>Phone:</strong> <a href='tel:{customer_phone}' style='color: #0066cc;'>{customer_phone}</a>",
+            f"<strong>Reason:</strong> {reason}",
+            f"<strong>Urgency:</strong> {urgency_display}",
+            f"<strong>Requested:</strong> {datetime.now(MELBOURNE_TZ).strftime('%I:%M %p, %d %B')}"
+        ]
+        
+        html = self._base_template(
+            badge="Callback Requested",
+            title=f"{customer_name} wants to speak with you",
+            content="A customer has requested a callback. They've asked to speak with someone from your team directly. Please call them back within 30 minutes.",
+            business_name="Ovela Dashboard",
+            steps=steps,
+            button_text=f"Call {customer_name} Now",
+            button_url=f"tel:{customer_phone}",
+            closing_text="Tap the button above to call the customer directly from your phone."
+        )
+        
+        sender = "Ovela Notifications <notifications@ovela.dev>"
+        return await self.send_email(owner_email, subject, html, from_email=sender)
+
 
 email_service = EmailService()

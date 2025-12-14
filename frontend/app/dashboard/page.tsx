@@ -136,33 +136,33 @@ export default function DashboardPage() {
     return (
         <div>
             {/* Header */}
-            <div className="mb-8 flex items-center justify-between">
+            <div className="mb-6 md:mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
+                    <h1 className="text-xl md:text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
                         {theme.terminology.dashboard}
-                        <span className="text-2xl">{theme.personality.emoji}</span>
+                        <span className="text-xl md:text-2xl">{theme.personality.emoji}</span>
                     </h1>
-                    <p className="text-muted-foreground mt-1 text-sm">{theme.personality.greeting}</p>
+                    <p className="text-muted-foreground mt-1 text-xs md:text-sm">{theme.personality.greeting}</p>
                 </div>
 
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-2 md:gap-4 flex-wrap">
                     {industry === "health" && (
                         <button
                             onClick={() => setPrivacyMode(!privacyMode)}
-                            className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-medium transition-colors ${privacyMode ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border"}`}
+                            className={`flex items-center gap-1.5 md:gap-2 px-2 md:px-3 py-1 md:py-1.5 rounded-md border text-[10px] md:text-xs font-medium transition-colors ${privacyMode ? "bg-primary text-primary-foreground border-primary" : "bg-background text-muted-foreground border-border"}`}
                         >
                             <Users className="w-3 h-3" /> {privacyMode ? "Privacy On" : "Privacy Off"}
                         </button>
                     )}
 
                     {industry === "fitness" && (
-                        <div className="flex items-center gap-2 px-3 py-1.5 rounded-md border-2 border-primary/50 text-xs font-bold text-primary bg-primary/10">
+                        <div className="flex items-center gap-1.5 md:gap-2 px-2 md:px-3 py-1 md:py-1.5 rounded-md border-2 border-primary/50 text-[10px] md:text-xs font-bold text-primary bg-primary/10">
                             <Flame className="w-3 h-3" />
                             <span>STREAK: 7 days</span>
                         </div>
                     )}
 
-                    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-md border text-xs font-medium ${isLive ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-900" : "bg-muted text-muted-foreground border-border"}`}>
+                    <div className={`flex items-center gap-1.5 md:gap-2 px-2 md:px-3 py-1 md:py-1.5 rounded-md border text-[10px] md:text-xs font-medium ${isLive ? "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-900" : "bg-muted text-muted-foreground border-border"}`}>
                         {isLive ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
                         {isLive ? "Online" : "Offline"}
                     </div>
@@ -223,8 +223,8 @@ export default function DashboardPage() {
                                         </div>
                                     </div>
                                     <span className={`inline-flex items-center px-2 py-1 rounded text-[10px] font-medium uppercase tracking-wide ${industry === "fitness"
-                                            ? "bg-primary text-primary-foreground"
-                                            : "bg-primary/10 text-primary"
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-primary/10 text-primary"
                                         }`}>
                                         {booking.status}
                                     </span>

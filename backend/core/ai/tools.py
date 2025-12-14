@@ -97,5 +97,27 @@ TOOLS = [
                 "required": ["reason"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "request_human_callback",
+            "description": "Customer wants to speak to a human/owner/staff directly. Sends email notification to business owner asking them to call the customer back.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Why the customer wants to speak to someone (e.g., 'pricing question', 'complaint', 'special request')"
+                    },
+                    "urgency": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                        "description": "How urgent is the callback request. Use 'high' for complaints or time-sensitive matters."
+                    }
+                },
+                "required": ["reason"]
+            }
+        }
     }
 ]
