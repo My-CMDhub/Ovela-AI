@@ -3,7 +3,7 @@ import { Client, Account, Databases } from "appwrite";
 // ===========================================
 // DASHBOARD CLIENT (Ovela AI - customer data)
 // ===========================================
-const DASHBOARD_ENDPOINT = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "https://syd.cloud.appwrite.io/v1";
+const DASHBOARD_ENDPOINT = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "https://api.ovela.dev/v1";
 const DASHBOARD_PROJECT_ID = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 
 const client = new Client()

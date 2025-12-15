@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str
 
     # Appwrite
-    APPWRITE_ENDPOINT: str = "https://syd.cloud.appwrite.io/v1"
+    APPWRITE_ENDPOINT: str = "https://api.ovela.dev/v1"
     APPWRITE_PROJECT_ID: str
     APPWRITE_API_KEY: str
 
