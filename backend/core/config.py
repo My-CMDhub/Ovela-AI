@@ -1,9 +1,11 @@
 from pydantic_settings import BaseSettings
+from typing import Optional
 
 class Settings(BaseSettings):
     # App Settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Ovela AI Backend"
+    BACKEND_URL: Optional[str] = None  # Backend URL for webhooks (e.g., Heroku URL)
 
     # Meta (WhatsApp)
     META_APP_ID: str = "" # App ID
@@ -36,4 +38,5 @@ class Settings(BaseSettings):
         env_file = ".env"
         extra = "ignore"
 
+Settings.model_rebuild()
 settings = Settings()

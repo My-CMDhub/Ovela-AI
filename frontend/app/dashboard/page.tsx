@@ -8,8 +8,8 @@ import { Calendar, Users, MessageSquare, Activity, Wifi, WifiOff, Flame, Zap } f
 import { motion } from "framer-motion";
 import { useTheme } from "@/contexts/ThemeContext";
 
-// Backend API URL
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Use local Next.js API proxy (adds API key server-side)
+const API_URL = "/api/dashboard";
 
 interface Booking {
     $id: string;
@@ -41,14 +41,14 @@ export default function DashboardPage() {
 
     const fetchDashboardData = useCallback(async () => {
         try {
+            // API key is added server-side by the proxy - no headers needed
             const [statsRes, bookingsRes] = await Promise.all([
-                fetch(`${API_URL}/api/dashboard/stats`, {
-                    headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
-                }).then(r => r.json()).catch(() => null),
-                fetch(`${API_URL}/api/dashboard/bookings/today`, {
-                    headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
-                }).then(r => r.json()).catch(() => null)
+                fetch(`${API_URL}/stats`).then(r => r.json()).catch(() => null),
+                fetch(`${API_URL}/bookings/today`).then(r => r.json()).catch(() => null)
             ]);
+
+            if (statsRes?.success) setUpcomingCount(statsRes.upcoming_appointments || 0);
+            if (bookingsRes?.success) setTodayBookings(bookingsRes.bookings || []);
 
             if (statsRes?.success) setUpcomingCount(statsRes.upcoming_appointments || 0);
             if (bookingsRes?.success) setTodayBookings(bookingsRes.bookings || []);

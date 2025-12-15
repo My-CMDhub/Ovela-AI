@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { Calendar, Clock, User, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
 
-// Backend API URL
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Use local Next.js API proxy (adds API key server-side)
+const API_URL = "/api/dashboard";
 
 interface CalBooking {
     uid: string;
@@ -29,9 +29,8 @@ export default function BookingsPage() {
     const fetchBookings = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/bookings?status=${filter}`, {
-                headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
-            });
+            // API key is added server-side by the proxy
+            const res = await fetch(`${API_URL}/bookings?status=${filter}`);
             const data = await res.json();
 
             if (data.success) {
@@ -124,33 +123,90 @@ export default function BookingsPage() {
                         No {filter} bookings found
                     </div>
                 ) : (
-                    <table className="w-full">
-                        <thead className="bg-gray-50 border-b border-gray-100">
-                            <tr>
-                                <th className="text-left px-6 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Customer
-                                </th>
-                                <th className="text-left px-6 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Event
-                                </th>
-                                <th className="text-left px-6 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Date & Time
-                                </th>
-                                <th className="text-left px-6 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                                    Status
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
+                    <>
+                        {/* Desktop Table */}
+                        <table className="w-full hidden md:table">
+                            <thead className="bg-gray-50 border-b border-gray-100">
+                                <tr>
+                                    <th className="text-left px-6 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Customer
+                                    </th>
+                                    <th className="text-left px-6 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Event
+                                    </th>
+                                    <th className="text-left px-6 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Date & Time
+                                    </th>
+                                    <th className="text-left px-6 py-4 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                        Status
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-50">
+                                {bookings.map((booking, index) => (
+                                    <motion.tr
+                                        key={booking.uid}
+                                        initial={{ opacity: 0, y: 10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        transition={{ delay: index * 0.05 }}
+                                        className="hover:bg-gray-50"
+                                    >
+                                        <td className="px-6 py-4">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-8 h-8 bg-rose-100 rounded-full flex items-center justify-center">
+                                                    <User className="w-4 h-4 text-rose-600" />
+                                                </div>
+                                                <div>
+                                                    <p className="text-sm font-medium text-gray-900">
+                                                        {booking.attendee_name || "Guest"}
+                                                    </p>
+                                                    <p className="text-xs text-gray-400">{booking.attendee_email}</p>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="px-6 py-4">
+                                            <p className="text-sm text-gray-700">{booking.title}</p>
+                                        </td>
+                                        <td className="px-6 py-4">
+                                            <div className="flex items-center gap-4">
+                                                <div className="flex items-center gap-1 text-gray-600">
+                                                    <Calendar className="w-4 h-4" />
+                                                    <span className="text-sm">{formatDate(booking.start)}</span>
+                                                </div>
+                                                <div className="flex items-center gap-1 text-gray-600">
+                                                    <Clock className="w-4 h-4" />
+                                                    <span className="text-sm">{formatTime(booking.start)}</span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="px-6 py-4">
+                                            <span
+                                                className={`text-xs px-3 py-1 rounded-full font-medium ${booking.status === "accepted"
+                                                    ? "bg-green-100 text-green-700"
+                                                    : booking.status === "cancelled"
+                                                        ? "bg-red-100 text-red-700"
+                                                        : "bg-yellow-100 text-yellow-700"
+                                                    }`}
+                                            >
+                                                {booking.status}
+                                            </span>
+                                        </td>
+                                    </motion.tr>
+                                ))}
+                            </tbody>
+                        </table>
+
+                        {/* Mobile Cards */}
+                        <div className="md:hidden space-y-4 p-4">
                             {bookings.map((booking, index) => (
-                                <motion.tr
-                                    key={booking.uid}
+                                <motion.div
+                                    key={booking.uid + "_mobile"}
                                     initial={{ opacity: 0, y: 10 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     transition={{ delay: index * 0.05 }}
-                                    className="hover:bg-gray-50"
+                                    className="bg-gray-50 rounded-lg p-4 border border-gray-100"
                                 >
-                                    <td className="px-6 py-4">
+                                    <div className="flex justify-between items-start mb-3">
                                         <div className="flex items-center gap-3">
                                             <div className="w-8 h-8 bg-rose-100 rounded-full flex items-center justify-center">
                                                 <User className="w-4 h-4 text-rose-600" />
@@ -162,25 +218,8 @@ export default function BookingsPage() {
                                                 <p className="text-xs text-gray-400">{booking.attendee_email}</p>
                                             </div>
                                         </div>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <p className="text-sm text-gray-700">{booking.title}</p>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <div className="flex items-center gap-4">
-                                            <div className="flex items-center gap-1 text-gray-600">
-                                                <Calendar className="w-4 h-4" />
-                                                <span className="text-sm">{formatDate(booking.start)}</span>
-                                            </div>
-                                            <div className="flex items-center gap-1 text-gray-600">
-                                                <Clock className="w-4 h-4" />
-                                                <span className="text-sm">{formatTime(booking.start)}</span>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td className="px-6 py-4">
                                         <span
-                                            className={`text-xs px-3 py-1 rounded-full font-medium ${booking.status === "accepted"
+                                            className={`text-xs px-2 py-1 rounded-full font-medium ${booking.status === "accepted"
                                                 ? "bg-green-100 text-green-700"
                                                 : booking.status === "cancelled"
                                                     ? "bg-red-100 text-red-700"
@@ -189,11 +228,21 @@ export default function BookingsPage() {
                                         >
                                             {booking.status}
                                         </span>
-                                    </td>
-                                </motion.tr>
+                                    </div>
+
+                                    <div className="space-y-2 mb-2">
+                                        <p className="text-sm font-medium text-gray-800">{booking.title}</p>
+                                        <div className="flex items-center gap-2 text-gray-600 text-sm">
+                                            <Calendar className="w-3.5 h-3.5" />
+                                            <span>{formatDate(booking.start)}</span>
+                                            <Clock className="w-3.5 h-3.5 ml-2" />
+                                            <span>{formatTime(booking.start)}</span>
+                                        </div>
+                                    </div>
+                                </motion.div>
                             ))}
-                        </tbody>
-                    </table>
+                        </div>
+                    </>
                 )}
             </motion.div>
 

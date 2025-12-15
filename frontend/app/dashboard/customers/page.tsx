@@ -67,7 +67,7 @@ export default function CustomersPage() {
     };
 
     return (
-        <div className="flex gap-6">
+        <div className="flex flex-col lg:flex-row gap-6 relative">
             {/* Customer List */}
             <div className="flex-1">
                 {/* Header */}
@@ -133,97 +133,111 @@ export default function CustomersPage() {
             {/* Customer Detail Panel */}
             <AnimatePresence>
                 {selectedCustomer && (
-                    <motion.div
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: 20 }}
-                        className="w-96 bg-white rounded-xl border border-gray-100 p-6 h-fit sticky top-8"
-                    >
-                        <div className="flex items-center gap-4 mb-6">
-                            <div className="w-14 h-14 bg-rose-100 rounded-full flex items-center justify-center">
-                                <Users className="w-7 h-7 text-rose-600" />
-                            </div>
-                            <div>
-                                <h2 className="text-lg font-semibold text-gray-900">
-                                    {selectedCustomer.name || "Unknown"}
-                                </h2>
-                                <p className="text-sm text-gray-400">Customer since {formatDate(selectedCustomer.$createdAt)}</p>
-                            </div>
-                        </div>
-
-                        {/* Contact Info */}
-                        <div className="space-y-3 mb-6">
-                            {selectedCustomer.email && (
-                                <div className="flex items-center gap-3">
-                                    <Mail className="w-4 h-4 text-gray-400" />
-                                    <span className="text-sm text-gray-700">{selectedCustomer.email}</span>
-                                </div>
-                            )}
-                            {selectedCustomer.whatsapp_id && (
-                                <div className="flex items-center gap-3">
-                                    <Phone className="w-4 h-4 text-gray-400" />
-                                    <span className="text-sm text-gray-700">{selectedCustomer.whatsapp_id}</span>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Customer Stats */}
-                        {(() => {
-                            const stats: CustomerStats = selectedCustomer.preferences_json
-                                ? JSON.parse(selectedCustomer.preferences_json)
-                                : {};
-                            const hasStats = stats.total_bookings || stats.total_reschedules || stats.total_cancellations;
-
-                            if (!hasStats) return null;
-
-                            return (
-                                <div className="grid grid-cols-2 gap-2 mb-6">
-                                    {stats.total_bookings !== undefined && stats.total_bookings > 0 && (
-                                        <div className="flex items-center gap-2 p-2 rounded-lg" style={{ backgroundColor: "var(--theme-primary-light, #fff1f2)" }}>
-                                            <Calendar className="w-4 h-4" style={{ color: "var(--theme-primary, #e11d48)" }} />
-                                            <span className="text-xs font-medium" style={{ color: "var(--theme-primary, #e11d48)" }}>{stats.total_bookings} bookings</span>
-                                        </div>
-                                    )}
-                                    {stats.total_reschedules !== undefined && stats.total_reschedules > 0 && (
-                                        <div className="flex items-center gap-2 p-2 bg-amber-50 rounded-lg">
-                                            <RefreshCw className="w-4 h-4 text-amber-600" />
-                                            <span className="text-xs font-medium text-amber-700">{stats.total_reschedules} reschedules</span>
-                                        </div>
-                                    )}
-                                    {stats.total_cancellations !== undefined && stats.total_cancellations > 0 && (
-                                        <div className="flex items-center gap-2 p-2 bg-red-50 rounded-lg">
-                                            <XCircle className="w-4 h-4 text-red-500" />
-                                            <span className="text-xs font-medium text-red-600">{stats.total_cancellations} cancelled</span>
-                                        </div>
-                                    )}
-                                    {stats.requests_approved !== undefined && stats.requests_approved > 0 && (
-                                        <div className="flex items-center gap-2 p-2 bg-green-50 rounded-lg">
-                                            <CheckCircle className="w-4 h-4 text-green-600" />
-                                            <span className="text-xs font-medium text-green-700">{stats.requests_approved} approved</span>
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })()}
-
-                        {/* AI Profile Summary */}
-                        {selectedCustomer.profile_summary && (
-                            <div className="rounded-lg p-4" style={{ backgroundColor: "var(--theme-primary-light, #fff1f2)" }}>
-                                <div className="flex items-center gap-2 mb-2">
-                                    <Brain className="w-4 h-4" style={{ color: "var(--theme-primary, #e11d48)" }} />
-                                    <span className="text-sm font-medium" style={{ color: "var(--theme-primary, #881337)" }}>AI Summary</span>
-                                </div>
-                                <p className="text-sm" style={{ color: "var(--theme-primary, #9f1239)" }}>{selectedCustomer.profile_summary}</p>
-                            </div>
-                        )}
-
-                        <button
+                    <>
+                        {/* Mobile Backdrop */}
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="lg:hidden fixed inset-0 bg-black/50 z-40"
                             onClick={() => setSelectedCustomer(null)}
-                            className="mt-6 w-full py-2 text-sm text-gray-500 hover:text-gray-700 transition"
+                        />
+
+                        <motion.div
+                            initial={{ opacity: 0, x: 20 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: 20 }}
+                            className={`
+                                fixed inset-x-0 bottom-0 top-20 z-50 bg-white rounded-t-2xl shadow-2xl p-6 overflow-y-auto
+                                lg:static lg:inset-auto lg:w-96 lg:rounded-xl lg:border lg:border-gray-100 lg:h-fit lg:sticky lg:top-8 lg:shadow-none
+                            `}
                         >
-                            Close
-                        </button>
-                    </motion.div>
+                            <div className="flex items-center gap-4 mb-6">
+                                <div className="w-14 h-14 bg-rose-100 rounded-full flex items-center justify-center">
+                                    <Users className="w-7 h-7 text-rose-600" />
+                                </div>
+                                <div>
+                                    <h2 className="text-lg font-semibold text-gray-900">
+                                        {selectedCustomer.name || "Unknown"}
+                                    </h2>
+                                    <p className="text-sm text-gray-400">Customer since {formatDate(selectedCustomer.$createdAt)}</p>
+                                </div>
+                            </div>
+
+                            {/* Contact Info */}
+                            <div className="space-y-3 mb-6">
+                                {selectedCustomer.email && (
+                                    <div className="flex items-center gap-3">
+                                        <Mail className="w-4 h-4 text-gray-400" />
+                                        <span className="text-sm text-gray-700">{selectedCustomer.email}</span>
+                                    </div>
+                                )}
+                                {selectedCustomer.whatsapp_id && (
+                                    <div className="flex items-center gap-3">
+                                        <Phone className="w-4 h-4 text-gray-400" />
+                                        <span className="text-sm text-gray-700">{selectedCustomer.whatsapp_id}</span>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Customer Stats */}
+                            {(() => {
+                                const stats: CustomerStats = selectedCustomer.preferences_json
+                                    ? JSON.parse(selectedCustomer.preferences_json)
+                                    : {};
+                                const hasStats = stats.total_bookings || stats.total_reschedules || stats.total_cancellations;
+
+                                if (!hasStats) return null;
+
+                                return (
+                                    <div className="grid grid-cols-2 gap-2 mb-6">
+                                        {stats.total_bookings !== undefined && stats.total_bookings > 0 && (
+                                            <div className="flex items-center gap-2 p-2 rounded-lg" style={{ backgroundColor: "var(--theme-primary-light, #fff1f2)" }}>
+                                                <Calendar className="w-4 h-4" style={{ color: "var(--theme-primary, #e11d48)" }} />
+                                                <span className="text-xs font-medium" style={{ color: "var(--theme-primary, #e11d48)" }}>{stats.total_bookings} bookings</span>
+                                            </div>
+                                        )}
+                                        {stats.total_reschedules !== undefined && stats.total_reschedules > 0 && (
+                                            <div className="flex items-center gap-2 p-2 bg-amber-50 rounded-lg">
+                                                <RefreshCw className="w-4 h-4 text-amber-600" />
+                                                <span className="text-xs font-medium text-amber-700">{stats.total_reschedules} reschedules</span>
+                                            </div>
+                                        )}
+                                        {stats.total_cancellations !== undefined && stats.total_cancellations > 0 && (
+                                            <div className="flex items-center gap-2 p-2 bg-red-50 rounded-lg">
+                                                <XCircle className="w-4 h-4 text-red-500" />
+                                                <span className="text-xs font-medium text-red-600">{stats.total_cancellations} cancelled</span>
+                                            </div>
+                                        )}
+                                        {stats.requests_approved !== undefined && stats.requests_approved > 0 && (
+                                            <div className="flex items-center gap-2 p-2 bg-green-50 rounded-lg">
+                                                <CheckCircle className="w-4 h-4 text-green-600" />
+                                                <span className="text-xs font-medium text-green-700">{stats.requests_approved} approved</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })()}
+
+                            {/* AI Profile Summary */}
+                            {selectedCustomer.profile_summary && (
+                                <div className="rounded-lg p-4" style={{ backgroundColor: "var(--theme-primary-light, #fff1f2)" }}>
+                                    <div className="flex items-center gap-2 mb-2">
+                                        <Brain className="w-4 h-4" style={{ color: "var(--theme-primary, #e11d48)" }} />
+                                        <span className="text-sm font-medium" style={{ color: "var(--theme-primary, #881337)" }}>AI Summary</span>
+                                    </div>
+                                    <p className="text-sm" style={{ color: "var(--theme-primary, #9f1239)" }}>{selectedCustomer.profile_summary}</p>
+                                </div>
+                            )}
+
+                            <button
+                                onClick={() => setSelectedCustomer(null)}
+                                className="mt-6 w-full py-2 text-sm text-gray-500 hover:text-gray-700 transition"
+                            >
+                                Close
+                            </button>
+                        </motion.div>
+                    </>
                 )}
             </AnimatePresence>
         </div>

@@ -121,29 +121,31 @@ export default function ConversationsPage() {
                                 {/* Header */}
                                 <button
                                     onClick={() => setExpandedId(isExpanded ? null : conv.$id)}
-                                    className="w-full px-6 py-4 flex items-center justify-between hover:bg-gray-50 transition"
+                                    className="w-full px-4 py-3 md:px-6 md:py-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 md:gap-0 hover:bg-gray-50 transition"
                                 >
-                                    <div className="flex items-center gap-4">
-                                        <div className="w-10 h-10 bg-rose-100 rounded-full flex items-center justify-center">
+                                    <div className="flex items-center gap-3 md:gap-4 w-full md:w-auto">
+                                        <div className="w-10 h-10 bg-rose-100 rounded-full flex-shrink-0 flex items-center justify-center">
                                             <MessageSquare className="w-5 h-5 text-rose-600" />
                                         </div>
-                                        <div className="text-left">
+                                        <div className="text-left min-w-0 flex-1">
                                             <p className="text-sm font-medium text-gray-900">{conv.whatsapp_id}</p>
-                                            <p className="text-xs text-gray-400 truncate max-w-md">
+                                            <p className="text-xs text-gray-400 truncate max-w-[200px] md:max-w-md">
                                                 {conv.last_message || "No messages"}
                                             </p>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-4">
-                                        <span
-                                            className={`text-xs px-2 py-1 rounded-full ${conv.status === "active"
-                                                ? "bg-green-100 text-green-700"
-                                                : "bg-gray-100 text-gray-600"
-                                                }`}
-                                        >
-                                            {conv.status}
-                                        </span>
-                                        <span className="text-xs text-gray-400">{formatTime(conv.$updatedAt)}</span>
+                                    <div className="flex items-center justify-between w-full md:w-auto md:justify-end gap-4 pl-13 md:pl-0">
+                                        <div className="flex items-center gap-2">
+                                            <span
+                                                className={`text-xs px-2 py-1 rounded-full ${conv.status === "active"
+                                                    ? "bg-green-100 text-green-700"
+                                                    : "bg-gray-100 text-gray-600"
+                                                    }`}
+                                            >
+                                                {conv.status}
+                                            </span>
+                                            <span className="text-xs text-gray-400">{formatTime(conv.$updatedAt)}</span>
+                                        </div>
                                         {isExpanded ? (
                                             <ChevronUp className="w-5 h-5 text-gray-400" />
                                         ) : (

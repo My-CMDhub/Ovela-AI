@@ -26,19 +26,57 @@ async def handle_incoming_call(
 ):
     """
     Handle incoming voice calls from Twilio.
-    This returns TwiML to let the call ring and then check status.
+    Forwards the call to the business owner's phone.
+    If missed/busy/no-answer, the status callback will trigger WhatsApp automation.
     """
-    logger.info(f"Incoming call from {From} to {To}, status: {CallStatus}")
+    logger.info(f"📞 Incoming call from {From} to {To}, CallSid: {CallSid}")
     
-    # Return TwiML that rings for 20 seconds then hangs up
-    # The status callback will handle the missed call
-    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+    try:
+        # Get business phone from Appwrite settings
+        business_settings = db_service.get_all_settings()
+        business_phone = business_settings.get("business_phone") if business_settings else None
+        
+        if not business_phone:
+            logger.error("❌ Business phone not configured in Appwrite settings")
+            # Fallback: Play error message and trigger WhatsApp via status callback
+            twiml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">Hello, we're currently unavailable. You'll receive a WhatsApp message shortly to help you book an appointment.</Say>
+    <Say voice="alice">Sorry, the business phone is not configured. You'll receive a WhatsApp message shortly.</Say>
     <Hangup/>
 </Response>"""
-    
-    return Response(content=twiml, media_type="application/xml")
+            return Response(content=twiml, media_type="application/xml")
+        
+        # Ensure phone number has + prefix for international format
+        if not business_phone.startswith("+"):
+            business_phone = f"+{business_phone}"
+        
+        logger.info(f"🔄 Forwarding call to business phone: {business_phone}")
+        
+        # Return TwiML that forwards the call to business phone
+        # timeout: Ring for 30 seconds before giving up
+        # action: Callback URL to handle the result of the dial attempt
+        base_url = settings.BACKEND_URL or "https://ovela-ai-b6f3e3bb53f6.herokuapp.com"
+        callback_url = f"{base_url}/api/twilio/call-status"
+        
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Dial timeout="30" action="{callback_url}" method="POST">
+        <Number>{business_phone}</Number>
+    </Dial>
+    <Say voice="alice">Sorry, we couldn't connect your call. You'll receive a WhatsApp message shortly to help you book an appointment.</Say>
+</Response>"""
+        
+        return Response(content=twiml, media_type="application/xml")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in incoming call handler: {e}")
+        # Fallback to safe error message
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="alice">Sorry, we're experiencing technical difficulties. Please try again later.</Say>
+    <Hangup/>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
 
 
 @router.post("/call-status")
@@ -47,20 +85,55 @@ async def handle_call_status(
     From: str = Form(...),
     To: str = Form(...),
     CallStatus: str = Form(...),
-    CallDuration: str = Form(default="0")
+    CallDuration: str = Form(default="0"),
+    # Dial-specific parameters (only present when using <Dial> verb)
+    DialCallStatus: str = Form(default=None),
+    DialCallDuration: str = Form(default="0")
 ):
     """
     Handle call status callbacks from Twilio.
-    Triggered when call ends - check if it was missed/no-answer.
+    Triggered after the <Dial> attempt completes.
+    Only sends WhatsApp if the call was truly missed (not answered).
     """
-    logger.info(f"📞 Call status update: {CallSid} from {From} - Status: {CallStatus}, Duration: {CallDuration}s")
+    logger.info(f"📞 Call status callback: {CallSid} from {From}")
+    logger.info(f"   CallStatus: {CallStatus}, CallDuration: {CallDuration}s")
+    logger.info(f"   DialCallStatus: {DialCallStatus}, DialCallDuration: {DialCallDuration}s")
     
     # Normalize phone number (remove + prefix for WhatsApp)
     caller_phone = From.replace("+", "")
-    logger.info(f"Normalized phone: {caller_phone}")
     
-    # If call was completed but short, or no-answer, send WhatsApp
-    if CallStatus in ["completed", "no-answer", "busy", "failed"]:
+    # Determine if we should send WhatsApp message
+    should_send_whatsapp = False
+    
+    if DialCallStatus:
+        # When using <Dial>, check the DialCallStatus to determine if call was answered
+        if DialCallStatus in ["no-answer", "busy", "failed"]:
+            # Call was not answered
+            should_send_whatsapp = True
+            logger.info(f"📱 Call was missed (DialCallStatus: {DialCallStatus}) - will send WhatsApp")
+        elif DialCallStatus == "completed":
+            # Call was connected, but check duration
+            dial_duration = int(DialCallDuration) if DialCallDuration else 0
+            if dial_duration < 5:
+                # Call connected but hung up immediately (likely accidental answer or voicemail)
+                should_send_whatsapp = True
+                logger.info(f"📱 Call answered but hung up quickly ({dial_duration}s) - will send WhatsApp")
+            else:
+                # Call was answered and had a real conversation
+                should_send_whatsapp = False
+                logger.info(f"✅ Call was answered and lasted {dial_duration}s - no WhatsApp needed")
+        else:
+            # Unknown status, log and skip
+            logger.warning(f"⚠️ Unknown DialCallStatus: {DialCallStatus}")
+    else:
+        # Fallback: No DialCallStatus (shouldn't happen with <Dial>, but handle gracefully)
+        # This might occur if business phone wasn't configured and we played error message
+        if CallStatus in ["completed", "no-answer", "busy", "failed"]:
+            should_send_whatsapp = True
+            logger.info(f"📱 Fallback mode - CallStatus: {CallStatus} - will send WhatsApp")
+    
+    # Send WhatsApp message if call was missed
+    if should_send_whatsapp:
         try:
             # Get business settings for custom message
             business_settings = db_service.get_all_settings()
@@ -102,15 +175,11 @@ I'll forward your request to the team and they'll confirm your booking! 💅"""
             await meta_service.send_text_message(caller_phone, message)
             logger.info(f"✅ Sent WhatsApp intro to {caller_phone} (rejection_context: {has_recent_rejection})")
             
-            # NOTE: We do NOT create a booking request or send email here.
-            # Email is only sent when the customer provides full booking details
-            # and the AI submits a booking request via submit_booking_request tool.
-            
         except Exception as e:
             import traceback
-            logger.error(f"❌ Error handling missed call from {caller_phone}: {e}")
+            logger.error(f"❌ Error sending WhatsApp to {caller_phone}: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
     else:
-        logger.info(f"Call status {CallStatus} - not sending WhatsApp message")
+        logger.info(f"ℹ️ Call was answered - no WhatsApp message sent")
     
     return {"status": "ok"}

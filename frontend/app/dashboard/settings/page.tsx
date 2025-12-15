@@ -7,8 +7,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { account } from "@/lib/appwrite";
 
-// Backend API URL
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Use local Next.js API proxy (adds API key server-side)
+const API_URL = "/api/dashboard";
 
 interface BusinessSettings {
     business_name: string;
@@ -63,9 +63,8 @@ export default function SettingsPage() {
 
     const fetchSettings = async () => {
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/settings`, {
-                headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
-            });
+            // API key is added server-side by the proxy
+            const res = await fetch(`${API_URL}/settings`);
             const data = await res.json();
             if (data.success && data.settings) {
                 setSettings({ ...DEFAULT_SETTINGS, ...data.settings });
@@ -79,9 +78,8 @@ export default function SettingsPage() {
 
     const fetchIndustryLock = async () => {
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/settings/industry-lock`, {
-                headers: { "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "" }
-            });
+            // API key is added server-side by the proxy
+            const res = await fetch(`${API_URL}/settings/industry-lock`);
             const data = await res.json();
             if (data.success) {
                 setIndustryLocked(data.locked);
@@ -95,12 +93,10 @@ export default function SettingsPage() {
         setSaving(true);
         setSaved(false);
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/settings`, {
+            // API key is added server-side by the proxy
+            const res = await fetch(`${API_URL}/settings`, {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || ""
-                },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(settings)
             });
             const data = await res.json();

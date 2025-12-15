@@ -55,7 +55,8 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
             {/* Mobile Menu Button */}
             <button
                 onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="lg:hidden fixed top-4 left-4 z-[60] p-2 rounded-lg bg-card border border-border shadow-md"
+                className={`lg:hidden fixed top-4 z-[60] p-2 rounded-lg bg-card border border-border shadow-md transition-all duration-300 ${sidebarOpen ? "left-56" : "left-4"
+                    }`}
                 aria-label="Toggle menu"
             >
                 {sidebarOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
@@ -79,7 +80,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
             </div>
 
             {/* Main Content - full width on mobile */}
-            <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto h-screen scrollbar-hide pt-16 lg:pt-8">
+            <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-y-auto h-[100dvh] scrollbar-hide pt-16 lg:pt-8">
                 {/* Dev mode indicator */}
                 {DEV_MODE && (
                     <div className="fixed top-2 right-2 bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded-full z-50">

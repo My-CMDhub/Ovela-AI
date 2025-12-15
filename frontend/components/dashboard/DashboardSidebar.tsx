@@ -26,7 +26,8 @@ import { Route } from "@/components/animate-ui/icons/route";
 import { Layers } from "@/components/animate-ui/icons/layers";
 import { ChartColumn } from "@/components/animate-ui/icons/chart-column";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Use local Next.js API proxy (adds API key server-side)
+const API_URL = "/api/dashboard";
 
 const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -47,11 +48,8 @@ export default function DashboardSidebar() {
     useEffect(() => {
         const fetchPendingCount = async () => {
             try {
-                const res = await fetch(`${API_URL}/api/dashboard/requests/pending-count`, {
-                    headers: {
-                        "X-API-Key": process.env.NEXT_PUBLIC_DASHBOARD_API_KEY || "",
-                    }
-                });
+                // API key is added server-side by the proxy
+                const res = await fetch(`${API_URL}/requests/pending-count`);
                 const data = await res.json();
                 if (data.count !== undefined) setPendingCount(data.count);
             } catch (error) {
@@ -170,7 +168,7 @@ export default function DashboardSidebar() {
     };
 
     return (
-        <aside className={`w-64 h-screen sticky top-0 flex flex-col transition-all duration-300 z-50 ${getSidebarClass()}`}>
+        <aside className={`w-64 h-[100dvh] sticky top-0 flex flex-col transition-all duration-300 z-50 ${getSidebarClass()}`}>
             {/* Logo with Animated Icon */}
             <div className={`p-6 border-b ${industry === "beauty" ? "border-white/20" : industry === "fitness" ? "border-primary/30" : "border-border"} mx-2`}>
                 <Link href="/dashboard" className="block">
@@ -227,7 +225,7 @@ export default function DashboardSidebar() {
             </nav>
 
             {/* Dark Mode Toggle + Logout */}
-            <div className={`p-4 border-t ${industry === "beauty" ? "border-white/20" : industry === "fitness" ? "border-primary/30" : "border-border"} mx-2 space-y-2`}>
+            <div className={`p-4 pb-24 lg:pb-4 border-t ${industry === "beauty" ? "border-white/20" : industry === "fitness" ? "border-primary/30" : "border-border"} mx-2 space-y-2`}>
                 <button
                     onClick={toggleDarkMode}
                     className={`flex items-center gap-3 px-4 py-2 w-full ${industry === "beauty" ? "rounded-xl" : "rounded-md"} transition-all duration-200 text-sm font-medium text-muted-foreground ${industry === "beauty" ? "hover:bg-white/20" : "hover:bg-secondary"} hover:text-foreground`}

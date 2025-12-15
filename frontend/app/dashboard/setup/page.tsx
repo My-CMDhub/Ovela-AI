@@ -5,7 +5,7 @@ import { Phone, CheckCircle, ArrowRight, MessageCircle, Smartphone } from "lucid
 export default function SetupGuidePage() {
     return (
         <div className="p-8 max-w-3xl">
-            <h1 className="text-2xl font-bold text-gray-900 mb-2">Setup Guide</h1>
+            <h1 className="text-2xl font-bold text-gray-900 mb-2 dark:text-white">Setup Guide</h1>
             <p className="text-gray-500 mb-8">Complete these steps to activate your AI receptionist</p>
 
             {/* Step 1 */}
