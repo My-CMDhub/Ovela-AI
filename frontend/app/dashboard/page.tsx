@@ -1,8 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { client, databases, DATABASE_ID } from "@/lib/appwrite";
-import { Query } from "appwrite";
 import KPICard from "@/components/dashboard/KPICard";
 import { DemoStats } from "@/components/dashboard/DemoStats";
 import { Calendar, Users, MessageSquare, Activity, Wifi, WifiOff, Flame, Zap } from "lucide-react";
@@ -37,34 +35,28 @@ export default function DashboardPage() {
     const [activeConversations, setActiveConversations] = useState(0);
     const [recentActivity, setRecentActivity] = useState<Conversation[]>([]);
     const [loading, setLoading] = useState(true);
-    const [isLive, setIsLive] = useState(false);
+    const [isLive, setIsLive] = useState(true); // Always true with polling
     const [privacyMode, setPrivacyMode] = useState(false);
 
     const fetchDashboardData = useCallback(async () => {
         try {
             // API key is added server-side by the proxy - no headers needed
-            const [statsRes, bookingsRes] = await Promise.all([
+            const [statsRes, bookingsRes, conversationsRes, customersRes] = await Promise.all([
                 fetch(`${API_URL}/stats`).then(r => r.json()).catch(() => null),
-                fetch(`${API_URL}/bookings/today`).then(r => r.json()).catch(() => null)
+                fetch(`${API_URL}/bookings/today`).then(r => r.json()).catch(() => null),
+                fetch(`${API_URL}/conversations/active-count`).then(r => r.json()).catch(() => null),
+                fetch(`${API_URL}/customers/count`).then(r => r.json()).catch(() => null)
             ]);
 
             if (statsRes?.success) setUpcomingCount(statsRes.upcoming_appointments || 0);
             if (bookingsRes?.success) setTodayBookings(bookingsRes.bookings || []);
+            if (conversationsRes) setActiveConversations(conversationsRes.count || 0);
+            if (customersRes) setTotalCustomers(customersRes.count || 0);
 
-            if (statsRes?.success) setUpcomingCount(statsRes.upcoming_appointments || 0);
-            if (bookingsRes?.success) setTodayBookings(bookingsRes.bookings || []);
-
-            try {
-                const conversationsRes = await databases.listDocuments(DATABASE_ID, "conversations", [Query.equal("status", "active")]);
-                setActiveConversations(conversationsRes.total);
-
-                const recentRes = await databases.listDocuments(DATABASE_ID, "conversations", [Query.orderDesc("$updatedAt"), Query.limit(5)]);
-                setRecentActivity(recentRes.documents as unknown as Conversation[]);
-
-                const customersRes = await databases.listDocuments(DATABASE_ID, "customers", [Query.limit(1)]);
-                setTotalCustomers(customersRes.total);
-            } catch (appwriteErr) {
-                console.log("Appwrite fetch skipped:", appwriteErr);
+            // Fetch recent activity
+            const recentRes = await fetch(`${API_URL}/conversations/recent?limit=5`).then(r => r.json()).catch(() => null);
+            if (recentRes?.success) {
+                setRecentActivity(recentRes.conversations || []);
             }
 
         } catch (error) {
@@ -77,19 +69,10 @@ export default function DashboardPage() {
     useEffect(() => {
         fetchDashboardData();
 
-        let unsubscribe: (() => void) | undefined;
-
-        try {
-            if (client && typeof client.subscribe === 'function') {
-                unsubscribe = client.subscribe(`databases.${DATABASE_ID}.collections.conversations.documents`, () => fetchDashboardData());
-                setIsLive(true);
-            }
-        } catch { setIsLive(false); }
-
+        // Poll every 30 seconds for updates
         const pollInterval = setInterval(fetchDashboardData, 30000);
 
         return () => {
-            if (unsubscribe) unsubscribe();
             clearInterval(pollInterval);
         };
     }, [fetchDashboardData]);
