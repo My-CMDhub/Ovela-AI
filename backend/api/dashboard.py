@@ -627,11 +627,15 @@ async def get_demo_stats():
         demo_users = list(grouped_leads.values())
         demo_users.sort(key=lambda x: x["latest_activity"], reverse=True)
         
+        total_demos = len(leads)  # Total individual demo requests
+        
         return {
-            "total_demos": total_demos, # Total individual requests
+            "total_demos": total_demos,
             "unique_users": len(demo_users),
-            "recent_leads": demo_users[:20] # Return grouped users
+            "recent_leads": demo_users[:20]  # Return grouped users
         }
     except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
         logger.error(f"Error fetching demo stats: {e}")
-        return {"total_demos": 0, "recent_leads": []}
+        return {"total_demos": 0, "unique_users": 0, "recent_leads": []}
