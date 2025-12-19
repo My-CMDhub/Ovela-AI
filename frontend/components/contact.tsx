@@ -21,9 +21,9 @@ export function Contact() {
   const [formData, setFormData] = useState({
     name: "",
     email: "",
-    studioName: "",
+    businessName: "",
     phone: "",
-    studioSize: "",
+    businessSize: "",
   })
   const [status, setStatus] = useState<"idle" | "submitting" | "success" | "error" | "duplicate" | "offline">("idle")
   const [errorMessage, setErrorMessage] = useState("")
@@ -93,8 +93,8 @@ export function Contact() {
             Name: data.name,
             email: data.email,
             phoneNumber: data.phone,
-            StudioSize: data.studioSize,
-            StudioName: data.studioName,
+            StudioSize: data.businessSize,
+            StudioName: data.businessName,
           }
         );
 
@@ -128,7 +128,7 @@ export function Contact() {
       setErrorMessage('Configuration error. Your submission has been saved locally.');
       saveToLocalStorage(formData);
       setStatus("offline");
-      setFormData({ name: "", email: "", studioName: "", phone: "", studioSize: "" });
+      setFormData({ name: "", email: "", businessName: "", phone: "", businessSize: "" });
       return;
     }
 
@@ -142,19 +142,19 @@ export function Contact() {
           window.fbq('track', 'Lead', {
             content_name: 'Waitlist Application',
             content_category: 'Lead Generation',
-            value: formData.studioSize,
+            value: formData.businessSize,
             currency: 'AUD'
           });
         }
 
         setStatus("success");
-        setFormData({ name: "", email: "", studioName: "", phone: "", studioSize: "" });
+        setFormData({ name: "", email: "", businessName: "", phone: "", businessSize: "" });
       } else {
         // All retries failed - save to localStorage
         saveToLocalStorage(formData);
         setStatus("offline");
         setErrorMessage("Couldn't connect to database. Your submission is saved and will sync automatically.");
-        setFormData({ name: "", email: "", studioName: "", phone: "", studioSize: "" });
+        setFormData({ name: "", email: "", businessName: "", phone: "", businessSize: "" });
       }
     } catch (error: any) {
       console.error("Error submitting form:", error);
@@ -162,13 +162,13 @@ export function Contact() {
       // Handle duplicate entries
       if (error?.code === 409) {
         setStatus("duplicate");
-        setFormData({ name: "", email: "", studioName: "", phone: "", studioSize: "" });
+        setFormData({ name: "", email: "", businessName: "", phone: "", businessSize: "" });
       } else {
         // Save to localStorage for any other error
         saveToLocalStorage(formData);
         setStatus("offline");
         setErrorMessage("Your application is saved! We'll process it once the connection is restored.");
-        setFormData({ name: "", email: "", studioName: "", phone: "", studioSize: "" });
+        setFormData({ name: "", email: "", businessName: "", phone: "", businessSize: "" });
       }
     }
   };
@@ -410,9 +410,9 @@ export function Contact() {
                 <div>
                   <input
                     type="text"
-                    placeholder="Studio name"
-                    value={formData.studioName}
-                    onChange={(e) => setFormData({ ...formData, studioName: e.target.value })}
+                    placeholder="Business name"
+                    value={formData.businessName}
+                    onChange={(e) => setFormData({ ...formData, businessName: e.target.value })}
                     className="w-full px-6 py-4 bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-xl text-sm text-black dark:text-white placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-black/10 dark:focus:ring-white/20 transition-all"
                     required
                   />
@@ -431,16 +431,16 @@ export function Contact() {
                   />
                   <div className="relative">
                     <select
-                      value={formData.studioSize}
-                      onChange={(e) => setFormData({ ...formData, studioSize: e.target.value })}
+                      value={formData.businessSize}
+                      onChange={(e) => setFormData({ ...formData, businessSize: e.target.value })}
                       className="w-full px-6 py-4 bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 rounded-xl text-sm text-zinc-600 dark:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-black/10 dark:focus:ring-white/20 transition-all appearance-none"
                       required
                     >
-                      <option value="" disabled>Studio Size</option>
-                      <option value="Solo Studio">Solo Studio</option>
-                      <option value="2-5 Staff">2-5 Staff</option>
-                      <option value="6-10 Staff">6-10 Staff</option>
-                      <option value="10+ Staff">10+ Staff</option>
+                      <option value="" disabled>Team Size</option>
+                      <option value="Solo">Just Me</option>
+                      <option value="2-5 Staff">2-5 People</option>
+                      <option value="6-10 Staff">6-10 People</option>
+                      <option value="10+ Staff">10+ People</option>
                     </select>
                     <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
                       <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">

@@ -14,7 +14,7 @@ export function Testimonials() {
           className="text-center mb-16"
         >
           <h2 className="font-serif text-4xl md:text-5xl tracking-tight mb-4">
-            What studios say about Ovela
+            What businesses say about Ovela
           </h2>
           <p className="text-muted-foreground text-base">
             Coming soon — early partners are onboarding now
@@ -47,7 +47,7 @@ export function Testimonials() {
             </div>
 
             <p className="text-lg text-muted-foreground leading-relaxed mb-12">
-              We're currently onboarding our first group of beauty and hair studios.
+              We're currently onboarding our first group of service businesses.
               <br />
               Their real experiences will be published here soon.
             </p>
@@ -61,7 +61,7 @@ export function Testimonials() {
                 <div className="flex-1">
                   <p className="text-sm font-medium text-muted-foreground mb-3">Vision from the founder</p>
                   <blockquote className="text-lg md:text-xl font-serif italic text-foreground leading-relaxed">
-                    "My goal with Ovela is simple: Remove the stress of managing clients so beauty artists can focus on their craft."
+                    "My goal with Ovela is simple: Let every missed call become a booked customer, so you can focus on what you do best."
                   </blockquote>
                   <p className="text-sm text-muted-foreground mt-4">
                     — Ovela Team
@@ -81,7 +81,7 @@ export function Testimonials() {
           className="mt-12 text-center"
         >
           <p className="text-sm text-muted-foreground">
-            Join the waitlist to be among the first studios to experience Ovela
+            Join the waitlist to be among the first businesses to experience Ovela
           </p>
         </motion.div>
       </div>

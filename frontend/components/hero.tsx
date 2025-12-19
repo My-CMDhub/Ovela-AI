@@ -8,18 +8,19 @@ import { ArrowRight, X } from "lucide-react"
 import Link from "next/link"
 import Image from "next/image"
 
-const bookings = [
-  { id: 1, client: "Sarah M.", service: "Gel Manicure", time: "10:00 AM", status: "confirmed", avatar: "S" },
-  { id: 2, client: "Emma K.", service: "Lash Extensions", time: "11:30 AM", status: "pending", avatar: "E" },
-  { id: 3, client: "Jessica L.", service: "Hair Color", time: "1:00 PM", status: "confirmed", avatar: "J" },
-  { id: 4, client: "Amanda R.", service: "Pedicure", time: "2:30 PM", status: "confirmed", avatar: "A" },
-  { id: 5, client: "Michelle T.", service: "Facial", time: "4:00 PM", status: "pending", avatar: "M" },
+// Recent calls handled by AI (industry-agnostic)
+const recentCalls = [
+  { id: 1, caller: "David M.", type: "Booking Request", time: "10:02 AM", status: "synced", avatar: "D" },
+  { id: 2, caller: "Sarah K.", type: "Availability Check", time: "10:15 AM", status: "responded", avatar: "S" },
+  { id: 3, caller: "James L.", type: "Quote Request", time: "10:28 AM", status: "forwarded", avatar: "J" },
+  { id: 4, caller: "Emma R.", type: "Appointment", time: "10:45 AM", status: "synced", avatar: "E" },
+  { id: 5, caller: "Michael T.", type: "Callback Request", time: "11:02 AM", status: "pending", avatar: "M" },
 ]
 
 const stats = [
-  { label: "Today's Bookings", value: "12", change: "+3" },
-  { label: "Revenue", value: "$847", change: "+12%" },
-  { label: "New Clients", value: "4", change: "+2" },
+  { label: "Calls Handled", value: "47", change: "+12" },
+  { label: "Bookings Made", value: "23", change: "+8" },
+  { label: "Hours Saved", value: "6.5h", change: "+2h" },
 ]
 
 function FloatingParticles() {
@@ -269,6 +270,117 @@ function MacBookMockup({ children }: { children: React.ReactNode }) {
   )
 }
 
+function IPhoneMockup() {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 30 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.8, delay: 0.6 }}
+      className="relative"
+    >
+      {/* Glow effect */}
+      <div className="absolute -inset-4 bg-gradient-to-b from-blue-500/20 via-purple-500/10 to-transparent rounded-[50px] blur-2xl -z-10" />
+
+      {/* iPhone Frame */}
+      <div
+        className="relative rounded-[44px] p-[3px] bg-gradient-to-b from-[#3a3a3c] to-[#1d1d1f]"
+        style={{
+          boxShadow: `
+            0 0 0 1px rgba(255,255,255,0.1),
+            0 25px 50px -12px rgba(0,0,0,0.5),
+            inset 0 1px 0 rgba(255,255,255,0.1)
+          `,
+        }}
+      >
+        <div className="rounded-[42px] overflow-hidden bg-gradient-to-br from-blue-500 via-blue-400 to-blue-600" style={{ width: "200px", height: "400px" }}>
+          {/* Status Bar */}
+          <div className="flex items-center justify-between px-6 pt-3">
+            <span className="text-white/90 text-[10px] font-medium">9:41</span>
+            <div className="flex items-center gap-1">
+              <svg className="w-3 h-3 text-white/90" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 18c3.31 0 6-2.69 6-6s-2.69-6-6-6-6 2.69-6 6 2.69 6 6 6z" />
+              </svg>
+              <svg className="w-4 h-3 text-white/90" fill="currentColor" viewBox="0 0 24 24">
+                <rect x="2" y="7" width="18" height="10" rx="2" />
+                <rect x="20" y="10" width="2" height="4" />
+              </svg>
+            </div>
+          </div>
+
+          {/* Incoming Call Content */}
+          <div className="flex flex-col items-center pt-8 px-4">
+            <p className="text-white/70 text-xs mb-1">incoming call</p>
+            <h2 className="text-white text-2xl font-light mb-1">Ovela</h2>
+            <h3 className="text-white text-3xl font-semibold tracking-tight">AI</h3>
+
+            {/* Avatar - Stylized O logo */}
+            <motion.div
+              className="mt-6 w-24 h-24 rounded-full bg-gradient-to-br from-purple-400 via-pink-400 to-purple-500 flex items-center justify-center shadow-lg"
+              animate={{ scale: [1, 1.02, 1] }}
+              transition={{ duration: 2, repeat: Infinity }}
+            >
+              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-purple-300 via-pink-300 to-purple-400 flex items-center justify-center">
+                <span className="text-4xl font-serif font-bold text-white drop-shadow-sm">O</span>
+              </div>
+            </motion.div>
+          </div>
+
+          {/* Bottom Actions */}
+          <div className="absolute bottom-8 left-0 right-0 flex flex-col items-center gap-4">
+            {/* Remind Me / Message */}
+            <div className="flex gap-8 mb-2">
+              <div className="flex flex-col items-center gap-1">
+                <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m6-2a10 10 0 11-20 0 10 10 0 0120 0z" />
+                  </svg>
+                </div>
+                <span className="text-white/70 text-[10px]">Remind Me</span>
+              </div>
+              <div className="flex flex-col items-center gap-1">
+                <div className="w-12 h-12 rounded-full bg-white/20 backdrop-blur flex items-center justify-center">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                  </svg>
+                </div>
+                <span className="text-white/70 text-[10px]">Message</span>
+              </div>
+            </div>
+
+            {/* Decline / Accept */}
+            <div className="flex gap-12">
+              {/* Decline */}
+              <div className="flex flex-col items-center gap-1">
+                <div className="w-14 h-14 rounded-full bg-red-500 flex items-center justify-center shadow-lg">
+                  <svg className="w-7 h-7 text-white rotate-[135deg]" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M6.62 10.79c1.44 2.83 3.76 5.15 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
+                  </svg>
+                </div>
+                <span className="text-white/70 text-[10px]">Decline</span>
+              </div>
+
+              {/* Accept - with pulse animation */}
+              <div className="flex flex-col items-center gap-1 relative">
+                <motion.div
+                  className="absolute inset-0 w-14 h-14 rounded-full bg-green-400"
+                  animate={{ scale: [1, 1.3, 1], opacity: [0.5, 0, 0.5] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                />
+                <div className="w-14 h-14 rounded-full bg-green-500 flex items-center justify-center shadow-lg relative">
+                  <svg className="w-7 h-7 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M6.62 10.79c1.44 2.83 3.76 5.15 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
+                  </svg>
+                </div>
+                <span className="text-white/70 text-[10px]">Accept</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  )
+}
+
 export function Hero() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [activeBooking, setActiveBooking] = useState(0)
@@ -280,10 +392,10 @@ export function Hero() {
   }, [])
 
   useEffect(() => {
-    const bookingTimer = setInterval(() => {
-      setActiveBooking((prev) => (prev + 1) % bookings.length)
+    const callTimer = setInterval(() => {
+      setActiveBooking((prev) => (prev + 1) % recentCalls.length)
     }, 2500)
-    return () => clearInterval(bookingTimer)
+    return () => clearInterval(callTimer)
   }, [])
 
   // Close modal on escape
@@ -324,7 +436,7 @@ export function Hero() {
             className="mb-6 inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-sm text-primary backdrop-blur-sm"
           >
             <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse"> </span>
-            Zero - Staff Overhead • 24 / 7 Availability
+            Voice-First AI • Works While You Work
           </motion.div>
 
           {/* Main Heading */}
@@ -355,7 +467,7 @@ export function Hero() {
             animate="visible"
             className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground sm:text-xl"
           >
-            Your website waits. <strong className="text-foreground font-medium"> Our AI brings customers in.</strong> Turn missed calls into guaranteed revenue 24/7 without picking up the phone.
+            Every missed call is lost revenue. <strong className="text-foreground font-medium">Our AI answers, books, and syncs</strong>—so you can focus on what you do best.
           </motion.p>
 
           {/* CTA Buttons */}
@@ -374,7 +486,7 @@ export function Hero() {
               href="#live-preview"
               className="inline-flex h-12 items-center justify-center rounded-full bg-primary px-8 text-base font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
             >
-              Start Automating
+              Hear It In Action
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>
 
@@ -557,11 +669,11 @@ export function Hero() {
               <div className="w-52 bg-muted/30 border-r border-border/30 p-4 hidden md:block">
                 <div className="flex items-center gap-3 mb-8">
                   <div className="w-9 h-9 rounded-xl bg-accent/20 flex items-center justify-center shadow-sm">
-                    <span className="font-serif text-lg font-semibold"> N </span>
+                    <span className="font-serif text-lg font-semibold">O</span>
                   </div>
                   <div>
-                    <p className="font-semibold text-sm"> GlowArt Studio </p>
-                    <p className="text-xs text-muted-foreground"> Pro Plan </p>
+                    <p className="font-semibold text-sm">Your Business</p>
+                    <p className="text-xs text-muted-foreground">Connected to Ovela</p>
                   </div>
                 </div>
 
@@ -662,18 +774,18 @@ export function Hero() {
                     ))}
                 </div>
 
-                {/* Today's Bookings */}
+                {/* Recent Call Activity */}
                 <div className="bg-card rounded-xl border border-border/50 overflow-hidden shadow-sm">
                   <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between">
-                    <h3 className="font-medium text-sm"> Today &apos;s Bookings </h3>
+                    <h3 className="font-medium text-sm">Recent Calls</h3>
                     <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-                      5 appointments
+                      5 handled
                     </span>
                   </div>
                   <div className="divide-y divide-border/30">
                     {
-                      bookings.slice(0, 5).map((booking, i) => (
-                        <motion.div key={booking.id} className="relative">
+                      recentCalls.slice(0, 5).map((call, i) => (
+                        <motion.div key={call.id} className="relative">
                           <motion.div
                             animate={{
                               backgroundColor: activeBooking === i ? "rgba(200, 180, 168, 0.15)" : "transparent",
@@ -684,22 +796,26 @@ export function Hero() {
                           <div className="relative px-4 py-2.5 flex items-center justify-between">
                             <div className="flex items-center gap-3">
                               <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-xs font-medium">
-                                {booking.avatar}
+                                {call.avatar}
                               </div>
                               <div>
-                                <p className="text-xs font-medium"> {booking.client} </p>
-                                <p className="text-[10px] text-muted-foreground"> {booking.service} </p>
+                                <p className="text-xs font-medium">{call.caller}</p>
+                                <p className="text-[10px] text-muted-foreground">{call.type}</p>
                               </div>
                             </div>
                             <div className="text-right">
-                              <p className="text-xs"> {booking.time} </p>
+                              <p className="text-xs">{call.time}</p>
                               <span
-                                className={`text-[9px] px-1.5 py-0.5 rounded-full ${booking.status === "confirmed"
+                                className={`text-[9px] px-1.5 py-0.5 rounded-full ${call.status === "synced"
                                   ? "bg-green-100 text-green-700"
-                                  : "bg-amber-100 text-amber-700"
+                                  : call.status === "responded"
+                                    ? "bg-blue-100 text-blue-700"
+                                    : call.status === "forwarded"
+                                      ? "bg-purple-100 text-purple-700"
+                                      : "bg-amber-100 text-amber-700"
                                   }`}
                               >
-                                {booking.status}
+                                {call.status}
                               </span>
                             </div>
                           </div>

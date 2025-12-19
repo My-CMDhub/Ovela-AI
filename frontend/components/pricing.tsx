@@ -7,25 +7,25 @@ import Link from "next/link"
 const plans = [
   {
     name: "Starter",
-    description: "Perfect for solo studios",
+    description: "Perfect for solo businesses",
     features: [
-      "Unlimited WhatsApp bookings",
-      "Automated confirmations",
-      "Service & price auto-replies",
-      "Daily booking summary",
-      "1 staff calendar",
+      "Unlimited AI calls answered",
+      "Automated booking & SMS confirmations",
+      "Calendar sync (Google, Outlook)",
+      "Daily call summary email",
+      "1 phone line",
     ],
   },
   {
     name: "Pro",
-    description: "For growing multi-branch studios",
+    description: "For growing service businesses",
     features: [
       "Everything in Starter",
-      "Multiple staff calendars",
-      "Multi-location support",
+      "CRM integration (ServiceM8, HubSpot)",
+      "Multiple phone lines",
       "Priority support",
-      "Advanced analytics",
-      "Custom AI responses",
+      "Advanced call analytics",
+      "Custom AI voice & responses",
     ],
     featured: true,
   },
@@ -71,7 +71,7 @@ export function Pricing() {
             className="p-8 rounded-3xl border border-border/50 bg-background/50 backdrop-blur-sm hover:border-border transition-colors duration-300"
           >
             <h3 className="text-2xl font-serif mb-2">Standard Access</h3>
-            <p className="text-sm text-muted-foreground mb-8">Perfect for solo studios ready to automate.</p>
+            <p className="text-sm text-muted-foreground mb-8">Perfect for independent service businesses ready to automate.</p>
 
             <ul className="space-y-4 mb-10">
               <li className="flex items-center gap-3">
@@ -82,7 +82,7 @@ export function Pricing() {
               </li>
               <li className="flex items-center gap-3">
                 <Check className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Unlimited WhatsApp bookings</span>
+                <span className="text-sm text-muted-foreground">Unlimited AI call answering</span>
               </li>
               <li className="flex items-center gap-3">
                 <Check className="w-4 h-4 text-muted-foreground" />
@@ -90,7 +90,7 @@ export function Pricing() {
               </li>
               <li className="flex items-center gap-3">
                 <Check className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Daily booking summary</span>
+                <span className="text-sm text-muted-foreground">Daily call & booking summary</span>
               </li>
             </ul>
 
@@ -115,7 +115,7 @@ export function Pricing() {
             </div>
 
             <h3 className="text-2xl font-serif mb-2">Priority Access</h3>
-            <p className="text-sm text-muted-foreground mb-8">For growing studios requiring dedicated support.</p>
+            <p className="text-sm text-muted-foreground mb-8">For growing businesses requiring dedicated support.</p>
 
             <ul className="space-y-4 mb-10">
               <li className="flex items-center gap-3">
@@ -132,11 +132,11 @@ export function Pricing() {
               </li>
               <li className="flex items-center gap-3">
                 <Check className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Multi-location support</span>
+                <span className="text-sm text-muted-foreground">CRM integrations (ServiceM8, HubSpot)</span>
               </li>
               <li className="flex items-center gap-3">
                 <Check className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Custom AI responses</span>
+                <span className="text-sm text-muted-foreground">Custom AI voice & responses</span>
               </li>
             </ul>
 

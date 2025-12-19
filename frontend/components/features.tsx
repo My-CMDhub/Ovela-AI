@@ -1,43 +1,43 @@
 "use client"
 
 import { motion } from "framer-motion"
-import { CalendarCheck, RefreshCw, List, Clock, User, Settings, BarChart3 } from "lucide-react"
+import { Phone, RefreshCw, Database, Clock, Brain, Settings, BarChart3 } from "lucide-react"
 
 const features = [
   {
-    icon: CalendarCheck,
-    title: "Smart WhatsApp Booking",
-    description: "Clients book appointments directly via WhatsApp with natural conversation.",
+    icon: Phone,
+    title: "AI Voice Answering",
+    description: "Natural conversations that sound human. Answers calls 24/7 in your brand voice.",
+  },
+  {
+    icon: Database,
+    title: "CRM Integration",
+    description: "Syncs with ServiceM8, HubSpot, Salesforce—your data stays in your systems.",
+  },
+  {
+    icon: Clock,
+    title: "Real-Time Booking",
+    description: "Checks live availability and books appointments during the call. No delays.",
   },
   {
     icon: RefreshCw,
     title: "Reschedule & Cancel",
-    description: "One message to change or cancel — Ovela handles it seamlessly.",
+    description: "Customers call to change appointments. Ovela handles it seamlessly.",
   },
   {
-    icon: List,
-    title: "Service & Price Auto-Replies",
-    description: "Instant answers about services, pricing, and availability.",
-  },
-  {
-    icon: Clock,
-    title: "Auto Slot Checking",
-    description: "No double bookings ever. Real-time calendar sync.",
-  },
-  {
-    icon: User,
-    title: "Business Profile Memory",
-    description: "Ovela remembers client preferences and booking history.",
+    icon: Brain,
+    title: "Smart Call Routing",
+    description: "Complex queries get forwarded to you. Routine calls handled automatically.",
   },
   {
     icon: Settings,
-    title: "Owner Admin Commands",
-    description: "Full control via simple commands. Block times, adjust settings.",
+    title: "Easy Setup",
+    description: "30 minutes to go live. No technical skills required. We handle the rest.",
   },
   {
     icon: BarChart3,
-    title: "Analytics & Summaries",
-    description: "Daily booking summaries and insights delivered to you.",
+    title: "Call Analytics",
+    description: "See every call, booking, and missed opportunity in your dashboard.",
   },
 ]
 
