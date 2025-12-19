@@ -9,11 +9,130 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from core.config import settings
 from core.security import verify_dashboard_access
 from rules.whitelist import is_whitelisted
+import logging
 
 router = APIRouter(dependencies=[Depends(verify_dashboard_access)])
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
+logger = logging.getLogger(__name__)
+
+
+# ============ CONVERSATIONS ============
+
+@router.get("/conversations")
+async def get_conversations(status: str = None, limit: int = 100):
+    """
+    Get conversations, optionally filtered by status.
+    status: active, archived (or None for all)
+    """
+    try:
+        # Build query parameters
+        params = {"limit": limit, "orderDesc": "$updatedAt"}
+        
+        if status:
+            params["queries"] = [f'equal("status", "{status}")']
+        
+        result = db_service._make_request(
+            "GET",
+            f"/databases/{db_service.db_id}/collections/conversations/documents",
+            params=params
+        )
+        
+        conversations = result.get("documents", []) if result else []
+        total = result.get("total", 0) if result else 0
+        
+        return {
+            "success": True,
+            "conversations": conversations,
+            "total": total
+        }
+    except Exception as e:
+        logger.error(f"Error fetching conversations: {e}")
+        return {"success": False, "conversations": [], "total": 0}
+
+
+@router.get("/conversations/recent")
+async def get_recent_conversations(limit: int = 5):
+    """Get recent conversations for activity feed."""
+    try:
+        result = db_service._make_request(
+            "GET",
+            f"/databases/{db_service.db_id}/collections/conversations/documents",
+            params={"limit": limit, "orderDesc": "$updatedAt"}
+        )
+        
+        conversations = result.get("documents", []) if result else []
+        
+        return {
+            "success": True,
+            "conversations": conversations
+        }
+    except Exception as e:
+        logger.error(f"Error fetching recent conversations: {e}")
+        return {"success": False, "conversations": []}
+
+
+@router.get("/conversations/active-count")
+async def get_active_conversations_count():
+    """Get count of active conversations."""
+    try:
+        result = db_service._make_request(
+            "GET",
+            f"/databases/{db_service.db_id}/collections/conversations/documents",
+            params={"limit": 1, "queries": ['equal("status", "active")']}
+        )
+        
+        total = result.get("total", 0) if result else 0
+        
+        return {"count": total}
+    except Exception as e:
+        logger.error(f"Error fetching active conversations count: {e}")
+        return {"count": 0}
+
+
+# ============ CUSTOMERS ============
+
+@router.get("/customers")
+async def get_customers(limit: int = 100):
+    """Get all customers."""
+    try:
+        result = db_service._make_request(
+            "GET",
+            f"/databases/{db_service.db_id}/collections/customers/documents",
+            params={"limit": limit, "orderDesc": "$createdAt"}
+        )
+        
+        customers = result.get("documents", []) if result else []
+        total = result.get("total", 0) if result else 0
+        
+        return {
+            "success": True,
+            "customers": customers,
+            "total": total
+        }
+    except Exception as e:
+        logger.error(f"Error fetching customers: {e}")
+        return {"success": False, "customers": [], "total": 0}
+
+
+@router.get("/customers/count")
+async def get_customers_count():
+    """Get total customer count."""
+    try:
+        result = db_service._make_request(
+            "GET",
+            f"/databases/{db_service.db_id}/collections/customers/documents",
+            params={"limit": 1}
+        )
+        
+        total = result.get("total", 0) if result else 0
+        
+        return {"count": total}
+    except Exception as e:
+        logger.error(f"Error fetching customers count: {e}")
+        return {"count": 0}
 
 
 # ============ BOOKINGS (Native System - replaces Cal.com) ============
@@ -144,7 +263,7 @@ async def get_availability(date: str):
         datetime.strptime(date, "%Y-%m-%d")
         
         # Get settings for business hours (or use defaults)
-        settings = db_service.get_all_settings()
+        settings_data = db_service.get_all_settings()
         
         # Default: 9am-6pm, 30 min slots
         start_hour = 9
@@ -152,9 +271,9 @@ async def get_availability(date: str):
         slot_duration = 30
         
         # Parse business hours from settings if available
-        if settings and settings.get("business_hours"):
+        if settings_data and settings_data.get("business_hours"):
             # Simple parsing: "9:00 AM - 6:00 PM"
-            hours = settings.get("business_hours", "")
+            hours = settings_data.get("business_hours", "")
             # For now, use defaults. Can enhance parsing later.
         
         available_slots = db_service.get_availability(
@@ -241,24 +360,24 @@ async def get_settings():
             import json
             settings_json = business.get("system_prompt_override", "{}")
             try:
-                settings = json.loads(settings_json)
+                settings_data = json.loads(settings_json)
             except json.JSONDecodeError:
-                settings = {}
+                settings_data = {}
             
             return {
                 "success": True,
                 "settings": {
                     "business_name": business.get("name", ""),
                     "industry": business.get("industry", "beauty"),
-                    "business_hours": settings.get("business_hours", ""),
-                    "services": settings.get("services", ""),
-                    "location": settings.get("location", ""),
-                    "phone": settings.get("phone", ""),
-                    "owner_email": settings.get("owner_email", ""),
-                    "business_phone": settings.get("business_phone", ""),
-                    "custom_instructions": settings.get("custom_instructions", ""),
-                    "current_promotions": settings.get("current_promotions", ""),
-                    "ai_tone": settings.get("ai_tone", "friendly"),
+                    "business_hours": settings_data.get("business_hours", ""),
+                    "services": settings_data.get("services", ""),
+                    "location": settings_data.get("location", ""),
+                    "phone": settings_data.get("phone", ""),
+                    "owner_email": settings_data.get("owner_email", ""),
+                    "business_phone": settings_data.get("business_phone", ""),
+                    "custom_instructions": settings_data.get("custom_instructions", ""),
+                    "current_promotions": settings_data.get("current_promotions", ""),
+                    "ai_tone": settings_data.get("ai_tone", "friendly"),
                 }
             }
         else:
@@ -343,11 +462,11 @@ async def get_industry_lock():
         import json
         settings_json = business.get("system_prompt_override", "{}")
         try:
-            settings = json.loads(settings_json)
+            settings_data = json.loads(settings_json)
         except json.JSONDecodeError:
-            settings = {}
+            settings_data = {}
         
-        is_locked = settings.get("industry_locked", False)
+        is_locked = settings_data.get("industry_locked", False)
         current_industry = business.get("industry", "beauty")
         
         return {
@@ -605,7 +724,7 @@ async def get_demo_stats():
                     "latest_activity": lead.get("created_at"),
                     "last_status": lead.get("status"),
                     "attempt_count": 0,
-                    "$id": lead.get("$id") # Use latest ID
+                    "$id": lead.get("$id")  # Use latest ID
                 }
             
             # Update latest info if this lead is newer
@@ -613,7 +732,7 @@ async def get_demo_stats():
             stored_time = grouped_leads[phone]["latest_activity"]
             
             if current_time > stored_time:
-                 grouped_leads[phone].update({
+                grouped_leads[phone].update({
                     "name": lead.get("name", "Unknown"),
                     "business_name": lead.get("business_name", "Unknown"),
                     "latest_activity": current_time,
