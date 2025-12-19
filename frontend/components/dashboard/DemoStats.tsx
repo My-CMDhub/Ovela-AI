@@ -26,12 +26,8 @@ export function DemoStats() {
     useEffect(() => {
         const fetchStats = async () => {
             try {
-                // Use relative path if proxy is set up, or full URL
-                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/dashboard/demo-stats`, {
-                    headers: {
-                        "Authorization": `Bearer ${localStorage.getItem("token")}`
-                    }
-                })
+                // Use Next.js proxy (adds API key server-side)
+                const res = await fetch(`/api/dashboard/demo-stats`)
                 if (res.ok) {
                     const data = await res.json()
                     setStats(data)
@@ -90,8 +86,8 @@ export function DemoStats() {
                                 </div>
                                 <div className="text-right">
                                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${user.last_status === 'called'
-                                            ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400'
-                                            : 'bg-gray-100 text-gray-700 dark:bg-gray-500/20 dark:text-gray-400'
+                                        ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400'
+                                        : 'bg-gray-100 text-gray-700 dark:bg-gray-500/20 dark:text-gray-400'
                                         }`}>
                                         {user.last_status}
                                     </span>
