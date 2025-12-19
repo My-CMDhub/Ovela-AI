@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     # App Settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Ovela AI Backend"
-    BACKEND_URL: str = "https://ovela12c561a30285.herokuapp.com"  # Production URL
+    BACKEND_URL: str = "https://ovela-12c561a30285.herokuapp.com"  # Production URL
 
     # Meta (WhatsApp)
     META_APP_ID: str = "" # App ID
