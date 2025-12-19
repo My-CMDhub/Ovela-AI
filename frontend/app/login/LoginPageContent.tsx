@@ -31,12 +31,7 @@ export default function LoginPageContent() {
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-rose-50 via-white to-pink-50">
-            <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
-                className="w-full max-w-md p-8"
-            >
+            <div className="w-full max-w-md p-8">
                 {/* Logo */}
                 <div className="text-center mb-8">
                     <h1 className="text-3xl font-serif text-rose-900">Ovela</h1>
@@ -105,13 +100,9 @@ export default function LoginPageContent() {
                         </div>
 
                         {error && (
-                            <motion.p
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                className="text-red-500 text-sm"
-                            >
+                            <p className="text-red-500 text-sm animate-pulse">
                                 {error}
-                            </motion.p>
+                            </p>
                         )}
 
                         <button
@@ -127,7 +118,7 @@ export default function LoginPageContent() {
                 <p className="text-center text-gray-400 text-sm mt-6">
                     Powered by Ovela AI
                 </p>
-            </motion.div>
+            </div>
         </div>
     );
 }

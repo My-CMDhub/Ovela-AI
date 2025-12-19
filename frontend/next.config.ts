@@ -20,7 +20,10 @@ const nextConfig: NextConfig = {
   // Enable experimental features for better performance
   experimental: {
     optimizeCss: true,
+    // Tree-shake unused exports from these packages
+    optimizePackageImports: ['framer-motion', 'lucide-react'],
   },
 };
 
 export default nextConfig;
+

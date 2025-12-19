@@ -45,7 +45,7 @@ export function Preloader({ onComplete }: { onComplete: () => void }) {
 
         const timer = setTimeout(() => {
             setIndex((prev) => prev + 1)
-        }, 1000) // Reduced from 1200ms to 1000ms
+        }, 600) // Faster animation for better LCP
 
         return () => clearTimeout(timer)
     }, [index, words.length, onComplete, shouldShow])
