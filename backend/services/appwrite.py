@@ -27,12 +27,13 @@ class AppwriteService:
         }
         url = f"{self.endpoint}{path}"
         
-        # For queries, convert to proper JSON format
+        # For queries, convert to proper format
+        # Note: limit and other non-query params should stay as-is
         if params and 'queries' in params:
-            query_list = params['queries']
-            params = {}
+            query_list = params.pop('queries')  # Remove from params
             for i, q in enumerate(query_list):
-                params[f'queries[{i}]'] = json.dumps(q) if isinstance(q, dict) else q
+                # Don't wrap strings - they're already formatted like 'orderDesc("field")'
+                params[f'queries[{i}]'] = q
         
         try:
             if method == "GET":
