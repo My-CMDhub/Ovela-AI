@@ -706,7 +706,7 @@ async def get_demo_stats():
         leads_result = db_service._make_request(
             "GET",
             f"/databases/{db_service.db_id}/collections/demo_leads/documents",
-            params={"limit": 100, "queries": ['orderDesc("created_at")']}
+            params={"limit": 100}  # Removed orderDesc for now - will sort in Python
         )
         all_leads = leads_result.get("documents", []) if leads_result else []
         
