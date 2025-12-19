@@ -73,7 +73,6 @@ class AppwriteService:
     def get_or_create_conversation(self, whatsapp_id: str, business_id: str):
         """Get existing conversation or create a new one."""
         try:
-            # FIX: Use string format for both filters
             queries = [
                 f'equal("whatsapp_id", "{whatsapp_id}")',
                 f'equal("business_id", "{business_id}")'
@@ -319,9 +318,8 @@ class AppwriteService:
             params = {}
             
             if status:
-                params["queries"] = [
-                    {"method": "equal", "attribute": "status", "values": [status]}
-                ]
+                # FIX: Send a String, not a Dict
+                params["queries"] = [f'equal("status", "{status}")']
             
             result = self._make_request("GET", path, params=params)
             return result.get("documents", []) if result else []
@@ -409,8 +407,9 @@ class AppwriteService:
         """Get bookings within a date range."""
         try:
             path = f"/databases/{self.db_id}/collections/bookings/documents"
+            # FIX: Use 'queries' list, _make_request handles indexing
             params = {
-                "queries[]": [
+                "queries": [
                     f'greaterThanEqual("booking_date", "{start_date}")',
                     f'lessThanEqual("booking_date", "{end_date}")'
                 ]
@@ -565,10 +564,11 @@ class AppwriteService:
     def _find_customer_by_phone(self, phone: str):
         """Find customer by WhatsApp ID/phone."""
         try:
+            # FIX: Use string format and 'queries' key
             result = self._make_request(
                 "GET",
                 f"/databases/{self.db_id}/collections/customers/documents",
-                params={"queries[]": [f'equal("whatsapp_id", ["{phone}"])']}
+                params={"queries": [f'equal("whatsapp_id", "{phone}")']}
             )
             docs = result.get("documents", [])
             return docs[0] if docs else None
