@@ -1,3 +1,4 @@
+
 """
 Email Service via Resend
 Handles sending transactional emails for bookings with Ovela-branded design.
@@ -7,6 +8,7 @@ from core.config import settings
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from typing import Optional, List, Union
 
 logger = logging.getLogger(__name__)
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
@@ -101,14 +103,23 @@ class EmailService:
 </body>
 </html>'''
 
-    async def send_email(self, to_email: str, subject: str, html_content: str, from_email: str = None):
-        """Send an email via Resend API."""
+    async def send_email(self, to_email: Union[str, List[str]], subject: str, html_content: str, from_email: str = None):
+        """
+        Send an email via Resend API.
+        to_email: can be a single email string or a list of email strings.
+        """
         try:
             sender = from_email if from_email else self.default_from_email
             
+            # Ensure we have a list for the 'to' field
+            if isinstance(to_email, str):
+                recipients = [email.strip() for email in to_email.split(",") if email.strip()]
+            else:
+                recipients = to_email
+
             payload = {
                 "from": sender,
-                "to": [to_email],
+                "to": recipients,
                 "subject": subject,
                 "html": html_content
             }
@@ -298,6 +309,46 @@ class EmailService:
         
         sender = "Ovela Notifications <notifications@ovela.dev>"
         return await self.send_email(owner_email, subject, html, from_email=sender)
+
+
+    async def send_demo_alert(self, lead_details: dict):
+        """Notify team about a new demo request."""
+        name = lead_details.get("name", "Unknown")
+        business = lead_details.get("business_name", "Unknown")
+        phone = lead_details.get("phone", "Unknown")
+        created_at = lead_details.get("created_at", datetime.now(MELBOURNE_TZ).isoformat())
+
+        subject = f"🚀 New Demo Request: {business}"
+        
+        steps = [
+            f"<strong>Name:</strong> {name}",
+            f"<strong>Business:</strong> {business}",
+            f"<strong>Phone:</strong> {phone}",
+            f"<strong>Time:</strong> {created_at}"
+        ]
+
+        html = self._base_template(
+            badge="New Demo Lead",
+            title=f"New Demo: {business}",
+            content=f"A new user has requested a demo. Here are their details:",
+            business_name="Ovela Admin",
+            steps=steps,
+            button_text="View conversations",
+            button_url="https://ovela.dev/login",
+            closing_text="Good luck!"
+        )
+
+        # Send to internal notification emails
+        # Load from whitelist/settings
+        recipients_str = settings.DEMO_ALERT_RECIPIENTS
+        recipients = [email.strip() for email in recipients_str.split(",") if email.strip()]
+        
+        # Fallback if empty
+        if not recipients:
+            recipients = ["notifications@ovela.dev"]
+            
+        sender = "Ovela System <notifications@ovela.dev>"
+        return await self.send_email(recipients, subject, html, from_email=sender)
 
 
 email_service = EmailService()

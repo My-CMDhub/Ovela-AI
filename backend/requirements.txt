@@ -8,3 +8,7 @@ pydantic-settings==2.1.0
 resend>=0.7.0
 gunicorn>=21.0.0
 python-multipart
+twilio
+websocket-client
+websockets
+aiohttp

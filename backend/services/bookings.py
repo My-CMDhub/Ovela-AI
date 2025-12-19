@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import json
 import logging
 import requests
+from rules.whitelist import is_whitelisted
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,10 @@ class BookingService:
             if not result or not result.get('documents'):
                 return (True, "")
             
+            # Check whitelist
+            if is_whitelisted(whatsapp_id):
+                 return (True, "")
+
             bookings = result['documents']
             
             # Count operations in time windows

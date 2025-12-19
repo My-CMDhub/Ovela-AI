@@ -1,7 +1,15 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 from api import webhooks, dashboard, twilio
+
+# Configure logging to show in console
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s:     %(name)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
@@ -23,7 +31,11 @@ app.add_middleware(
 # Include Routers
 app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+
 app.include_router(twilio.router, prefix="/twilio", tags=["twilio"])
+# Voice Demo Router
+from api import voice
+app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 
 @app.get("/")
 def read_root():

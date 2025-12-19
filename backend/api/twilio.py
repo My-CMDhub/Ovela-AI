@@ -55,8 +55,7 @@ async def handle_incoming_call(
         # Return TwiML that forwards the call to business phone
         # timeout: Ring for 30 seconds before giving up
         # action: Callback URL to handle the result of the dial attempt
-        base_url = settings.BACKEND_URL or "https://ovela-ai-b6f3e3bb53f6.herokuapp.com"
-        callback_url = f"{base_url}/api/twilio/call-status"
+        callback_url = f"{settings.BACKEND_URL}/twilio/call-status"
         
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>

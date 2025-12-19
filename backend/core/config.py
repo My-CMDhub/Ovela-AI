@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     # App Settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Ovela AI Backend"
-    BACKEND_URL: Optional[str] = None  # Backend URL for webhooks (e.g., Heroku URL)
+    BACKEND_URL: str = "https://ovela12c561a30285.herokuapp.com"  # Production URL
 
     # Meta (WhatsApp)
     META_APP_ID: str = "" # App ID
@@ -27,11 +27,16 @@ class Settings(BaseSettings):
     # Resend
     RESEND_API_KEY: str = ""
     RESEND_FROM_EMAIL: str = "hello@ovela.dev"
+    # Comma-separated list of emails to receive demo alerts
+    DEMO_ALERT_RECIPIENTS: str = "notifications@ovela.dev"
 
     # Twilio (Missed Call → WhatsApp)
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_PHONE_NUMBER: str = "+61348236219"  # Your purchased Twilio number
+
+    # Deepgram
+    DEEPGRAM_API_KEY: str = ""
 
     class Config:
         case_sensitive = True

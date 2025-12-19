@@ -56,3 +56,5 @@ memory_bank/
 
 # guide files
 backend/redeploy-guide.md
+
+.agent/

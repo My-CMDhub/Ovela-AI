@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import requests
 import logging
 from zoneinfo import ZoneInfo
+from rules.whitelist import is_whitelisted
 
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
@@ -142,6 +143,8 @@ class AppwriteService:
     TOKEN_WARNING_THRESHOLD = 0.70  # Warn at 70%
     COOLDOWN_HOURS = 5  # Hours until tokens reset
     
+    DEMO_LIMIT_HOURS = 24 # One demo per day
+    
     def check_token_limit(self, conversation: dict, business_phone: str = "the business") -> tuple:
         """
         Check if user has exceeded daily token limit.
@@ -149,6 +152,11 @@ class AppwriteService:
         status: 'ok', 'warning', 'blocked'
         """
         try:
+            # Check whitelist first
+            if is_whitelisted(conversation.get("whatsapp_id")):
+                logger.info(f" whitelist bypass for {conversation.get('whatsapp_id')}")
+                return (True, "ok", None)
+
             tokens_used = conversation.get("tokens_used_today", 0) or 0
             reset_at_str = conversation.get("token_reset_at")
             
@@ -581,6 +589,179 @@ class AppwriteService:
                 "profile_summary": customer.get("profile_summary", "")
             }
         return None
+
+    # ==================== DEMO ANALYTICS ====================
+    
+    def create_demo_lead(self, name: str, business_name: str, phone: str, source: str = "website") -> dict:
+        """Create a new demo lead when form is submitted."""
+        from appwrite.id import ID
+        try:
+            doc_id = ID.unique()
+            now = datetime.now(MELBOURNE_TZ).isoformat()
+            
+            data = {
+                "name": name,
+                "business_name": business_name,
+                "phone": phone,
+                "status": "pending",
+                "source": source,
+                "created_at": now,
+                "updated_at": now
+            }
+            
+            result = self._make_request(
+                "POST",
+                f"/databases/{self.db_id}/collections/demo_leads/documents",
+                data={"documentId": doc_id, "data": data}
+            )
+            logger.info(f"Created demo lead: {doc_id} for {phone}")
+            return result
+        except Exception as e:
+            logger.error(f"Error creating demo lead: {e}")
+            return None
+    
+    def update_demo_lead(self, lead_id: str = None, phone: str = None, data: dict = None):
+        """Update a demo lead by ID or phone."""
+        try:
+            # Find by phone if ID not provided
+            if not lead_id and phone:
+                result = self._make_request(
+                    "GET",
+                    f"/databases/{self.db_id}/collections/demo_leads/documents"
+                )
+                if result and result.get("documents"):
+                    for doc in result["documents"]:
+                        if doc.get("phone") == phone:
+                            lead_id = doc.get("$id")
+                            break
+            
+            if not lead_id:
+                logger.warning(f"Demo lead not found for phone: {phone}")
+                return None
+            
+            data["updated_at"] = datetime.now(MELBOURNE_TZ).isoformat()
+            
+            result = self._make_request(
+                "PATCH",
+                f"/databases/{self.db_id}/collections/demo_leads/documents/{lead_id}",
+                data={"data": data}
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Error updating demo lead: {e}")
+            return None
+    
+    def check_demo_limit(self, phone: str) -> bool:
+        """
+        Check if phone number has already requested a demo in the last 24 hours.
+        Returns: True if allowed, False if blocked.
+        """
+        try:
+            # Check whitelist first
+            if is_whitelisted(phone):
+                return True
+                
+            # Calculate time threshold
+            now = datetime.now(MELBOURNE_TZ)
+            threshold = now - timedelta(hours=self.DEMO_LIMIT_HOURS)
+            threshold_str = threshold.isoformat()
+            
+            # Fetch all demo leads and filter in-memory for reliability
+            result = self._make_request(
+                "GET",
+                f"/databases/{self.db_id}/collections/demo_leads/documents"
+            )
+            
+            if result and result.get("documents"):
+                for doc in result["documents"]:
+                    if doc.get("phone") == phone:
+                        created_at = doc.get("created_at", "")
+                        if created_at > threshold_str:
+                            logger.info(f"Rate limit: {phone} already requested demo at {created_at}")
+                            return False
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking demo limit: {e}")
+            return True # Fail open
+
+    def create_demo_transcript(self, phone: str, transcript: list, 
+                                exchange_count: int = 0, duration_seconds: int = 0,
+                                outcome: str = "completed", call_sid: str = None,
+                                demo_lead_id: str = None) -> dict:
+        """
+        Store a demo call transcript for AI analysis.
+        transcript: List of {"role": "ai"|"user", "text": "...", "timestamp": "..."}
+        """
+        from appwrite.id import ID
+        try:
+            doc_id = ID.unique()
+            now = datetime.now(MELBOURNE_TZ).isoformat()
+            
+            data = {
+                "phone": phone,
+                "transcript_json": json.dumps(transcript),
+                "exchange_count": exchange_count,
+                "duration_seconds": duration_seconds,
+                "outcome": outcome,
+                "call_sid": call_sid or "",
+                "demo_lead_id": demo_lead_id or "",
+                "created_at": now
+            }
+            
+            result = self._make_request(
+                "POST",
+                f"/databases/{self.db_id}/collections/demo_transcripts/documents",
+                data={"documentId": doc_id, "data": data}
+            )
+            logger.info(f"Created demo transcript: {doc_id} ({exchange_count} exchanges)")
+            return result
+        except Exception as e:
+            logger.error(f"Error creating demo transcript: {e}")
+            return None
+    
+    def update_transcript_feedback(self, transcript_id: str, feedback: str, 
+                                    score: int = None, issues: list = None):
+        """Update transcript with Mistral's AI feedback."""
+        try:
+            data = {
+                "ai_feedback": feedback
+            }
+            if score is not None:
+                data["feedback_score"] = score
+            if issues:
+                data["issues_found"] = json.dumps(issues)
+            
+            result = self._make_request(
+                "PATCH",
+                f"/databases/{self.db_id}/collections/demo_transcripts/documents/{transcript_id}",
+                data={"data": data}
+            )
+            logger.info(f"Updated transcript feedback: {transcript_id}")
+            return result
+        except Exception as e:
+            logger.error(f"Error updating transcript feedback: {e}")
+            return None
+    
+    def get_transcripts_for_review(self, limit: int = 20):
+        """Get transcripts that haven't been reviewed yet (no AI feedback)."""
+        try:
+            result = self._make_request(
+                "GET",
+                f"/databases/{self.db_id}/collections/demo_transcripts/documents"
+            )
+            if result and result.get("documents"):
+                # Filter for those without feedback
+                pending = [
+                    t for t in result["documents"]
+                    if not t.get("ai_feedback")
+                ]
+                return pending[:limit]
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching transcripts for review: {e}")
+            return []
 
 
 db_service = AppwriteService()

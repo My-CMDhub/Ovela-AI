@@ -10,6 +10,7 @@ from typing import Optional
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from core.security import verify_dashboard_access
+from rules.whitelist import is_whitelisted
 
 router = APIRouter(dependencies=[Depends(verify_dashboard_access)])
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
@@ -567,3 +568,70 @@ We'll be happy to help find a time that works! 💜"""
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.get("/demo-stats")
+async def get_demo_stats():
+    """
+    Get statistics for demo usage.
+    """
+    try:
+        # Get all demo leads
+        # Note: In production, we'd use aggregation queries, but for now we'll fetch recently
+        # or implement a specific stats document in Appwrite if scale requires.
+        # For MVP, fetching last 100 leads is fine.
+        
+        leads_result = db_service._make_request(
+            "GET",
+            f"/databases/{db_service.db_id}/collections/demo_leads/documents",
+            params={"limit": 100, "orderDesc": "created_at"}
+        )
+        all_leads = leads_result.get("documents", []) if leads_result else []
+        
+        # Filter out whitelisted numbers (admin testing)
+        leads = [lead for lead in all_leads if not is_whitelisted(lead.get("phone"))]
+        
+        # Group by phone number
+        grouped_leads = {}
+        for lead in leads:
+            phone = lead.get("phone")
+            if not phone:
+                continue
+                
+            if phone not in grouped_leads:
+                grouped_leads[phone] = {
+                    "phone": phone,
+                    "name": lead.get("name", "Unknown"),
+                    "business_name": lead.get("business_name", "Unknown"),
+                    "latest_activity": lead.get("created_at"),
+                    "last_status": lead.get("status"),
+                    "attempt_count": 0,
+                    "$id": lead.get("$id") # Use latest ID
+                }
+            
+            # Update latest info if this lead is newer
+            current_time = lead.get("created_at")
+            stored_time = grouped_leads[phone]["latest_activity"]
+            
+            if current_time > stored_time:
+                 grouped_leads[phone].update({
+                    "name": lead.get("name", "Unknown"),
+                    "business_name": lead.get("business_name", "Unknown"),
+                    "latest_activity": current_time,
+                    "last_status": lead.get("status"),
+                    "$id": lead.get("$id")
+                })
+            
+            grouped_leads[phone]["attempt_count"] += 1
+
+        # Convert to list and sort by latest activity desc
+        demo_users = list(grouped_leads.values())
+        demo_users.sort(key=lambda x: x["latest_activity"], reverse=True)
+        
+        return {
+            "total_demos": total_demos, # Total individual requests
+            "unique_users": len(demo_users),
+            "recent_leads": demo_users[:20] # Return grouped users
+        }
+    except Exception as e:
+        logger.error(f"Error fetching demo stats: {e}")
+        return {"total_demos": 0, "recent_leads": []}

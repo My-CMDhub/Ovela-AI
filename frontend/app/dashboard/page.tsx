@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { client, databases, DATABASE_ID } from "@/lib/appwrite";
 import { Query } from "appwrite";
 import KPICard from "@/components/dashboard/KPICard";
+import { DemoStats } from "@/components/dashboard/DemoStats";
 import { Calendar, Users, MessageSquare, Activity, Wifi, WifiOff, Flame, Zap } from "lucide-react";
 import { motion } from "framer-motion";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -196,6 +197,11 @@ export default function DashboardPage() {
                     icon={MessageSquare}
                 />
             </motion.div>
+
+            {/* Demo Intelligence Section */}
+            <div className="mb-8">
+                <DemoStats />
+            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 {/* Schedule Card */}
