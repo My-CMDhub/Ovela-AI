@@ -32,13 +32,12 @@ class CustomerService:
         }
         url = f"{self.endpoint}{path}"
         
-        # For queries, convert to proper JSON format
+        # For queries, convert to proper format
         if params and 'queries' in params:
-            query_list = params['queries']
-            params = {}
+            query_list = params.pop('queries') 
             for i, q in enumerate(query_list):
-                # Each query should be a JSON string
-                params[f'queries[{i}]'] = json.dumps(q) if isinstance(q, dict) else q
+                # Don't wrap strings - they're already formatted like 'equal("field", "value")'
+                params[f'queries[{i}]'] = q
         
         try:
             if method == "GET":
@@ -65,10 +64,10 @@ class CustomerService:
         Uses direct HTTP to avoid SDK query parameter issues.
         """
         try:
-            # Build queries using JSON format (like SDK does internally)
+            # FIX: Use string format, not dictionary
             queries = [
-                {"method": "equal", "attribute": "whatsapp_id", "values": [whatsapp_id]},
-                {"method": "equal", "attribute": "business_id", "values": [business_id]}
+                f'equal("whatsapp_id", "{whatsapp_id}")',
+                f'equal("business_id", "{business_id}")'
             ]
             
             params = {'queries': queries}
@@ -112,10 +111,8 @@ class CustomerService:
     def get_customer(self, whatsapp_id: str):
         """Get customer by stats (wrapper for get_or_create without creating if possible, or just query)."""
         try:
-            # Helper to just find by phone
-            queries = [
-                {"method": "equal", "attribute": "whatsapp_id", "values": [whatsapp_id]}
-            ]
+            # FIX: Use string format
+            queries = [f'equal("whatsapp_id", "{whatsapp_id}")']
             
             result = self._make_request(
                 "GET",

@@ -414,7 +414,8 @@ async def _handle_request_human_callback(tool_args: dict, whatsapp_id: str) -> s
         customer = db_service._make_request(
             "GET",
             f"/databases/ovela_db/collections/customers/documents",
-            params={"queries": [json.dumps({"method": "equal", "attribute": "phone_number", "values": [whatsapp_id]})]}
+            # FIX: Use string format directly
+            params={"queries": [f'equal("whatsapp_id", "{whatsapp_id}")']}
         )
         if customer and customer.get("documents"):
             customer_name = customer["documents"][0].get("name", "Customer")
