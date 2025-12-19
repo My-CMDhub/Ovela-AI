@@ -29,10 +29,14 @@ async def get_conversations(status: str = None, limit: int = 100):
     """
     try:
         # Build query parameters
-        params = {"limit": limit, "orderDesc": "$updatedAt"}
+        queries = []
         
         if status:
-            params["queries"] = [f'equal("status", "{status}")']
+            queries.append(f'equal("status", "{status}")')
+        
+        queries.append('orderDesc("$updatedAt")')
+        
+        params = {"limit": limit, "queries": queries}
         
         result = db_service._make_request(
             "GET",
@@ -60,7 +64,7 @@ async def get_recent_conversations(limit: int = 5):
         result = db_service._make_request(
             "GET",
             f"/databases/{db_service.db_id}/collections/conversations/documents",
-            params={"limit": limit, "orderDesc": "$updatedAt"}
+            params={"limit": limit, "queries": ['orderDesc("$updatedAt")']}
         )
         
         conversations = result.get("documents", []) if result else []
@@ -101,7 +105,7 @@ async def get_customers(limit: int = 100):
         result = db_service._make_request(
             "GET",
             f"/databases/{db_service.db_id}/collections/customers/documents",
-            params={"limit": limit, "orderDesc": "$createdAt"}
+            params={"limit": limit, "queries": ['orderDesc("$createdAt")']}
         )
         
         customers = result.get("documents", []) if result else []
@@ -702,7 +706,7 @@ async def get_demo_stats():
         leads_result = db_service._make_request(
             "GET",
             f"/databases/{db_service.db_id}/collections/demo_leads/documents",
-            params={"limit": 100, "orderDesc": "created_at"}
+            params={"limit": 100, "queries": ['orderDesc("created_at")']}
         )
         all_leads = leads_result.get("documents", []) if leads_result else []
         
