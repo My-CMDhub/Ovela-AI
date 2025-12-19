@@ -240,8 +240,6 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
 export function ThemeProvider({ children }: { children: ReactNode }) {
     const [industry, setIndustryState] = useState<Industry>("beauty");
     const [darkMode, setDarkMode] = useState(false);
@@ -256,7 +254,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         const fetchSettings = async () => {
             try {
-                const res = await fetch(`${API_URL}/api/dashboard/settings`);
+                // Use relative path to go through Next.js API proxy (adds X-API-Key header)
+                const res = await fetch("/api/dashboard/settings");
                 const data = await res.json();
                 if (data.success && data.settings?.industry) {
                     const ind = data.settings.industry as Industry;

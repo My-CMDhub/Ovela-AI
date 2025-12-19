@@ -312,17 +312,20 @@ class AppwriteService:
             return None
 
     def get_booking_requests(self, status: str = None):
-        """Get booking requests, optionally filtered by status."""
+        """
+        Get booking requests, optionally filtered by status.
+        Uses in-memory filtering for reliability across all Appwrite configurations.
+        """
         try:
             path = f"/databases/{self.db_id}/collections/booking_requests/documents"
-            params = {}
+            result = self._make_request("GET", path)
+            requests = result.get("documents", []) if result else []
             
+            # Filter in Python for reliability (avoids query encoding issues)
             if status:
-                # FIX: Send a String, not a Dict
-                params["queries"] = [f'equal("status", "{status}")']
+                requests = [r for r in requests if r.get("status") == status]
             
-            result = self._make_request("GET", path, params=params)
-            return result.get("documents", []) if result else []
+            return requests
         except Exception as e:
             logger.error(f"Error fetching booking requests: {e}")
             return []
