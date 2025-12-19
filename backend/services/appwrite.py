@@ -28,11 +28,9 @@ class AppwriteService:
         url = f"{self.endpoint}{path}"
         
         # For queries, convert to proper format
-        # Note: limit and other non-query params should stay as-is
         if params and 'queries' in params:
-            query_list = params.pop('queries')  # Remove from params
+            query_list = params.pop('queries') 
             for i, q in enumerate(query_list):
-                # Don't wrap strings - they're already formatted like 'orderDesc("field")'
                 params[f'queries[{i}]'] = q
         
         try:
@@ -56,7 +54,7 @@ class AppwriteService:
     def get_business(self, whatsapp_business_id: str):
         """Fetch business settings by WhatsApp Business ID."""
         try:
-            queries = [{"method": "equal", "attribute": "whatsapp_business_id", "values": [whatsapp_business_id]}]
+            queries = [f'equal("whatsapp_business_id", "{whatsapp_business_id}")']
             params = {'queries': queries}
             
             result = self._make_request(
@@ -75,9 +73,10 @@ class AppwriteService:
     def get_or_create_conversation(self, whatsapp_id: str, business_id: str):
         """Get existing conversation or create a new one."""
         try:
+            # FIX: Use string format for both filters
             queries = [
-                {"method": "equal", "attribute": "whatsapp_id", "values": [whatsapp_id]},
-                {"method": "equal", "attribute": "business_id", "values": [business_id]}
+                f'equal("whatsapp_id", "{whatsapp_id}")',
+                f'equal("business_id", "{business_id}")'
             ]
             params = {'queries': queries}
             
