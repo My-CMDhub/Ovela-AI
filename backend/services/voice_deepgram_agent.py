@@ -52,6 +52,10 @@ class DeepgramAgentHandler:
         self.user_speech_start_time = None
         self.ai_response_start_time = None
         
+        # Silence tracking
+        self.last_user_speech_time = None
+        self.silence_followup_sent = False
+        
         # Transcript for analytics
         self.transcript = []
         self.call_outcome = "completed"
@@ -76,7 +80,7 @@ class DeepgramAgentHandler:
                 "listen": {
                     "provider": {
                         "type": "deepgram",
-                        "model": "flux-general-en" 
+                        "model": "flux-general-en"
                     }
                 },
                 "think": {
@@ -90,7 +94,7 @@ class DeepgramAgentHandler:
                 "speak": {
                     "provider": {
                         "type": "deepgram",
-                        "model": "aura-2-thalia-en"  # Using documented Aura model
+                        "model": "aura-2-thalia-en" 
                     }
                 },
                 "greeting": f"Good day! The Lydoun Motel, this is Ovela speaking. How can I help you today?"
@@ -270,6 +274,19 @@ You don't handle:
 You're here to make their life easier and capture bookings when reception can't answer.
 
 **Remember:** You're showcasing what's possible. Be natural, be helpful, be yourself.
+
+=== NATURAL CONVERSATION ===
+Be human-like:
+- Use filler words naturally: "um", "ah", "let me see", "just a sec"
+- Show empathy: "I understand", "That makes sense", "I hear you"
+- Don't rush - brief pauses are natural
+- Mirror their energy (rushed = quick, relaxed = conversational)
+
+=== HANDLING SILENCE ===
+If the caller goes quiet after you speak, check in naturally based on context:
+- Maybe they're thinking, driving, or got distracted
+- Use your judgment: "Hello?", "Still with me?", or just wait a bit longer
+- If they don't respond after checking in, politely end: "I'll let you go. Call back anytime! [[HANGUP]]"
 
 === ENDING CALLS ===
 When the conversation is done (caller says goodbye, wrong number, or nothing else needed), say your closing then immediately output: [[HANGUP]]
@@ -453,11 +470,15 @@ Example: "Have a great day! [[HANGUP]]"
                 if "[[HANGUP]]" in content:
                     logger.info("📞 AI initiated hangup (Signal detected)")
                     await self._hangup_call()
+                    return
                 
         elif event_type == "UserStartedSpeaking":
             logger.info("🎤 User started speaking (VAD) - sending clear to Twilio")
-            # Mark when user started speaking (for latency tracking)
+            # Mark when user started speaking (for latency tracking and silence detection)
             self.user_speech_start_time = time.time()
+            self.last_user_speech_time = time.time()
+            self.silence_followup_sent = False  # Reset follow-up flag
+            
             # CRITICAL: Send clear event to Twilio to stop agent audio immediately
             clear_message = {
                 "event": "clear",
@@ -467,6 +488,8 @@ Example: "Have a great day! [[HANGUP]]"
             
         elif event_type == "AgentStartedSpeaking":
             logger.info("🔊 Agent started speaking")
+            # Check for extended silence and send follow-up if needed
+            asyncio.create_task(self._check_silence())
             
         elif event_type == "AgentAudioDone":
             logger.info("🔇 Agent finished speaking")
@@ -480,6 +503,32 @@ Example: "Have a great day! [[HANGUP]]"
             
         else:
             logger.debug(f"Deepgram event: {event_type}")
+    
+    async def _check_silence(self):
+        """Check for extended silence and follow up with user."""
+        if not self.last_user_speech_time:
+            return
+        
+        # Wait 8 seconds before checking
+        await asyncio.sleep(8)
+        
+        if not self.is_running:
+            return
+        
+        silence_duration = time.time() - self.last_user_speech_time
+        
+        # If user hasn't spoken in 8+ seconds and we haven't sent a follow-up
+        if silence_duration >= 8 and not self.silence_followup_sent:
+            logger.info(f"⏱️ Silence detected ({int(silence_duration)}s) - sending follow-up")
+            self.silence_followup_sent = True
+            # Deepgram Agent will handle this via the LLM context
+            # We can inject a system message if needed, but for now let the prompt handle it
+        
+        # If silence exceeds 20 seconds, auto-hangup
+        if silence_duration >= 20:
+            logger.info(f"⏱️ Extended silence ({int(silence_duration)}s) - auto-hanging up")
+            self.call_outcome = "timeout_silence"
+            await self._hangup_call()
     
     async def _hangup_call(self):
         """Terminates the Twilio call gracefully."""
