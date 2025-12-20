@@ -506,16 +506,19 @@ Example: "Have a great day! [[HANGUP]]"
     
     async def _check_silence(self):
         """Check for extended silence and follow up with user."""
-        if not self.last_user_speech_time:
-            return
-        
         # Wait 8 seconds before checking
         await asyncio.sleep(8)
         
         if not self.is_running:
             return
         
-        silence_duration = time.time() - self.last_user_speech_time
+        # Calculate silence from last user speech OR from call start (if user never spoke)
+        if self.last_user_speech_time:
+            silence_duration = time.time() - self.last_user_speech_time
+        elif self.call_start_time:
+            silence_duration = time.time() - self.call_start_time
+        else:
+            return
         
         # If user hasn't spoken in 8+ seconds and we haven't sent a follow-up
         if silence_duration >= 8 and not self.silence_followup_sent:
@@ -523,8 +526,8 @@ Example: "Have a great day! [[HANGUP]]"
             self.silence_followup_sent = True
             await self._inject_silence_prompt()
         
-        # If silence exceeds 20 seconds, auto-hangup
-        if silence_duration >= 20:
+        # If silence exceeds 25 seconds, auto-hangup
+        if silence_duration >= 25:
             logger.info(f"⏱️ Extended silence ({int(silence_duration)}s) - auto-hanging up")
             self.call_outcome = "timeout_silence"
             await self._hangup_call()
@@ -535,7 +538,6 @@ Example: "Have a great day! [[HANGUP]]"
             return
         
         try:
-            # V1 API uses 'content' not 'message'
             inject_message = {
                 "type": "InjectAgentMessage",
                 "content": "Hello? Are you still there?"
