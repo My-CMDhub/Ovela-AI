@@ -271,6 +271,11 @@ You're here to make their life easier and capture bookings when reception can't 
 
 **Remember:** You're showcasing what's possible. Be natural, be helpful, be yourself.
 
+=== ENDING CALLS ===
+When the conversation is done (caller says goodbye, wrong number, or nothing else needed), say your closing then immediately output: [[HANGUP]]
+
+Example: "Have a great day! [[HANGUP]]"
+
 """
 
     async def start(self):
