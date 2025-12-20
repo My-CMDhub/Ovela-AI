@@ -93,7 +93,7 @@ class DeepgramAgentHandler:
                         "model": "aura-2-thalia-en"  # Using documented Aura model
                     }
                 },
-                "greeting": f"Hey {self.user_name}! Ovela here. Thanks for checking us out. So look, I know you're busy - what's the biggest headache with handling calls right now?"
+                "greeting": f"Good day! The Lydoun Motel, this is Ovela speaking. How can I help you today?"
             }
         }
     
