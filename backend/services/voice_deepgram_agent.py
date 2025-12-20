@@ -488,11 +488,11 @@ Example: "Have a great day! [[HANGUP]]"
             
         elif event_type == "AgentStartedSpeaking":
             logger.info("🔊 Agent started speaking")
-            # Check for extended silence and send follow-up if needed
-            asyncio.create_task(self._check_silence())
             
         elif event_type == "AgentAudioDone":
             logger.info("🔇 Agent finished speaking")
+            # NOW check for silence - user should respond after AI finishes
+            asyncio.create_task(self._check_silence())
             
         elif event_type == "Error":
             logger.error(f"❌ Deepgram Agent error: {event}")
@@ -519,16 +519,31 @@ Example: "Have a great day! [[HANGUP]]"
         
         # If user hasn't spoken in 8+ seconds and we haven't sent a follow-up
         if silence_duration >= 8 and not self.silence_followup_sent:
-            logger.info(f"⏱️ Silence detected ({int(silence_duration)}s) - sending follow-up")
+            logger.info(f"⏱️ Silence detected ({int(silence_duration)}s) - prompting AI to check in")
             self.silence_followup_sent = True
-            # Deepgram Agent will handle this via the LLM context
-            # We can inject a system message if needed, but for now let the prompt handle it
+            await self._inject_silence_prompt()
         
         # If silence exceeds 20 seconds, auto-hangup
         if silence_duration >= 20:
             logger.info(f"⏱️ Extended silence ({int(silence_duration)}s) - auto-hanging up")
             self.call_outcome = "timeout_silence"
             await self._hangup_call()
+    
+    async def _inject_silence_prompt(self):
+        """Inject a system message to prompt AI to check in during silence."""
+        if not self.deepgram_ws:
+            return
+        
+        try:
+            # Send an InjectAgentMessage to trigger AI response
+            inject_message = {
+                "type": "InjectAgentMessage",
+                "message": "[SYSTEM: The caller has been silent. Check if they're still there.]"
+            }
+            await self.deepgram_ws.send(json.dumps(inject_message))
+            logger.info("📨 Sent silence check prompt to AI")
+        except Exception as e:
+            logger.warning(f"Failed to inject silence prompt: {e}")
     
     async def _hangup_call(self):
         """Terminates the Twilio call gracefully."""
