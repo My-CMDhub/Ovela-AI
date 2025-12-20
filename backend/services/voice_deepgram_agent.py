@@ -530,15 +530,15 @@ Example: "Have a great day! [[HANGUP]]"
             await self._hangup_call()
     
     async def _inject_silence_prompt(self):
-        """Inject a system message to prompt AI to check in during silence."""
+        """Inject a message to prompt AI to check in during silence."""
         if not self.deepgram_ws:
             return
         
         try:
-            # Send an InjectAgentMessage to trigger AI response
+            # V1 API uses 'content' not 'message'
             inject_message = {
                 "type": "InjectAgentMessage",
-                "message": "[SYSTEM: The caller has been silent. Check if they're still there.]"
+                "content": "Hello? Are you still there?"
             }
             await self.deepgram_ws.send(json.dumps(inject_message))
             logger.info("📨 Sent silence check prompt to AI")
