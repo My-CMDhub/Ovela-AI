@@ -1,0 +1,213 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import Link from "next/link";
+import { motion, AnimatePresence } from "framer-motion";
+import {
+    LayoutDashboard,
+    CalendarCheck,
+    Users,
+    Settings,
+    ChevronLeft,
+    Menu,
+    X,
+    LogOut,
+    Phone,
+} from "lucide-react";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+
+const navigation = [
+    { name: "Dashboard", href: "/motel", icon: LayoutDashboard },
+    { name: "Reservations", href: "/motel/reservations", icon: CalendarCheck },
+    { name: "Guests", href: "/motel/guests", icon: Users },
+];
+
+function MotelLayoutContent({ children }: { children: React.ReactNode }) {
+    const pathname = usePathname();
+    const router = useRouter();
+    const { user, loading } = useAuth();
+    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [collapsed, setCollapsed] = useState(false);
+
+    // Redirect to login if not authenticated
+    useEffect(() => {
+        if (!loading && !user) {
+            router.push("/login");
+        }
+    }, [user, loading, router]);
+
+    const isActive = (href: string) => {
+        if (href === "/motel") return pathname === "/motel";
+        return pathname.startsWith(href);
+    };
+
+    // Show loading state
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-[#FBF8F5] flex items-center justify-center">
+                <div className="text-gray-400">Loading...</div>
+            </div>
+        );
+    }
+
+    // Don't render if not authenticated
+    if (!user) {
+        return null;
+    }
+
+    return (
+        <div className="min-h-screen bg-[#FBF8F5]">
+            {/* Mobile sidebar overlay */}
+            <AnimatePresence>
+                {sidebarOpen && (
+                    <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+                        onClick={() => setSidebarOpen(false)}
+                    />
+                )}
+            </AnimatePresence>
+
+            {/* Sidebar */}
+            <aside
+                className={`fixed top-0 left-0 z-50 h-full bg-gradient-to-b from-[#8B2332] to-[#6B1A26] text-white transition-all duration-300 
+                    ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} 
+                    lg:translate-x-0
+                    ${collapsed ? "lg:w-20" : "lg:w-64"}`}
+            >
+                {/* Logo Area */}
+                <div className="h-20 flex items-center justify-between px-4 border-b border-white/10">
+                    {!collapsed && (
+                        <div className="flex items-center gap-3">
+                            {/* Logo placeholder */}
+                            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+                                <span className="text-lg font-bold">L</span>
+                            </div>
+                            <div>
+                                <h1 className="font-bold text-lg leading-tight">The Lydoun</h1>
+                                <p className="text-xs text-white/60">Motel</p>
+                            </div>
+                        </div>
+                    )}
+                    {collapsed && (
+                        <div className="w-full flex justify-center">
+                            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+                                <span className="text-lg font-bold">L</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Close button for mobile */}
+                    <button
+                        onClick={() => setSidebarOpen(false)}
+                        className="lg:hidden p-2 hover:bg-white/10 rounded-lg"
+                    >
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+
+                {/* Navigation */}
+                <nav className="p-4 space-y-2">
+                    {navigation.map((item) => (
+                        <Link
+                            key={item.name}
+                            href={item.href}
+                            className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200
+                                ${isActive(item.href)
+                                    ? "bg-white/20 text-white shadow-lg"
+                                    : "text-white/70 hover:bg-white/10 hover:text-white"
+                                }
+                                ${collapsed ? "justify-center" : ""}`}
+                            title={collapsed ? item.name : undefined}
+                        >
+                            <item.icon className="w-5 h-5 flex-shrink-0" />
+                            {!collapsed && <span className="font-medium">{item.name}</span>}
+                        </Link>
+                    ))}
+                </nav>
+
+                {/* Bottom Section */}
+                <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-white/10">
+                    {/* Collapse Toggle (desktop only) */}
+                    <button
+                        onClick={() => setCollapsed(!collapsed)}
+                        className="hidden lg:flex w-full items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/10 hover:text-white transition-colors mb-2"
+                    >
+                        <ChevronLeft className={`w-5 h-5 transition-transform ${collapsed ? "rotate-180" : ""}`} />
+                        {!collapsed && <span className="font-medium">Collapse</span>}
+                    </button>
+
+                    {/* Back to Selection */}
+                    <button
+                        onClick={() => router.push("/select")}
+                        className={`flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/10 hover:text-white transition-colors w-full
+                            ${collapsed ? "justify-center" : ""}`}
+                    >
+                        <LogOut className="w-5 h-5" />
+                        {!collapsed && <span className="font-medium">Switch Dashboard</span>}
+                    </button>
+
+                    {/* Powered by Ovela */}
+                    {!collapsed && (
+                        <div className="mt-4 text-center">
+                            <p className="text-xs text-white/40">Powered by</p>
+                            <p className="text-sm font-semibold text-white/60">Ovela AI</p>
+                        </div>
+                    )}
+                </div>
+            </aside>
+
+            {/* Main Content */}
+            <div className={`transition-all duration-300 ${collapsed ? "lg:ml-20" : "lg:ml-64"}`}>
+                {/* Top Header */}
+                <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 lg:px-8 sticky top-0 z-30">
+                    {/* Mobile menu button */}
+                    <button
+                        onClick={() => setSidebarOpen(true)}
+                        className="lg:hidden p-2 hover:bg-gray-100 rounded-lg"
+                    >
+                        <Menu className="w-5 h-5 text-gray-600" />
+                    </button>
+
+                    {/* Page title area */}
+                    <div className="hidden lg:block">
+                        <h2 className="text-lg font-semibold text-gray-900">
+                            {navigation.find((n) => isActive(n.href))?.name || "Dashboard"}
+                        </h2>
+                    </div>
+
+                    {/* Right side */}
+                    <div className="flex items-center gap-4">
+                        {/* Reception Phone */}
+                        <div className="hidden md:flex items-center gap-2 text-sm text-gray-600">
+                            <Phone className="w-4 h-4" />
+                            <span>(03) 5726 1788</span>
+                        </div>
+
+                        {/* Status indicator */}
+                        <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-full text-sm">
+                            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                            <span className="hidden sm:inline font-medium">Voice AI Active</span>
+                        </div>
+                    </div>
+                </header>
+
+                {/* Page Content */}
+                <main className="p-4 lg:p-8">
+                    {children}
+                </main>
+            </div>
+        </div>
+    );
+}
+
+export default function MotelLayout({ children }: { children: React.ReactNode }) {
+    return (
+        <AuthProvider>
+            <MotelLayoutContent>{children}</MotelLayoutContent>
+        </AuthProvider>
+    );
+}

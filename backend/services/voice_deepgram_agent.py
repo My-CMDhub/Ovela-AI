@@ -13,6 +13,8 @@ import logging
 import asyncio
 import base64
 import time
+import random
+import re
 import websockets
 from twilio.rest import Client
 from fastapi import WebSocket
@@ -23,6 +25,66 @@ logger = logging.getLogger(__name__)
 
 # Deepgram Voice Agent API endpoint
 DEEPGRAM_AGENT_URL = "wss://agent.deepgram.com/v1/agent/converse"
+
+# Dynamic Australian-tone greetings for natural variety
+GREETINGS_POOL = [
+    "G'day! Lydoun Motel, Ovela speaking. How can I help you today?",
+    "Good day! The Lydoun Motel, this is Ovela. What can I do for you?",
+    "Hello there! You've reached The Lydoun Motel. I'm Ovela, how can I help?",
+    "Ovela is here, speaking from Lydoun Motel. How can I assist you?",
+    "Hi there! This is Ovela at The Lydoun Motel. What can I help you with?",
+]
+
+# Varied silence check-in prompts for natural feel
+SILENCE_PROMPTS = [
+    "Hello? Still there?",
+    "Can you hear me alright?",
+    "Take your time, I'm here when you're ready.",
+    "No rush, just checking you're still on the line.",
+    "Hello? Are you still with me?",
+]
+
+# Fast, warm farewell styles
+FAREWELL_STYLES = [
+    "No worries, have a great one! feel free to reach out us when needed",
+    "Cheers, take care! feel free to call use whenever needed. Have a greate day",
+    "All good, thanks for calling!",
+    "Beauty, catch you later! Thanks for calling",
+    "Thanks for calling, have a lovely day! Bye",
+]
+
+# Silence detection thresholds (in seconds) - ONLY counts when user is NOT speaking
+SOFT_SILENCE_THRESHOLD = 10   # First gentle check-in prompt
+HARD_SILENCE_THRESHOLD = 20   # More urgent check
+ABANDON_THRESHOLD = 25        # End call
+
+# Context patterns that indicate user might need thinking time
+THINKING_PATTERNS = [
+    "what dates", "when would", "how many", "which room",
+    "would you like", "do you need", "can you tell me",
+    "let me know", "think about", "decide",
+]
+
+# Spam detection patterns (indicative of non-genuine callers)
+SPAM_PATTERNS = [
+    # Gibberish/nonsense
+    r'^[a-z]{1,2}$',  # Single or double character responses
+    r'^(ha|he|ho|la|na|ya)+$',  # Repeated syllables
+    r'^[\W\d]+$',  # Only numbers/symbols
+]
+
+# Soft warning prompts for potential spam/confusion
+SOFT_WARNINGS = [
+    "I notice you might be having trouble. Is there something specific I can help with about the motel?",
+    "If you need a moment, no problem. I'm here to help with room enquiries and bookings.",
+    "Just checking - were you after information about The Lydoun Motel?",
+    "I'm here to help with motel enquiries. What dates were you thinking of staying?",
+]
+
+# Spam thresholds
+MAX_VIOLATIONS_BEFORE_BAN = 3
+REPETITIVE_INPUT_THRESHOLD = 3  # Same input 3 times = suspicious
+MIN_SUBSTANTIVE_LENGTH = 3  # Responses shorter than this are tracked
 
 
 class DeepgramAgentHandler:
@@ -52,9 +114,19 @@ class DeepgramAgentHandler:
         self.user_speech_start_time = None
         self.ai_response_start_time = None
         
-        # Silence tracking
+        # Silence tracking (enhanced with real-time speech detection)
         self.last_user_speech_time = None
         self.silence_followup_sent = False
+        self.silence_followup_count = 0  # Track how many follow-ups sent
+        self.silence_check_start_time = None  # When AI finished speaking (silence timer starts)
+        self.last_ai_message = ""  # Track for context-aware silence
+        self.ai_asked_question = False  # If AI asked something requiring thought
+        
+        # Spam/abuse prevention
+        self.violation_count = 0
+        self.warnings_sent = 0
+        self.last_inputs = []  # Track last 5 user inputs for pattern detection
+        self.short_response_count = 0  # Track non-substantive responses
         
         # Transcript for analytics
         self.transcript = []
@@ -89,7 +161,8 @@ class DeepgramAgentHandler:
                         "model": "gpt-4o-mini",
                         "temperature": 0.85
                     },
-                    "prompt": self._get_system_prompt()
+                    "prompt": self._get_system_prompt(),
+                    "functions": self._get_booking_functions()
                 },
                 "speak": {
                     "provider": {
@@ -97,9 +170,168 @@ class DeepgramAgentHandler:
                         "model": "aura-2-thalia-en" 
                     }
                 },
-                "greeting": f"Good day! The Lydoun Motel, this is Ovela speaking. How can I help you today?"
+                "greeting": random.choice(GREETINGS_POOL)
             }
         }
+    
+    def _get_booking_functions(self) -> list:
+        """Define function calling tools for motel booking."""
+        return [
+            {
+                "name": "check_availability",
+                "description": "Check room availability for specific dates at The Lydoun Motel. Call this when a guest asks about availability.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "check_in_date": {
+                            "type": "string",
+                            "description": "Check-in date in YYYY-MM-DD format"
+                        },
+                        "check_out_date": {
+                            "type": "string",
+                            "description": "Check-out date in YYYY-MM-DD format (optional, defaults to next day)"
+                        },
+                        "room_type": {
+                            "type": "string",
+                            "description": "Preferred room type: queen, twin, family, or accessible",
+                            "enum": ["queen", "twin", "family", "accessible"]
+                        }
+                    },
+                    "required": ["check_in_date"]
+                }
+            },
+            {
+                "name": "create_booking",
+                "description": "Create a reservation for a guest. Only call this after confirming availability and getting guest details.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "guest_name": {
+                            "type": "string",
+                            "description": "Full name of the guest"
+                        },
+                        "guest_phone": {
+                            "type": "string",
+                            "description": "Contact phone number"
+                        },
+                        "check_in_date": {
+                            "type": "string",
+                            "description": "Check-in date in YYYY-MM-DD format"
+                        },
+                        "check_out_date": {
+                            "type": "string",
+                            "description": "Check-out date in YYYY-MM-DD format"
+                        },
+                        "room_type": {
+                            "type": "string",
+                            "description": "Room type: queen, twin, family, or accessible",
+                            "enum": ["queen", "twin", "family", "accessible"]
+                        },
+                        "num_guests": {
+                            "type": "integer",
+                            "description": "Number of guests"
+                        },
+                        "notes": {
+                            "type": "string",
+                            "description": "Special requests or notes"
+                        }
+                    },
+                    "required": ["guest_name", "check_in_date", "room_type"]
+                }
+            },
+            # === KNOWLEDGE BASE SEARCH FUNCTIONS ===
+            # These allow on-demand lookup of detailed info instead of bloating the prompt
+            {
+                "name": "get_room_details",
+                "description": "Get detailed information about a specific room type including all facilities. Use when guest asks specifically what's included in a room.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "room_type": {
+                            "type": "string",
+                            "description": "Room type: queen, twin, family, or accessible",
+                            "enum": ["queen", "twin", "family", "accessible"]
+                        }
+                    },
+                    "required": ["room_type"]
+                }
+            },
+            {
+                "name": "recommend_room",
+                "description": "Get a room recommendation based on number of guests and accessibility needs. Use when guest isn't sure which room to choose.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "num_guests": {
+                            "type": "integer",
+                            "description": "Number of guests staying"
+                        },
+                        "needs_accessibility": {
+                            "type": "boolean",
+                            "description": "Whether accessible features are needed"
+                        }
+                    },
+                    "required": ["num_guests"]
+                }
+            },
+            {
+                "name": "get_check_in_out_info",
+                "description": "Get check-in and check-out times and policies. Use when guest asks about arrival/departure times or late check-in.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "get_location_info",
+                "description": "Get location, distances, and directions info. Use when guest asks how to get here or how far from cities/attractions.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "detail": {
+                            "type": "string",
+                            "description": "What info needed: 'distances' for how far things are, 'travel' for transport options",
+                            "enum": ["distances", "travel"]
+                        }
+                    }
+                }
+            },
+            {
+                "name": "get_amenities",
+                "description": "Get motel amenities and facilities info. Use when guest asks about pool, parking, wifi, laundry, BBQ etc.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "description": "Optional filter: parking, pool, wifi, laundry, bbq, etc."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "get_activities_nearby",
+                "description": "Get nearby activities and attractions. Use when guest asks what there is to do in the area.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "search_motel_info",
+                "description": "General search for any motel information. Use as fallback for specific questions about pets, smoking, breakfast, etc.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search term like 'pets', 'smoking', 'breakfast', 'cot', etc."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        ]
     
     def _get_system_prompt(self) -> str:
         """System prompt for the AI agent."""
@@ -174,17 +406,25 @@ You handle:
 **For Booking Enquiries:**
 1. Ask their dates: "What dates are you looking at?"
 2. Ask party size: "How many guests?"
-3. Recommend appropriate room type based on party size:
+3. **Use check_availability function** to verify room availability
+4. Recommend appropriate room type based on party size:
    - 1-2 people → Queen Room
    - 2 people (prefer separate beds) → Twin Room
    - 3-4 people/families → Family Room
    - Mobility needs → Accessible Room
-4. Confirm pricing: "That's [room type] from $[price] per night"
-5. Direct to booking: "You can book directly on our website at thelydounchiltern.com.au, or I can take your details and have reception call you back when they're available"
+5. Confirm pricing using **get_room_pricing** if asked
+6. If they want to book: Get their name, then **use create_booking function**
+7. Confirm: "I've made a provisional booking. Reception will confirm shortly."
 
 **For Availability Checks:**
-- "Let me check that for you... [pause] Yes, we have [room type] available for those dates"
-- If you genuinely don't have access to live availability: "I don't have live availability in front of me, but reception can confirm that for you. They're available from 7:30am to 9pm, or you can check availability on our website"
+- **USE the check_availability function** - you have live access to our booking system
+- Tell them the result naturally: "Yes, we have [room type] available for those dates at $[price] per night"
+- If unavailable, suggest alternatives from the function response
+
+**For Booking Requests:**
+- **USE the create_booking function** after confirming their name and dates
+- You need: guest name, check-in date, room type
+- The system will create a provisional booking for reception to confirm
 
 **For Check-in/Check-out:**
 - Check-in: "Check-in is from 2pm onwards"
@@ -289,9 +529,16 @@ If the caller goes quiet after you speak, check in naturally based on context:
 - If they don't respond after checking in, politely end: "I'll let you go. Call back anytime! [[HANGUP]]"
 
 === ENDING CALLS ===
-When the conversation is done (caller says goodbye, wrong number, or nothing else needed), say your closing then immediately output: [[HANGUP]]
+When the conversation is done (caller says goodbye, wrong number, or nothing else needed), use a quick, warm Australian-style closing then immediately output: [[HANGUP]]
 
-Example: "Have a great day! [[HANGUP]]"
+Keep it snappy - country hospitality, not formal corporate:
+- "No worries, have a great one! feel free to reach out us when needed" [[HANGUP]],
+- "Cheers, take care! feel free to call use whenever needed. Have a greate day" [[HANGUP]],
+- "All good, thanks for calling!" [[HANGUP]],
+- "Beauty, catch you later! Thanks for calling" [[HANGUP]],
+- "Thanks for calling, have a lovely day! Bye" [[HANGUP]],
+
+Don't drag out the goodbye - friendly but efficient, like a busy front desk.
 
 """
 
@@ -452,6 +699,12 @@ Example: "Have a great day! [[HANGUP]]"
                 # Mark when we received user transcript (LLM will start now)
                 self.ai_response_start_time = time.time()
                 
+                # Check for spam/abuse behavior
+                if self._check_spam_behavior(content):
+                    await self._handle_spam_warning()
+                    if not self.is_running:  # Call was terminated
+                        return
+                
             elif role == "assistant":
                 # Calculate total response latency (LLM + TTS)
                 if self.ai_response_start_time:
@@ -466,6 +719,17 @@ Example: "Have a great day! [[HANGUP]]"
                     "timestamp": time.strftime("%H:%M:%S")
                 })
                 
+                # Track AI message for context-aware silence detection
+                self.last_ai_message = content.lower()
+                # Check if AI asked a question requiring thought
+                self.ai_asked_question = any(
+                    pattern in self.last_ai_message 
+                    for pattern in THINKING_PATTERNS
+                ) or content.strip().endswith("?")
+                
+                if self.ai_asked_question:
+                    logger.debug(f"AI asked question - extending silence tolerance")
+                
                 # CHECK FOR HANGUP SIGNAL from AI
                 if "[[HANGUP]]" in content:
                     logger.info("📞 AI initiated hangup (Signal detected)")
@@ -477,7 +741,11 @@ Example: "Have a great day! [[HANGUP]]"
             # Mark when user started speaking (for latency tracking and silence detection)
             self.user_speech_start_time = time.time()
             self.last_user_speech_time = time.time()
-            self.silence_followup_sent = False  # Reset follow-up flag
+            
+            # Reset all silence tracking since user is speaking
+            self.silence_followup_sent = False
+            self.silence_followup_count = 0
+            self.ai_asked_question = False  # Reset question context
             
             # CRITICAL: Send clear event to Twilio to stop agent audio immediately
             clear_message = {
@@ -491,8 +759,24 @@ Example: "Have a great day! [[HANGUP]]"
             
         elif event_type == "AgentAudioDone":
             logger.info("🔇 Agent finished speaking")
+            # Mark when AI finished - this is when silence timer should start
+            self.silence_check_start_time = time.time()
             # NOW check for silence - user should respond after AI finishes
             asyncio.create_task(self._check_silence())
+            
+        elif event_type == "FunctionCallRequest":
+            # AI wants to call a function - execute it and respond
+            function_name = event.get("function_name", "")
+            function_args = event.get("input", {})
+            call_id = event.get("function_call_id", "")
+            
+            logger.info(f"🔧 Function call: {function_name}({function_args})")
+            
+            # Execute the function
+            result = await self._execute_function(function_name, function_args)
+            
+            # Send response back to Deepgram
+            await self._send_function_response(call_id, function_name, result)
             
         elif event_type == "Error":
             logger.error(f"❌ Deepgram Agent error: {event}")
@@ -505,45 +789,116 @@ Example: "Have a great day! [[HANGUP]]"
             logger.debug(f"Deepgram event: {event_type}")
     
     async def _check_silence(self):
-        """Check for extended silence and follow up with user."""
-        # Wait 8 seconds before checking
-        await asyncio.sleep(8)
+        """
+        Check for extended silence with soft/hard thresholds.
+        
+        CRITICAL: Only triggers if user has NOT spoken since AI finished.
+        This prevents false triggers when user is actively speaking.
+        """
+        # Store when this check was initiated
+        check_start = getattr(self, 'silence_check_start_time', time.time())
+        
+        # Wait for the soft threshold duration
+        await asyncio.sleep(SOFT_SILENCE_THRESHOLD)
         
         if not self.is_running:
             return
         
-        # Calculate silence from last user speech OR from call start (if user never spoke)
-        if self.last_user_speech_time:
-            silence_duration = time.time() - self.last_user_speech_time
-        elif self.call_start_time:
-            silence_duration = time.time() - self.call_start_time
-        else:
+        # CRITICAL CHECK: Has the user spoken since we started this silence check?
+        # If user spoke after AI finished, their speech time will be > check_start
+        if self.last_user_speech_time and self.last_user_speech_time > check_start:
+            logger.debug(f"⏹️ Silence check aborted - user spoke during wait")
             return
         
-        # If user hasn't spoken in 8+ seconds and we haven't sent a follow-up
-        if silence_duration >= 8 and not self.silence_followup_sent:
-            logger.info(f"⏱️ Silence detected ({int(silence_duration)}s) - prompting AI to check in")
-            self.silence_followup_sent = True
-            await self._inject_silence_prompt()
+        # User hasn't spoken since AI finished - this is true silence
+        silence_duration = time.time() - check_start
         
-        # If silence exceeds 25 seconds, auto-hangup
-        if silence_duration >= 25:
+        # First follow-up (10s of actual silence)
+        if silence_duration >= SOFT_SILENCE_THRESHOLD and self.silence_followup_count == 0:
+            logger.info(f"⏱️ Soft silence ({int(silence_duration)}s) - gentle check-in")
+            self.silence_followup_count = 1
+            await self._inject_silence_prompt()
+            # Schedule another check for the hard threshold
+            asyncio.create_task(self._check_hard_silence(check_start))
+            return
+    
+    async def _check_hard_silence(self, original_check_start: float):
+        """
+        Check for hard silence threshold (second follow-up).
+        Called after soft silence prompt was sent.
+        """
+        # Wait additional time to reach hard threshold
+        additional_wait = HARD_SILENCE_THRESHOLD - SOFT_SILENCE_THRESHOLD
+        await asyncio.sleep(additional_wait)
+        
+        if not self.is_running:
+            return
+        
+        # Check if user has spoken since our original check started
+        if self.last_user_speech_time and self.last_user_speech_time > original_check_start:
+            logger.debug(f"⏹️ Hard silence check aborted - user spoke")
+            return
+        
+        silence_duration = time.time() - original_check_start
+        
+        # Second follow-up (20s of actual silence)
+        if silence_duration >= HARD_SILENCE_THRESHOLD and self.silence_followup_count == 1:
+            logger.info(f"⏱️ Hard silence ({int(silence_duration)}s) - urgent check-in")
+            self.silence_followup_count = 2
+            await self._inject_silence_prompt(urgent=True)
+            # Schedule abandon check
+            asyncio.create_task(self._check_abandon_silence(original_check_start))
+            return
+    
+    async def _check_abandon_silence(self, original_check_start: float):
+        """
+        Check for abandon threshold - end call if still silent.
+        """
+        # Wait additional time to reach abandon threshold
+        additional_wait = ABANDON_THRESHOLD - HARD_SILENCE_THRESHOLD
+        await asyncio.sleep(additional_wait)
+        
+        if not self.is_running:
+            return
+        
+        # Final check - has user spoken?
+        if self.last_user_speech_time and self.last_user_speech_time > original_check_start:
+            logger.debug(f"⏹️ Abandon check aborted - user spoke")
+            return
+        
+        silence_duration = time.time() - original_check_start
+        
+        # Abandon threshold reached (25s+ of actual silence)
+        if silence_duration >= ABANDON_THRESHOLD:
             logger.info(f"⏱️ Extended silence ({int(silence_duration)}s) - auto-hanging up")
             self.call_outcome = "timeout_silence"
             await self._hangup_call()
     
-    async def _inject_silence_prompt(self):
+    async def _inject_silence_prompt(self, urgent: bool = False):
         """Inject a message to prompt AI to check in during silence."""
         if not self.deepgram_ws:
             return
         
         try:
+            if urgent:
+                # More direct prompt for hard silence
+                prompt = random.choice([
+                    "Hello? I'm still here if you need anything.",
+                    "Just checking - are you still on the line?",
+                    "I'll need to let you go if you're no longer there.",
+                ])
+                log_type = "urgent"
+            else:
+                # Gentle prompts for soft silence
+                prompt = random.choice(SILENCE_PROMPTS)
+                log_type = "gentle"
+                
             inject_message = {
                 "type": "InjectAgentMessage",
-                "content": "Hello? Are you still there?"
+                "content": prompt
             }
             await self.deepgram_ws.send(json.dumps(inject_message))
-            logger.info("📨 Sent silence check prompt to AI")
+            logger.info(f"📨 Sent {log_type} silence prompt: '{prompt}'")
         except Exception as e:
             logger.warning(f"Failed to inject silence prompt: {e}")
     
@@ -568,6 +923,510 @@ Example: "Have a great day! [[HANGUP]]"
             
         except Exception as e:
             logger.error(f"Failed to hangup call: {e}")
+    
+    def _check_spam_behavior(self, user_input: str) -> bool:
+        """
+        Analyze user input for spam/abuse patterns.
+        Returns True if spam detected, False otherwise.
+        """
+        normalized = user_input.lower().strip()
+        
+        # Check against regex spam patterns
+        for pattern in SPAM_PATTERNS:
+            if re.match(pattern, normalized):
+                logger.info(f"⚠️ Spam pattern detected: '{normalized}'")
+                return True
+        
+        # Track input history (keep last 5)
+        self.last_inputs.append(normalized)
+        if len(self.last_inputs) > 5:
+            self.last_inputs.pop(0)
+        
+        # Check for repetitive inputs
+        if len(self.last_inputs) >= REPETITIVE_INPUT_THRESHOLD:
+            last_n = self.last_inputs[-REPETITIVE_INPUT_THRESHOLD:]
+            if len(set(last_n)) == 1:  # All same input
+                logger.info(f"⚠️ Repetitive input detected: '{normalized}' x{REPETITIVE_INPUT_THRESHOLD}")
+                return True
+        
+        # Track short/non-substantive responses
+        if len(normalized) < MIN_SUBSTANTIVE_LENGTH:
+            self.short_response_count += 1
+            if self.short_response_count >= 5:  # 5 non-substantive responses
+                logger.info(f"⚠️ Too many non-substantive responses")
+                return True
+        else:
+            # Reset counter on substantive response
+            self.short_response_count = max(0, self.short_response_count - 1)
+        
+        return False
+    
+    async def _handle_spam_warning(self):
+        """Send soft warning or terminate call if spam thresholds exceeded."""
+        self.violation_count += 1
+        
+        if self.violation_count >= MAX_VIOLATIONS_BEFORE_BAN:
+            # Too many violations - end call politely
+            logger.info(f"🚫 Max violations reached ({self.violation_count}) - terminating call")
+            self.call_outcome = "spam_terminated"
+            
+            try:
+                farewell_msg = {
+                    "type": "InjectAgentMessage",
+                    "content": "I'm going to let you go. If you need to book a room, please call back when you're ready. Take care!"
+                }
+                await self.deepgram_ws.send(json.dumps(farewell_msg))
+                # Give TTS time to speak before hanging up
+                await asyncio.sleep(3)
+            except Exception as e:
+                logger.warning(f"Failed to send spam farewell: {e}")
+            
+            await self._hangup_call()
+            return
+        
+        # Send soft warning (if not already sent too many)
+        if self.warnings_sent < 2:
+            self.warnings_sent += 1
+            try:
+                warning = random.choice(SOFT_WARNINGS)
+                inject_message = {
+                    "type": "InjectAgentMessage",
+                    "content": warning
+                }
+                await self.deepgram_ws.send(json.dumps(inject_message))
+                logger.info(f"📨 Sent soft warning ({self.warnings_sent}): '{warning}'")
+            except Exception as e:
+                logger.warning(f"Failed to inject spam warning: {e}")
+    
+    async def _execute_function(self, function_name: str, args: dict) -> dict:
+        """Execute a booking function and return the result."""
+        try:
+            if function_name == "check_availability":
+                return await self._fn_check_availability(args)
+            elif function_name == "create_booking":
+                return await self._fn_create_booking(args)
+            elif function_name == "get_room_pricing":
+                return await self._fn_get_room_pricing(args)
+            # === KNOWLEDGE BASE SEARCH FUNCTIONS ===
+            elif function_name == "get_room_details":
+                return await self._fn_get_room_details(args)
+            elif function_name == "recommend_room":
+                return await self._fn_recommend_room(args)
+            elif function_name == "get_check_in_out_info":
+                return await self._fn_get_check_in_out_info(args)
+            elif function_name == "get_location_info":
+                return await self._fn_get_location_info(args)
+            elif function_name == "get_amenities":
+                return await self._fn_get_amenities(args)
+            elif function_name == "get_activities_nearby":
+                return await self._fn_get_activities_nearby(args)
+            elif function_name == "search_motel_info":
+                return await self._fn_search_motel_info(args)
+            else:
+                return {"error": f"Unknown function: {function_name}"}
+        except Exception as e:
+            logger.error(f"Function execution error: {e}")
+            return {"error": str(e)}
+    
+    async def _send_function_response(self, call_id: str, function_name: str, result: dict):
+        """Send function result back to Deepgram."""
+        if not self.deepgram_ws:
+            return
+        
+        try:
+            response = {
+                "type": "FunctionCallResponse",
+                "function_call_id": call_id,
+                "output": json.dumps(result)
+            }
+            await self.deepgram_ws.send(json.dumps(response))
+            logger.info(f"📤 Sent function response for {function_name}")
+        except Exception as e:
+            logger.error(f"Failed to send function response: {e}")
+    
+    async def _fn_check_availability(self, args: dict) -> dict:
+        """Check room availability for given dates against actual bookings."""
+        check_in = args.get("check_in_date", "")
+        check_out = args.get("check_out_date", "")
+        room_type = args.get("room_type", "queen")
+        
+        if not check_in:
+            return {"available": False, "message": "Please provide check-in date"}
+        
+        # Room pricing and capacity
+        room_info = {
+            "queen": {"price": 130, "total_rooms": 6, "name": "Queen Room"},
+            "twin": {"price": 140, "total_rooms": 4, "name": "Twin Room"},
+            "family": {"price": 160, "total_rooms": 3, "name": "Family Room"},
+            "accessible": {"price": 130, "total_rooms": 2, "name": "Accessible Room"}
+        }
+        
+        try:
+            from datetime import datetime
+            check_in_dt = datetime.strptime(check_in, "%Y-%m-%d")
+            
+            # Check if date is in the past
+            if check_in_dt.date() < datetime.now().date():
+                return {
+                    "available": False,
+                    "message": "That date has already passed. What dates were you looking at?"
+                }
+            
+            # Query database for existing bookings on this date
+            try:
+                existing_bookings = db_service.get_bookings(date=check_in)
+                
+                # Count bookings by room type
+                booked_rooms = {}
+                for booking in existing_bookings:
+                    rtype = booking.get("room_type", "queen")
+                    booked_rooms[rtype] = booked_rooms.get(rtype, 0) + 1
+                
+                # Check if requested room type is available
+                room = room_info.get(room_type, room_info["queen"])
+                rooms_booked = booked_rooms.get(room_type, 0)
+                rooms_available = room["total_rooms"] - rooms_booked
+                
+                if rooms_available > 0:
+                    return {
+                        "available": True,
+                        "room_type": room_type,
+                        "rooms_remaining": rooms_available,
+                        "price_per_night": room["price"],
+                        "check_in_date": check_in,
+                        "message": f"Yes, we have {room['name']}s available for {check_in} at ${room['price']} per night."
+                    }
+                else:
+                    # Suggest alternatives
+                    alternatives = []
+                    for rtype, info in room_info.items():
+                        if rtype != room_type and booked_rooms.get(rtype, 0) < info["total_rooms"]:
+                            alternatives.append(f"{info['name']} (${info['price']})")
+                    
+                    alt_msg = f" We do have: {', '.join(alternatives[:2])}." if alternatives else ""
+                    return {
+                        "available": False,
+                        "room_type": room_type,
+                        "message": f"Sorry, {room['name']}s are fully booked for {check_in}.{alt_msg}"
+                    }
+                    
+            except Exception as db_err:
+                logger.warning(f"Database query failed, using fallback: {db_err}")
+                # Fallback: assume available if db fails
+                room = room_info.get(room_type, room_info["queen"])
+                return {
+                    "available": True,
+                    "room_type": room_type,
+                    "price_per_night": room["price"],
+                    "check_in_date": check_in,
+                    "message": f"Yes, we should have {room['name']}s available for ${room['price']} per night. I'll confirm when we make the booking."
+                }
+                
+        except ValueError:
+            return {
+                "available": False,
+                "message": "I didn't catch the date properly. Could you repeat that?"
+            }
+    
+    async def _fn_create_booking(self, args: dict) -> dict:
+        """Create a motel room reservation and save to database."""
+        guest_name = args.get("guest_name", "")
+        check_in = args.get("check_in_date", "")
+        check_out = args.get("check_out_date", "")
+        room_type = args.get("room_type", "queen")
+        num_guests = args.get("num_guests", 1)
+        guest_phone = args.get("guest_phone", self.user_phone)
+        notes = args.get("notes", "")
+        
+        if not guest_name or not check_in:
+            return {
+                "success": False,
+                "message": "I need your name and check-in date to make a booking."
+            }
+        
+            # If no checkout provided, assume 1 night
+        if not check_out:
+            try:
+                from datetime import datetime, timedelta
+                check_in_dt = datetime.strptime(check_in, "%Y-%m-%d")
+                check_out = (check_in_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+                num_nights = 1
+            except:
+                check_out = check_in
+                num_nights = 1
+        else:
+            try:
+                from datetime import datetime
+                check_in_dt = datetime.strptime(check_in, "%Y-%m-%d")
+                check_out_dt = datetime.strptime(check_out, "%Y-%m-%d")
+                num_nights = (check_out_dt - check_in_dt).days
+            except:
+                num_nights = 1
+        
+        # Room pricing
+        pricing = {
+            "queen": 130, "twin": 140, "family": 160, "accessible": 130
+        }
+        rate = pricing.get(room_type, 130)
+        total = rate * num_nights
+        
+        # Generate booking reference
+        booking_ref = f"LM-{int(time.time()) % 100000:05d}"
+        
+        # Create reservation data for motel_reservations collection
+        from datetime import datetime
+        now = datetime.now().isoformat()
+        
+        reservation_data = {
+            # Guest info
+            "guest_name": guest_name,
+            "guest_phone": guest_phone,
+            "guest_email": "",
+            "num_guests": num_guests,
+            
+            # Room details
+            "room_type": room_type,
+            
+            # Dates
+            "check_in_date": check_in,
+            "check_out_date": check_out,
+            "num_nights": num_nights,
+            
+            # Pricing
+            "rate_per_night": rate,
+            "total_amount": total,
+            "deposit_paid": 0,
+            
+            # Status
+            "status": "pending",
+            "source": "voice_call",
+            "booking_reference": booking_ref,
+            
+            # Notes
+            "notes": notes or f"Voice booking via Ovela AI",
+            "arrival_time": "",
+            
+            # Metadata
+            "created_at": now,
+            "updated_at": now,
+            "created_by": "ovela_ai"
+        }
+        
+        try:
+            # Try to save to motel_reservations collection
+            result = self._save_motel_reservation(reservation_data)
+            
+            if result:
+                logger.info(f"✅ Created motel reservation: {booking_ref} for {guest_name}")
+                
+                return {
+                    "success": True,
+                    "booking_reference": booking_ref,
+                    "guest_name": guest_name,
+                    "check_in_date": check_in,
+                    "check_out_date": check_out,
+                    "num_nights": num_nights,
+                    "room_type": room_type,
+                    "rate_per_night": rate,
+                    "total_amount": total,
+                    "message": f"Excellent! I've made a provisional booking. {room_type.title()} room for {guest_name}, checking in {check_in} for {num_nights} night{'s' if num_nights > 1 else ''}. That's ${total} total. Reception will confirm shortly."
+                }
+            else:
+                # Fallback - just log it
+                logger.warning(f"📋 Reservation save failed, logging: {guest_name}, {check_in}, {room_type}")
+                return {
+                    "success": True,
+                    "booking_reference": booking_ref,
+                    "message": f"I've noted your booking. {room_type.title()} room for {guest_name}, checking in {check_in}. Reception will call you back to confirm."
+                }
+                
+        except Exception as e:
+            logger.error(f"Reservation creation error: {e}")
+            return {
+                "success": False,
+                "message": "I had trouble with the booking system. Let me take your details and reception will call you back."
+            }
+    
+    def _save_motel_reservation(self, data: dict) -> dict:
+        """Save reservation to motel_reservations collection."""
+        try:
+            from appwrite.id import ID
+            import requests
+            
+            doc_id = ID.unique()
+            
+            headers = {
+                "Content-Type": "application/json",
+                "X-Appwrite-Project": settings.APPWRITE_PROJECT_ID,
+                "X-Appwrite-Key": settings.APPWRITE_API_KEY
+            }
+            
+            # Motel-specific database ID (separate from the WhatsApp salon database)
+            MOTEL_DB_ID = "6947b8300005f5863f96"
+            
+            url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
+            payload = {
+                "documentId": doc_id,
+                "data": data
+            }
+            
+            response = requests.post(url, headers=headers, json=payload)
+            
+            if response.status_code in [200, 201]:
+                return response.json()
+            else:
+                logger.warning(f"Reservation save failed: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error saving reservation: {e}")
+            return None
+    
+    async def _fn_get_room_pricing(self, args: dict) -> dict:
+        """Get room pricing information."""
+        room_type = args.get("room_type", "all")
+        
+        pricing = {
+            "queen": {"name": "Queen Room", "price": 130, "description": "Queen bed, suits 1-2 guests"},
+            "twin": {"name": "Twin Room", "price": 140, "description": "Queen + single bed, suits 2-3 guests"},
+            "family": {"name": "Family Room", "price": 160, "description": "Queen + 2 singles, suits up to 4 guests"},
+            "accessible": {"name": "Accessible Room", "price": 130, "description": "Reduced mobility friendly, ground level"}
+        }
+        
+        if room_type == "all" or room_type not in pricing:
+            return {
+                "pricing": pricing,
+                "message": "Queen rooms start at $130, Twin at $140, Family at $160, and Accessible at $130 per night."
+            }
+        else:
+            room = pricing[room_type]
+            return {
+                "room_type": room_type,
+                "name": room["name"],
+                "price_per_night": room["price"],
+                "description": room["description"],
+                "message": f"The {room['name']} is ${room['price']} per night. {room['description']}."
+            }
+    
+    # =========================================================================
+    # KNOWLEDGE BASE SEARCH FUNCTION HANDLERS
+    # =========================================================================
+    
+    async def _fn_get_room_details(self, args: dict) -> dict:
+        """Get detailed room information including all facilities."""
+        from services.motel_knowledge_base import get_room_details
+        room_type = args.get("room_type", "queen")
+        result = get_room_details(room_type)
+        
+        if "error" in result:
+            return result
+        
+        # Create friendly message
+        facilities_list = ", ".join(result["facilities"][:5])
+        return {
+            **result,
+            "message": f"The {result['name']} is {result['price_from']}, fits up to {result['max_guests']} guests with {result['bedding']}. Includes {facilities_list} and more."
+        }
+    
+    async def _fn_recommend_room(self, args: dict) -> dict:
+        """Recommend a room based on guest count and needs."""
+        from services.motel_knowledge_base import recommend_room
+        num_guests = args.get("num_guests", 2)
+        needs_accessibility = args.get("needs_accessibility", False)
+        
+        result = recommend_room(num_guests, needs_accessibility)
+        return {
+            **result,
+            "message": f"I'd recommend our {result['recommended']} at ${result['price']} per night. {result['reason']}."
+        }
+    
+    async def _fn_get_check_in_out_info(self, args: dict) -> dict:
+        """Get check-in and check-out policies."""
+        from services.motel_knowledge_base import get_check_in_out_info
+        result = get_check_in_out_info()
+        return {
+            **result,
+            "message": f"Check-in is {result['check_in']}, check-out is {result['check_out']}. Reception is open {result['reception_hours']}. Late check-in is available on request."
+        }
+    
+    async def _fn_get_location_info(self, args: dict) -> dict:
+        """Get location and distance information."""
+        from services.motel_knowledge_base import get_location_info, MOTEL_INFO
+        detail = args.get("detail")
+        result = get_location_info(detail)
+        
+        if detail == "distances":
+            distances = result["distances"]
+            return {
+                **result,
+                "message": f"We're about 3 hours from Melbourne, 30 minutes from Albury-Wodonga, and 20 minutes from Rutherglen wine region."
+            }
+        elif detail == "travel":
+            return {
+                **result,
+                "message": "You can reach us by car just off the Hume Freeway, by train to Chiltern station, or fly into Albury Airport 30 minutes away."
+            }
+        else:
+            return {
+                **result,
+                "address": MOTEL_INFO["address"],
+                "message": f"We're at {MOTEL_INFO['address']}, just off the Hume Freeway in Chiltern, North East Victoria."
+            }
+    
+    async def _fn_get_amenities(self, args: dict) -> dict:
+        """Get motel amenities information."""
+        from services.motel_knowledge_base import get_amenities
+        category = args.get("category")
+        result = get_amenities(category)
+        
+        amenities_list = ", ".join(result["amenities"][:5])
+        return {
+            **result,
+            "message": f"We offer {amenities_list}. All rooms are ground floor with parking right outside."
+        }
+    
+    async def _fn_get_activities_nearby(self, args: dict) -> dict:
+        """Get nearby activities and attractions."""
+        from services.motel_knowledge_base import get_activities_nearby
+        result = get_activities_nearby()
+        
+        activities_sample = ", ".join(result["activities"][:4])
+        areas_sample = ", ".join(result["nearby_areas"][:3])
+        return {
+            **result,
+            "message": f"There's plenty to do - {activities_sample} and more. You can easily visit {areas_sample} from here."
+        }
+    
+    async def _fn_search_motel_info(self, args: dict) -> dict:
+        """General search across motel information."""
+        from services.motel_knowledge_base import search_motel_info
+        query = args.get("query", "")
+        result = search_motel_info(query)
+        
+        # Build response message based on what was found
+        if "note" in result and "No specific info" in result.get("note", ""):
+            return {
+                **result,
+                "message": f"Let me check on that for you. For specific questions about {query}, please contact reception at (03) 5726 1788."
+            }
+        
+        # Build message from found results
+        messages = []
+        if "wifi" in result:
+            messages.append(result["wifi"])
+        if "pool" in result:
+            messages.append(result["pool"])
+        if "smoking" in result:
+            messages.append(result["smoking"])
+        if "pets" in result:
+            messages.append(result["pets"])
+        if "amenities" in result:
+            messages.append(", ".join(result["amenities"][:3]))
+        
+        return {
+            **result,
+            "message": " ".join(messages) if messages else "I found some information for you."
+        }
     
     async def _cleanup(self):
         """Clean up connections and save transcript."""
