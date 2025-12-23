@@ -102,8 +102,11 @@ async def handle_call_status(
     caller_phone = From.replace("+", "")
     
     # Determine if we should send WhatsApp message
-    should_send_whatsapp = False
+    # DISABLED: WhatsApp automation currently not needed for voice demo
+    should_send_whatsapp = False  # Set to True to re-enable
     
+    # Original logic kept for reference (currently disabled)
+    """
     if DialCallStatus:
         # When using <Dial>, check the DialCallStatus to determine if call was answered
         if DialCallStatus in ["no-answer", "busy", "failed"]:
@@ -130,6 +133,9 @@ async def handle_call_status(
         if CallStatus in ["completed", "no-answer", "busy", "failed"]:
             should_send_whatsapp = True
             logger.info(f"📱 Fallback mode - CallStatus: {CallStatus} - will send WhatsApp")
+    """
+    
+    logger.info(f"ℹ️ WhatsApp automation disabled - no message will be sent")
     
     # Send WhatsApp message if call was missed
     if should_send_whatsapp:

@@ -770,6 +770,16 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             function_args = event.get("input", {})
             call_id = event.get("function_call_id", "")
             
+            # Validate we have required fields
+            if not function_name:
+                logger.error(f"❌ FunctionCallRequest missing function_name. Full event: {event}")
+                # Don't send response if we don't have a valid function name
+                return
+            
+            if not call_id:
+                logger.error(f"❌ FunctionCallRequest missing function_call_id. Full event: {event}")
+                return
+            
             logger.info(f"🔧 Function call: {function_name}({function_args})")
             
             # Execute the function
