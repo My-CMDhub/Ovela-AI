@@ -128,6 +128,8 @@ class DeepgramAgentHandler:
         self.warnings_sent = 0
         self.last_inputs = []  # Track last 5 user inputs for pattern detection
         self.short_response_count = 0  # Track non-substantive responses
+        self.off_topic_count = 0  # Track consecutive off-topic/time-wasting exchanges
+        self.booking_completed = False  # Flag when booking is done to detect post-booking abuse
         
         # Transcript for analytics
         self.transcript = []
@@ -519,9 +521,30 @@ You don't handle:
 **Aggressive or rude caller:**
 - Stay professional: "I want to help sort this out. Let me get a manager to call you back. What's your number?"
 
+**TIME WASTING / OFF-TOPIC BEHAVIOR - CRITICAL:**
+If someone keeps asking irrelevant, repetitive, or nonsensical questions (especially after you've already helped them):
+
+Stage 1 (First few off-topic exchanges):
+- Brief, polite redirect: "Is there anything else related to your booking or our motel I can help with?"
+- Don't engage with irrelevant tangents
+
+Stage 2 (Continued off-topic, 3-5 exchanges):
+- Clear redirect: "I'm here to help with bookings and motel information. If there's nothing else I can help with today, we should wrap up."
+
+Stage 3 (Still continuing, 5+ exchanges):
+- End the call politely: "It doesn't seem like I can help further right now. If you need anything about your booking or our motel, feel free to call back anytime. Take care!" then use [[HANGUP]]
+
+Patterns to recognize as time-wasting:
+- Repeatedly asking the same question after it's been answered
+- Asking "why" chains about basic policies ("Why do you care about privacy?" "But why?" "But why that?")
+- Demanding information you've said you can't provide (other guests' details, etc.)
+- Random/nonsensical comments not related to motel business
+- Insults or threats follow by more irrelevant questions
+
 **Prank or nonsense calls:**
 - Brief response: "If you need to book a room, I'm here to help. Otherwise, I'll let you go."
-- Don't engage
+- Don't engage with jokes or off-topic chatter beyond a quick response
+- If it continues: "I need to free up the line. Call back if you need help with a booking." [[HANGUP]]
 
 **Wrong number:**
 - "No worries, you've got The Lydoun Motel in Chiltern. Need us, or did you want somewhere else?"
@@ -1328,6 +1351,7 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             
             if result:
                 logger.info(f"✅ Created motel reservation: {booking_ref} for {guest_name}")
+                self.booking_completed = True  # Flag for time-wasting detection
                 
                 return {
                     "success": True,
