@@ -376,6 +376,114 @@ def search_motel_info(query: str) -> Dict[str, Any]:
     return results
 
 
+async def lookup_booking(guest_name: str, phone: str = None, reference: str = None) -> Dict[str, Any]:
+    """
+    Look up an existing booking by guest name and optional verification.
+    
+    For DEMO: Search by guest name only (simplified)
+    For PROD: Should verify with name + phone/email + reference number
+    
+    Args:
+        guest_name: The guest's name (required)
+        phone: Guest's phone number (optional, for verification)
+        reference: Booking reference number (optional, for direct lookup)
+    
+    Returns:
+        Booking details if found, or appropriate error message
+    """
+    import httpx
+    import os
+    
+    # Get Appwrite config from environment
+    endpoint = os.getenv("APPWRITE_ENDPOINT")
+    project_id = os.getenv("APPWRITE_PROJECT_ID")
+    api_key = os.getenv("APPWRITE_API_KEY")
+    motel_db_id = "6947b8300005f5863f96"
+    
+    headers = {
+        "Content-Type": "application/json",
+        "X-Appwrite-Project": project_id,
+        "X-Appwrite-Key": api_key
+    }
+    
+    try:
+        # Fetch reservations from Appwrite
+        url = f"{endpoint}/databases/{motel_db_id}/collections/motel_reservations/documents"
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, timeout=10.0)
+            
+            if response.status_code != 200:
+                return {
+                    "found": False,
+                    "message": "I'm having trouble accessing the booking system right now. Please try again or contact reception at (03) 5726 1788."
+                }
+            
+            data = response.json()
+            documents = data.get("documents", [])
+            
+            # Search for matching booking
+            matching_bookings = []
+            search_name = guest_name.lower().strip()
+            
+            for doc in documents:
+                doc_name = (doc.get("guest_name") or "").lower().strip()
+                
+                # Check for name match (partial matching for flexibility)
+                if search_name in doc_name or doc_name in search_name:
+                    # If reference provided, must match
+                    if reference:
+                        if doc.get("booking_reference", "").upper() != reference.upper():
+                            continue
+                    
+                    # If phone provided, should help narrow down
+                    if phone:
+                        doc_phone = (doc.get("guest_phone") or "").replace(" ", "")
+                        search_phone = phone.replace(" ", "")
+                        if search_phone not in doc_phone and doc_phone not in search_phone:
+                            continue
+                    
+                    matching_bookings.append(doc)
+            
+            if not matching_bookings:
+                return {
+                    "found": False,
+                    "message": f"I couldn't find a booking under the name '{guest_name}'. Could you double-check the name you booked under? Or if you have a reference number, that would help."
+                }
+            
+            if len(matching_bookings) > 1:
+                # Multiple matches - need more info to narrow down
+                return {
+                    "found": True,
+                    "multiple": True,
+                    "count": len(matching_bookings),
+                    "message": f"I found {len(matching_bookings)} bookings under that name. Could you provide your booking reference number or phone number to find the right one?"
+                }
+            
+            # Single match - return booking details
+            booking = matching_bookings[0]
+            return {
+                "found": True,
+                "booking": {
+                    "guest_name": booking.get("guest_name"),
+                    "room_type": booking.get("room_type", "").title(),
+                    "check_in": booking.get("check_in_date"),
+                    "check_out": booking.get("check_out_date"),
+                    "num_guests": booking.get("num_guests"),
+                    "total_amount": booking.get("total_amount"),
+                    "status": booking.get("status", "pending"),
+                    "reference": booking.get("booking_reference")
+                },
+                "message": f"Found your booking! Reference: {booking.get('booking_reference')}"
+            }
+            
+    except Exception as e:
+        return {
+            "found": False,
+            "message": "I'm having trouble looking that up right now. Please contact reception at (03) 5726 1788 for booking inquiries."
+        }
+
+
 # =============================================================================
 # FUNCTION DEFINITIONS FOR DEEPGRAM VOICE AGENT
 # =============================================================================
@@ -488,6 +596,28 @@ def get_motel_search_functions() -> list:
                     }
                 },
                 "required": ["query"]
+            }
+        },
+        {
+            "name": "lookup_booking",
+            "description": "Look up an existing booking when customer wants to check their reservation. Ask for their name first, then reference or phone if needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "guest_name": {
+                        "type": "string",
+                        "description": "The guest's name as it appears on the booking"
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": "Guest's phone number for verification (optional)"
+                    },
+                    "reference": {
+                        "type": "string",
+                        "description": "Booking reference number like LYD-XXXXX (optional)"
+                    }
+                },
+                "required": ["guest_name"]
             }
         }
     ]

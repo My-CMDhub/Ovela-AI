@@ -119,6 +119,7 @@ class DeepgramAgentHandler:
         self.silence_followup_sent = False
         self.silence_followup_count = 0  # Track how many follow-ups sent
         self.silence_check_start_time = None  # When AI finished speaking (silence timer starts)
+        self.silence_check_id = 0  # Counter to invalidate old silence checks
         self.last_ai_message = ""  # Track for context-aware silence
         self.ai_asked_question = False  # If AI asked something requiring thought
         
@@ -329,6 +330,28 @@ class DeepgramAgentHandler:
                         }
                     },
                     "required": ["query"]
+                }
+            },
+            {
+                "name": "lookup_booking",
+                "description": "Look up an existing booking for a guest. Use when guest wants to check or confirm their reservation. Ask for their name first.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "guest_name": {
+                            "type": "string",
+                            "description": "The guest's name as it appears on the booking"
+                        },
+                        "phone": {
+                            "type": "string",
+                            "description": "Guest's phone number for verification (optional)"
+                        },
+                        "reference": {
+                            "type": "string",
+                            "description": "Booking reference number like LM-XXXXX (optional)"
+                        }
+                    },
+                    "required": ["guest_name"]
                 }
             }
         ]
@@ -761,8 +784,11 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             logger.info("🔇 Agent finished speaking")
             # Mark when AI finished - this is when silence timer should start
             self.silence_check_start_time = time.time()
+            # Increment check ID to invalidate any old pending checks
+            self.silence_check_id += 1
+            current_check_id = self.silence_check_id
             # NOW check for silence - user should respond after AI finishes
-            asyncio.create_task(self._check_silence())
+            asyncio.create_task(self._check_silence(current_check_id))
             
         elif event_type == "FunctionCallRequest":
             # AI wants to call a function - execute it and respond
@@ -812,12 +838,13 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
         else:
             logger.debug(f"Deepgram event: {event_type}")
     
-    async def _check_silence(self):
+    async def _check_silence(self, check_id: int):
         """
         Check for extended silence with soft/hard thresholds.
         
-        CRITICAL: Only triggers if user has NOT spoken since AI finished.
-        This prevents false triggers when user is actively speaking.
+        CRITICAL: Only triggers if user has NOT spoken since AI finished,
+        AND this check_id is still current (no new AI speech started).
+        This prevents false triggers when user is actively speaking or AI continues.
         """
         # Store when this check was initiated
         check_start = getattr(self, 'silence_check_start_time', time.time())
@@ -826,6 +853,11 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
         await asyncio.sleep(SOFT_SILENCE_THRESHOLD)
         
         if not self.is_running:
+            return
+        
+        # Check if this silence check is still valid (no new AI speech started)
+        if check_id != self.silence_check_id:
+            logger.debug(f"⏹️ Silence check #{check_id} invalidated - AI spoke again (current: #{self.silence_check_id})")
             return
         
         # CRITICAL CHECK: Has the user spoken since we started this silence check?
@@ -843,10 +875,10 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             self.silence_followup_count = 1
             await self._inject_silence_prompt()
             # Schedule another check for the hard threshold
-            asyncio.create_task(self._check_hard_silence(check_start))
+            asyncio.create_task(self._check_hard_silence(check_start, check_id))
             return
     
-    async def _check_hard_silence(self, original_check_start: float):
+    async def _check_hard_silence(self, original_check_start: float, check_id: int):
         """
         Check for hard silence threshold (second follow-up).
         Called after soft silence prompt was sent.
@@ -856,6 +888,11 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
         await asyncio.sleep(additional_wait)
         
         if not self.is_running:
+            return
+        
+        # Check if this silence check is still valid
+        if check_id != self.silence_check_id:
+            logger.debug(f"⏹️ Hard silence check #{check_id} invalidated - AI spoke again")
             return
         
         # Check if user has spoken since our original check started
@@ -871,10 +908,10 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             self.silence_followup_count = 2
             await self._inject_silence_prompt(urgent=True)
             # Schedule abandon check
-            asyncio.create_task(self._check_abandon_silence(original_check_start))
+            asyncio.create_task(self._check_abandon_silence(original_check_start, check_id))
             return
     
-    async def _check_abandon_silence(self, original_check_start: float):
+    async def _check_abandon_silence(self, original_check_start: float, check_id: int):
         """
         Check for abandon threshold - end call if still silent.
         """
@@ -883,6 +920,11 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
         await asyncio.sleep(additional_wait)
         
         if not self.is_running:
+            return
+        
+        # Check if this silence check is still valid
+        if check_id != self.silence_check_id:
+            logger.debug(f"⏹️ Abandon check #{check_id} invalidated - AI spoke again")
             return
         
         # Final check - has user spoken?
@@ -894,9 +936,11 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
         
         # Abandon threshold reached (25s+ of actual silence)
         if silence_duration >= ABANDON_THRESHOLD:
-            logger.info(f"⏱️ Extended silence ({int(silence_duration)}s) - auto-hanging up")
+            logger.info(f"⏱️ Extended silence ({int(silence_duration)}s) - saying goodbye and hanging up")
             self.call_outcome = "timeout_silence"
-            await self._hangup_call()
+            
+            # Send a polite farewell message before hanging up
+            await self._inject_farewell_and_hangup()
     
     async def _inject_silence_prompt(self, urgent: bool = False):
         """Inject a message to prompt AI to check in during silence."""
@@ -947,6 +991,41 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             
         except Exception as e:
             logger.error(f"Failed to hangup call: {e}")
+    
+    async def _inject_farewell_and_hangup(self):
+        """
+        Inject a polite farewell message before hanging up due to silence.
+        This gives a better user experience instead of an abrupt call drop.
+        """
+        if not self.deepgram_ws:
+            await self._hangup_call()
+            return
+        
+        try:
+            # Farewell message variations
+            farewell_messages = [
+                "I can't seem to hear you anymore. If you're still there, there might be a connection issue. Feel free to call back if you need help. Take care!",
+                "It seems like we've lost connection. If you need to complete your booking, please call us back anytime. Goodbye!",
+                "I haven't heard from you in a while. If you were speaking, I'm sorry I couldn't hear you. Please call back if you need assistance. Have a great day!",
+            ]
+            
+            farewell = random.choice(farewell_messages)
+            
+            inject_message = {
+                "type": "InjectAgentMessage",
+                "content": farewell
+            }
+            await self.deepgram_ws.send(json.dumps(inject_message))
+            logger.info(f"👋 Sent farewell message: '{farewell[:50]}...'")
+            
+            # Wait for the farewell to be spoken (about 4-5 seconds)
+            await asyncio.sleep(5)
+            
+        except Exception as e:
+            logger.warning(f"Failed to inject farewell message: {e}")
+        
+        # Now hang up the call
+        await self._hangup_call()
     
     def _check_spam_behavior(self, user_input: str) -> bool:
         """
@@ -1046,6 +1125,8 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
                 return await self._fn_get_activities_nearby(args)
             elif function_name == "search_motel_info":
                 return await self._fn_search_motel_info(args)
+            elif function_name == "lookup_booking":
+                return await self._fn_lookup_booking(args)
             else:
                 return {"error": f"Unknown function: {function_name}"}
         except Exception as e:
@@ -1456,6 +1537,32 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             **result,
             "message": " ".join(messages) if messages else "I found some information for you."
         }
+    
+    async def _fn_lookup_booking(self, args: dict) -> dict:
+        """Look up an existing booking by guest name."""
+        from services.motel_knowledge_base import lookup_booking
+        
+        guest_name = args.get("guest_name", "")
+        phone = args.get("phone")
+        reference = args.get("reference")
+        
+        if not guest_name:
+            return {
+                "found": False,
+                "message": "I'd need your name to look up your booking. What name was it booked under?"
+            }
+        
+        result = await lookup_booking(guest_name, phone, reference)
+        
+        # If booking found, format a nice response
+        if result.get("found") and result.get("booking"):
+            booking = result["booking"]
+            return {
+                **result,
+                "message": f"Found it! You have a {booking.get('room_type', 'room')} booked from {booking.get('check_in')} to {booking.get('check_out')} for {booking.get('num_guests')} guests. Your total is ${booking.get('total_amount')}. Reference: {booking.get('reference')}"
+            }
+        
+        return result
     
     async def _cleanup(self):
         """Clean up connections and save transcript."""
