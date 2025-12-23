@@ -766,7 +766,6 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             
         elif event_type == "FunctionCallRequest":
             # AI wants to call a function - execute it and respond
-            # Deepgram sends functions as an array, not top-level fields
             functions = event.get("functions", [])
             
             if not functions or len(functions) == 0:
@@ -1054,18 +1053,23 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             return {"error": str(e)}
     
     async def _send_function_response(self, call_id: str, function_name: str, result: dict):
-        """Send function result back to Deepgram."""
+        """Send function result back to Deepgram.
+        
+        V1 API format requires: id, name, content (not function_call_id, output)
+        """
         if not self.deepgram_ws:
             return
         
         try:
+            # V1 API format
             response = {
                 "type": "FunctionCallResponse",
-                "function_call_id": call_id,
-                "output": json.dumps(result)
+                "id": call_id,
+                "name": function_name,
+                "content": json.dumps(result)
             }
             await self.deepgram_ws.send(json.dumps(response))
-            logger.info(f"📤 Sent function response for {function_name}")
+            logger.info(f"📤 Sent function response for {function_name}: {result.get('message', str(result)[:50])}")
         except Exception as e:
             logger.error(f"Failed to send function response: {e}")
     
