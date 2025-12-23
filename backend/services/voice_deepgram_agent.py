@@ -766,18 +766,33 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             
         elif event_type == "FunctionCallRequest":
             # AI wants to call a function - execute it and respond
-            function_name = event.get("function_name", "")
-            function_args = event.get("input", {})
-            call_id = event.get("function_call_id", "")
+            # Deepgram sends functions as an array, not top-level fields
+            functions = event.get("functions", [])
+            
+            if not functions or len(functions) == 0:
+                logger.error(f"❌ FunctionCallRequest has no functions array. Full event: {event}")
+                return
+            
+            # Get first function from array
+            func_data = functions[0]
+            function_name = func_data.get("name", "")
+            call_id = func_data.get("id", "")
+            arguments_str = func_data.get("arguments", "{}")
+            
+            # Parse arguments JSON string
+            try:
+                function_args = json.loads(arguments_str) if arguments_str else {}
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ Failed to parse function arguments: {arguments_str}. Error: {e}")
+                function_args = {}
             
             # Validate we have required fields
             if not function_name:
-                logger.error(f"❌ FunctionCallRequest missing function_name. Full event: {event}")
-                # Don't send response if we don't have a valid function name
+                logger.error(f"❌ FunctionCallRequest missing function name. Full event: {event}")
                 return
             
             if not call_id:
-                logger.error(f"❌ FunctionCallRequest missing function_call_id. Full event: {event}")
+                logger.error(f"❌ FunctionCallRequest missing function id. Full event: {event}")
                 return
             
             logger.info(f"🔧 Function call: {function_name}({function_args})")
