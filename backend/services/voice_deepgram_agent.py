@@ -201,8 +201,7 @@ class DeepgramAgentHandler:
                     "provider": {
                         "type": "deepgram",
                         "model": "aura-2-thalia-en"
-                    },
-                    "speed": 1.1  # Slightly faster speech for natural conversation
+                    }
                 },
                 "greeting": random.choice(GREETINGS_POOL)
             }
