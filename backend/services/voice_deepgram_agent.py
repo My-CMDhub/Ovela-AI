@@ -58,6 +58,32 @@ SOFT_SILENCE_THRESHOLD = 10   # First gentle check-in prompt
 HARD_SILENCE_THRESHOLD = 20   # More urgent check
 ABANDON_THRESHOLD = 25        # End call
 
+# =============================================================================
+# ABUSE PROTECTION CONFIG - Easy to switch between DEMO and PRODUCTION
+# =============================================================================
+ENVIRONMENT = "demo"  # Change to "production" for prod settings
+
+# Demo settings (stricter for testing)
+DEMO_CONFIG = {
+    "context_pairs": 6,           # Conversation pairs to remember
+    "soft_warning_minutes": 5,    # Gentle "wrapping up" prompt
+    "hard_cap_minutes": 8,        # Maximum call duration
+    "off_topic_limit": 5,         # flag_off_topic calls before auto-hangup
+    "human_escalation": False,    # No human escalation in demo
+}
+
+# Production settings (more lenient, with human escalation)
+PROD_CONFIG = {
+    "context_pairs": 8,           # More context for pattern detection
+    "soft_warning_minutes": 8,    # More time for complex bookings
+    "hard_cap_minutes": 12,       # Higher limit with escalation
+    "off_topic_limit": 5,         # Same threshold
+    "human_escalation": True,     # Log for human follow-up
+}
+
+# Active config based on environment
+ABUSE_CONFIG = DEMO_CONFIG if ENVIRONMENT == "demo" else PROD_CONFIG
+
 # Context patterns that indicate user might need thinking time
 THINKING_PATTERNS = [
     "what dates", "when would", "how many", "which room",
@@ -130,6 +156,10 @@ class DeepgramAgentHandler:
         self.short_response_count = 0  # Track non-substantive responses
         self.off_topic_count = 0  # Track consecutive off-topic/time-wasting exchanges
         self.booking_completed = False  # Flag when booking is done to detect post-booking abuse
+        
+        # Time cap tracking (from ABUSE_CONFIG)
+        self.time_warning_sent = False  # Soft warning at X minutes
+        self.duration_monitor_task = None  # Background task monitoring duration
         
         # Transcript for analytics
         self.transcript = []
@@ -355,6 +385,20 @@ class DeepgramAgentHandler:
                     },
                     "required": ["guest_name"]
                 }
+            },
+            {
+                "name": "flag_off_topic",
+                "description": "IMPORTANT: Call this when a caller is wasting time with off-topic behavior. Examples: flirting, personal questions about you, repeated nonsense, tangential 'why' chains, demands for info you can't provide. Call this EACH TIME they do something off-topic - the system tracks the count and will tell you how to respond.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "Brief description of why this is off-topic (e.g., 'flirting', 'personal questions', 'repeated nonsense', 'demanding other guest info')"
+                        }
+                    },
+                    "required": ["reason"]
+                }
             }
         ]
     
@@ -521,30 +565,36 @@ You don't handle:
 **Aggressive or rude caller:**
 - Stay professional: "I want to help sort this out. Let me get a manager to call you back. What's your number?"
 
-**TIME WASTING / OFF-TOPIC BEHAVIOR - CRITICAL:**
-If someone keeps asking irrelevant, repetitive, or nonsensical questions (especially after you've already helped them):
+**TIME WASTING / OFF-TOPIC BEHAVIOR - USE flag_off_topic FUNCTION:**
 
-Stage 1 (First few off-topic exchanges):
-- Brief, polite redirect: "Is there anything else related to your booking or our motel I can help with?"
-- Don't engage with irrelevant tangents
+CRITICAL: When you detect off-topic or time-wasting behavior, call the `flag_off_topic` function.
+The system tracks the count and tells you exactly how to respond. DO NOT try to count yourself.
 
-Stage 2 (Continued off-topic, 3-5 exchanges):
-- Clear redirect: "I'm here to help with bookings and motel information. If there's nothing else I can help with today, we should wrap up."
+**When to call flag_off_topic:**
+- Flirting or personal comments ("You're beautiful", "Let's go to dinner")
+- Questions about YOU as a person (not the motel)
+- Repeated "why" chains that go nowhere
+- Demanding info you've already said you can't provide
+- Nonsense or gibberish not related to motel business
+- Insults, threats, or harassment followed by more off-topic comments
 
-Stage 3 (Still continuing, 5+ exchanges):
-- End the call politely: "It doesn't seem like I can help further right now. If you need anything about your booking or our motel, feel free to call back anytime. Take care!" then use [[HANGUP]]
+**How it works:**
+1. You detect off-topic behavior → call flag_off_topic(reason="flirting")
+2. System returns instruction → follow it exactly
+3. If limit reached → system auto-ends call with polite farewell
 
-Patterns to recognize as time-wasting:
-- Repeatedly asking the same question after it's been answered
-- Asking "why" chains about basic policies ("Why do you care about privacy?" "But why?" "But why that?")
-- Demanding information you've said you can't provide (other guests' details, etc.)
-- Random/nonsensical comments not related to motel business
-- Insults or threats follow by more irrelevant questions
+**Examples:**
+- User says "You're so charming" → flag_off_topic(reason="flirting")
+- User says "I want to take you to dinner" → flag_off_topic(reason="personal")
+- User repeats "But why? But why?" → flag_off_topic(reason="why chain")
+- User says gibberish → flag_off_topic(reason="nonsense")
+
+The system handles the counting and will automatically end calls when threshold is reached.
+You just need to recognize off-topic behavior and call the function.
 
 **Prank or nonsense calls:**
-- Brief response: "If you need to book a room, I'm here to help. Otherwise, I'll let you go."
-- Don't engage with jokes or off-topic chatter beyond a quick response
-- If it continues: "I need to free up the line. Call back if you need help with a booking." [[HANGUP]]
+- Call flag_off_topic immediately with reason="prank"
+- Follow the system's response instructions
 
 **Wrong number:**
 - "No worries, you've got The Lydoun Motel in Chiltern. Need us, or did you want somewhere else?"
@@ -651,6 +701,9 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             
             # Start task to receive from Deepgram
             asyncio.create_task(self._receive_from_deepgram())
+            
+            # Start duration monitor for time caps
+            self.duration_monitor_task = asyncio.create_task(self._monitor_call_duration())
             
         except Exception as e:
             logger.error(f"Failed to connect to Deepgram Agent: {e}")
@@ -965,6 +1018,75 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             # Send a polite farewell message before hanging up
             await self._inject_farewell_and_hangup()
     
+    async def _monitor_call_duration(self):
+        """
+        Background task that monitors call duration and enforces time caps.
+        
+        From ABUSE_CONFIG:
+        - soft_warning_minutes: Inject gentle "wrapping up" prompt
+        - hard_cap_minutes: Force end call with polite farewell
+        """
+        soft_seconds = ABUSE_CONFIG["soft_warning_minutes"] * 60
+        hard_seconds = ABUSE_CONFIG["hard_cap_minutes"] * 60
+        
+        logger.info(f"⏱️ Duration monitor started: soft={ABUSE_CONFIG['soft_warning_minutes']}min, hard={ABUSE_CONFIG['hard_cap_minutes']}min")
+        
+        while self.is_running:
+            await asyncio.sleep(10)  # Check every 10 seconds
+            
+            if not self.is_running or not self.call_start_time:
+                break
+            
+            elapsed = time.time() - self.call_start_time
+            
+            # Soft warning check (e.g., 5 minutes for demo)
+            if elapsed >= soft_seconds and not self.time_warning_sent:
+                self.time_warning_sent = True
+                minutes = int(elapsed / 60)
+                logger.info(f"⏱️ Soft time warning at {minutes} minutes")
+                
+                warning_msg = (
+                    "Just to let you know, we've been chatting for a while. "
+                    "Is there anything else about your booking or the motel I can help wrap up quickly?"
+                )
+                
+                if self.deepgram_ws:
+                    try:
+                        inject = {
+                            "type": "InjectAgentMessage",
+                            "content": warning_msg
+                        }
+                        await self.deepgram_ws.send(json.dumps(inject))
+                        logger.info(f"📨 Sent time warning message")
+                    except Exception as e:
+                        logger.warning(f"Failed to inject time warning: {e}")
+            
+            # Hard cap check (e.g., 8 minutes for demo)
+            if elapsed >= hard_seconds:
+                minutes = int(elapsed / 60)
+                logger.info(f"🚫 Hard time cap reached at {minutes} minutes - ending call")
+                self.call_outcome = "timeout_duration"
+                
+                # Determine farewell based on environment
+                if ABUSE_CONFIG.get("human_escalation"):
+                    # Production: human escalation message
+                    farewell = (
+                        "I've really enjoyed helping you, but due to our call time guidelines, "
+                        "I need to wrap up now. Don't worry - I'm logging this conversation and "
+                        "a member of our team will reach out to help with anything we didn't finish. "
+                        "They'll pick up right where we left off. Thanks so much for calling The Lydoun Motel!"
+                    )
+                else:
+                    # Demo: simple polite farewell
+                    farewell = (
+                        "I've really enjoyed helping you today, but I need to free up the line "
+                        "for other callers. If you need anything else, feel free to call back anytime. "
+                        "Take care and have a great day!"
+                    )
+                
+                await self._hangup_with_farewell(farewell)
+                break
+    
     async def _inject_silence_prompt(self, urgent: bool = False):
         """Inject a message to prompt AI to check in during silence."""
         if not self.deepgram_ws:
@@ -1150,6 +1272,8 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
                 return await self._fn_search_motel_info(args)
             elif function_name == "lookup_booking":
                 return await self._fn_lookup_booking(args)
+            elif function_name == "flag_off_topic":
+                return await self._fn_flag_off_topic(args)
             else:
                 return {"error": f"Unknown function: {function_name}"}
         except Exception as e:
@@ -1587,6 +1711,87 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             }
         
         return result
+    
+    async def _fn_flag_off_topic(self, args: dict) -> dict:
+        """
+        Track off-topic behavior and enforce escalation.
+        Called by AI when it detects time-wasting behavior.
+        
+        Thresholds (from ABUSE_CONFIG):
+        - 1-2 flags: Gentle redirect
+        - 3-(limit-1) flags: Firm redirect  
+        - limit+ flags: Auto-hangup with polite message
+        """
+        reason = args.get("reason", "unspecified")
+        limit = ABUSE_CONFIG["off_topic_limit"]
+        
+        # Increment the counter
+        self.off_topic_count += 1
+        count = self.off_topic_count
+        
+        logger.info(f"⚠️ Off-topic flag #{count}/{limit}: {reason}")
+        
+        # Stage 1: Gentle redirect (1-2 flags)
+        if count <= 2:
+            return {
+                "count": count,
+                "limit": limit,
+                "stage": 1,
+                "action": "redirect_gently",
+                "message": "This seems off-topic. Briefly acknowledge, then ask: 'Is there anything about the motel or a booking I can help you with?'"
+            }
+        
+        # Stage 2: Firm redirect (3 to limit-1 flags)
+        elif count < limit:
+            return {
+                "count": count,
+                "limit": limit,
+                "stage": 2,
+                "action": "redirect_firmly",
+                "message": f"This is off-topic comment #{count}. Say: 'I'm really here to help with bookings and motel info. If there's nothing else I can help with, we should wrap up our call.'"
+            }
+        
+        # Stage 3: Auto-hangup (limit+ flags)
+        else:
+            logger.info(f"🚫 Off-topic limit reached ({count}/{limit} flags) - auto-hanging up")
+            self.call_outcome = "abuse_timeout"
+            
+            # Schedule the hangup with farewell
+            asyncio.create_task(self._hangup_with_farewell(
+                "I've really enjoyed chatting, but I need to free up the line for other callers. "
+                "If you ever need help with a booking at The Lydoun Motel, give us a call back anytime. Take care!"
+            ))
+            
+            return {
+                "count": count,
+                "stage": 3,
+                "action": "hangup",
+                "message": "LIMIT REACHED. The system is ending the call. Say your farewell - the call will end shortly."
+            }
+    
+    async def _hangup_with_farewell(self, farewell_message: str):
+        """Send a farewell message and then hangup after a delay."""
+        if not self.deepgram_ws:
+            await self._hangup_call()
+            return
+        
+        try:
+            # Inject the farewell message for AI to speak
+            inject = {
+                "type": "InjectAgentMessage",
+                "content": farewell_message
+            }
+            await self.deepgram_ws.send(json.dumps(inject))
+            logger.info(f"👋 Sent farewell message before hangup")
+            
+            # Wait for message to be spoken (approx 4-6 seconds)
+            await asyncio.sleep(6)
+            
+        except Exception as e:
+            logger.warning(f"Failed to send farewell: {e}")
+        
+        # Now hang up
+        await self._hangup_call()
     
     async def _cleanup(self):
         """Clean up connections and save transcript."""
