@@ -200,8 +200,9 @@ class DeepgramAgentHandler:
                 "speak": {
                     "provider": {
                         "type": "deepgram",
-                        "model": "aura-2-thalia-en" 
-                    }
+                        "model": "aura-2-thalia-en"
+                    },
+                    "speed": 1.1  # Slightly faster speech for natural conversation
                 },
                 "greeting": random.choice(GREETINGS_POOL)
             }
@@ -1784,8 +1785,8 @@ Don't drag out the goodbye - friendly but efficient, like a busy front desk.
             await self.deepgram_ws.send(json.dumps(inject))
             logger.info(f"👋 Sent farewell message before hangup")
             
-            # Wait for message to be spoken (approx 4-6 seconds)
-            await asyncio.sleep(6)
+            # Wait for message to be spoken (10s for longer farewell messages)
+            await asyncio.sleep(10)
             
         except Exception as e:
             logger.warning(f"Failed to send farewell: {e}")

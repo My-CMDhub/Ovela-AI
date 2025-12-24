@@ -1,0 +1,218 @@
+"""
+Voice Agent Function Definitions Module.
+
+Contains OpenAI-compatible function definitions for the Deepgram Voice Agent.
+These are the tools the agent can call during conversations.
+"""
+
+
+def get_booking_functions() -> list:
+    """
+    Returns list of function definitions for the agent to use.
+    
+    These follow OpenAI function calling format.
+    """
+    return [
+        {
+            "name": "check_availability",
+            "description": "Check if a room type is available for specific dates. Use when guest asks about availability.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "check_in_date": {
+                        "type": "string",
+                        "description": "Check-in date in YYYY-MM-DD format"
+                    },
+                    "check_out_date": {
+                        "type": "string",
+                        "description": "Check-out date in YYYY-MM-DD format (optional, defaults to next day)"
+                    },
+                    "room_type": {
+                        "type": "string",
+                        "enum": ["queen", "twin", "family", "accessible"],
+                        "description": "Room type to check availability for"
+                    }
+                },
+                "required": ["check_in_date"]
+            }
+        },
+        {
+            "name": "create_booking",
+            "description": "Create a provisional room booking for a guest. Use after confirming their dates and collecting their name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "guest_name": {
+                        "type": "string",
+                        "description": "The guest's full name"
+                    },
+                    "check_in_date": {
+                        "type": "string",
+                        "description": "Check-in date in YYYY-MM-DD format"
+                    },
+                    "check_out_date": {
+                        "type": "string",
+                        "description": "Check-out date in YYYY-MM-DD format"
+                    },
+                    "room_type": {
+                        "type": "string",
+                        "enum": ["queen", "twin", "family", "accessible"],
+                        "description": "Room type to book"
+                    },
+                    "num_guests": {
+                        "type": "integer",
+                        "description": "Number of guests staying"
+                    },
+                    "guest_phone": {
+                        "type": "string",
+                        "description": "Guest phone number for confirmation"
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Any special requests or notes"
+                    }
+                },
+                "required": ["guest_name", "check_in_date", "room_type"]
+            }
+        },
+        {
+            "name": "get_room_pricing",
+            "description": "Get ONLY the price for a specific room type. Only use this when the guest specifically asks for pricing/rates.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room_type": {
+                        "type": "string",
+                        "enum": ["queen", "twin", "family", "accessible"],
+                        "description": "Room type to get pricing for"
+                    }
+                },
+                "required": ["room_type"]
+            }
+        },
+        {
+            "name": "get_room_details",
+            "description": "Get full details about a room type including amenities, beds, and features. Use when guest wants to know more about what's in a room.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "room_type": {
+                        "type": "string",
+                        "enum": ["queen", "twin", "family", "accessible"],
+                        "description": "Room type to get details for"
+                    }
+                },
+                "required": ["room_type"]
+            }
+        },
+        {
+            "name": "recommend_room",
+            "description": "Recommend the best room based on guest's needs (number of guests, special needs, etc).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "num_guests": {
+                        "type": "integer",
+                        "description": "Number of guests"
+                    },
+                    "needs_accessibility": {
+                        "type": "boolean",
+                        "description": "Whether guest has mobility needs"
+                    },
+                    "prefer_separate_beds": {
+                        "type": "boolean",
+                        "description": "If 2 guests prefer separate beds"
+                    }
+                },
+                "required": ["num_guests"]
+            }
+        },
+        {
+            "name": "get_check_in_out_info",
+            "description": "Get check-in and check-out times. Use when guest asks about timing.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "get_location_info",
+            "description": "Get motel location, directions, and contact info.",
+            "parameters": {
+                "type": "object", 
+                "properties": {}
+            }
+        },
+        {
+            "name": "get_amenities",
+            "description": "Get info about specific motel amenities like pool, WiFi, parking, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amenity": {
+                        "type": "string",
+                        "description": "Specific amenity to ask about (pool, wifi, parking, bbq, laundry, etc)"
+                    }
+                },
+                "required": ["amenity"]
+            }
+        },
+        {
+            "name": "get_activities_nearby",
+            "description": "Get information about things to do in the Chiltern area.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "search_motel_info",
+            "description": "General search for any motel information. Use as fallback for specific questions about pets, smoking, breakfast, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search term like 'pets', 'smoking', 'breakfast', 'cot', etc."
+                    }
+                },
+                "required": ["query"]
+            }
+        },
+        {
+            "name": "lookup_booking",
+            "description": "Look up an existing booking for a guest. Use when guest wants to check or confirm their reservation. Ask for their name first.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "guest_name": {
+                        "type": "string",
+                        "description": "The guest's name as it appears on the booking"
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": "Guest's phone number for verification (optional)"
+                    },
+                    "reference": {
+                        "type": "string",
+                        "description": "Booking reference number like LM-XXXXX (optional)"
+                    }
+                },
+                "required": ["guest_name"]
+            }
+        },
+        {
+            "name": "flag_off_topic",
+            "description": "IMPORTANT: Call this when a caller is wasting time with off-topic behavior. Examples: flirting, personal questions about you, repeated nonsense, tangential 'why' chains, demands for info you can't provide. Call this EACH TIME they do something off-topic - the system tracks the count and will tell you how to respond.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief description of why this is off-topic (e.g., 'flirting', 'personal questions', 'repeated nonsense', 'demanding other guest info')"
+                    }
+                },
+                "required": ["reason"]
+            }
+        }
+    ]
