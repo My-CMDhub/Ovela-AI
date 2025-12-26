@@ -57,4 +57,6 @@ memory_bank/
 # guide files
 backend/redeploy-guide.md
 
+scripts/*.py
+!scripts/health_check.py
 .agent/

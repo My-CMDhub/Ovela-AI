@@ -3,7 +3,13 @@ Voice Agent Function Definitions Module.
 
 Contains OpenAI-compatible function definitions for the Deepgram Voice Agent.
 These are the tools the agent can call during conversations.
+
+Function definitions are here, implementations are in handlers.py.
 """
+
+from .handlers import FunctionDispatcher
+
+__all__ = ['get_booking_functions', 'FunctionDispatcher']
 
 
 def get_booking_functions() -> list:

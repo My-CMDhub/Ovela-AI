@@ -11,11 +11,12 @@ Usage:
     await handler.start()
 
 Structure:
+    - handler.py: Main VoiceAgentHandler class
     - config.py: All constants and configuration
     - prompts.py: System prompts and message templates
     - abuse_protection.py: Time-wasting/spam detection
     - silence_detection.py: Silence monitoring
-    - functions/: Function calling handlers
+    - functions/: Function definitions and handlers
     - bridges/: External API communication (Twilio, Deepgram)
 """
 
@@ -25,6 +26,7 @@ from .config import (
     ENVIRONMENT,
     DEMO_CONFIG,
     PROD_CONFIG,
+    DEEPGRAM_AGENT_URL,
     get_random_greeting,
     get_random_farewell,
 )
@@ -36,17 +38,35 @@ from .silence_detection import SilenceMonitor
 
 from .functions import get_booking_functions
 
-from .bridges import TwilioBridge, DeepgramBridge
+# Main handler - optional import (requires twilio, websockets)
+try:
+    from .handler import VoiceAgentHandler, DeepgramAgentHandler
+    _handler_available = True
+except ImportError as e:
+    VoiceAgentHandler = None
+    DeepgramAgentHandler = None
+    _handler_available = False
 
-# Note: VoiceAgentHandler will be added once old file is refactored
-# For now, continue using services.voice_deepgram_agent.DeepgramAgentHandler
+# Optional bridges import - may fail if twilio is not installed
+try:
+    from .bridges import TwilioBridge, DeepgramBridge
+    _bridges_available = True
+except ImportError:
+    TwilioBridge = None
+    DeepgramBridge = None
+    _bridges_available = False
 
 __all__ = [
+    # Main Handler
+    'VoiceAgentHandler',
+    'DeepgramAgentHandler',  # Backwards compatibility alias
+    
     # Config
     'ABUSE_CONFIG',
     'ENVIRONMENT', 
     'DEMO_CONFIG',
     'PROD_CONFIG',
+    'DEEPGRAM_AGENT_URL',
     'get_random_greeting',
     'get_random_farewell',
     
@@ -59,8 +79,9 @@ __all__ = [
     
     # Functions
     'get_booking_functions',
-    
-    # Bridges
-    'TwilioBridge',
-    'DeepgramBridge',
 ]
+
+# Add bridges to __all__ only if available
+if _bridges_available:
+    __all__.extend(['TwilioBridge', 'DeepgramBridge'])
+

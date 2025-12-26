@@ -9,7 +9,7 @@ from urllib.parse import quote
 from twilio.twiml.voice_response import VoiceResponse, Connect
 from twilio.rest import Client
 from core.config import settings
-from services.voice_deepgram_agent import DeepgramAgentHandler
+from services.voice_agent import VoiceAgentHandler
 from services.appwrite import db_service
 from services.email import email_service
 from rules.whitelist import is_whitelisted
@@ -141,7 +141,7 @@ async def websocket_endpoint(websocket: WebSocket):
     Deepgram handles: STT (flux) + LLM (gpt-4o-mini) + TTS (aura-2) + VAD.
     """
     await websocket.accept()
-    handler = DeepgramAgentHandler(websocket)
+    handler = VoiceAgentHandler(websocket)
     
     try:
         await handler.start()
