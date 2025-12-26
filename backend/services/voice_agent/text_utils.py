@@ -123,10 +123,13 @@ def is_valid_au_phone(phone: str) -> tuple[bool, str]:
     else:
         digits_for_length = digits_only
     
-    # Australian phones are 10 digits (or 9 without leading zero sometimes)
-    if len(digits_for_length) < 9:
+    # Australian mobile numbers (04xx) MUST be exactly 10 digits
+    if digits_for_length.startswith('04') or digits_only.startswith('614'):
+        if len(digits_for_length) != 10:
+            return False, f"Australian mobile numbers need exactly 10 digits. I got {len(digits_for_length)}. Could you repeat all 10 digits starting with 04?"
+    elif len(digits_for_length) < 10:
         missing = 10 - len(digits_for_length)
-        return False, f"That phone number seems too short - I only got {len(digits_for_length)} digits and need 10. Could you repeat all 10 digits?"
+        return False, f"That phone number seems too short - I got {len(digits_for_length)} digits. Could you repeat all 10 digits?"
     
     if len(digits_only) > 12:
         return False, f"That phone number seems too long ({len(digits_only)} digits). Could you repeat it more slowly?"
