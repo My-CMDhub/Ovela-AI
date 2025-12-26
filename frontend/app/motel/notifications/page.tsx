@@ -20,6 +20,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ovela-12c561a30285.h
 
 export default function NotificationsPage() {
     const [notifications, setNotifications] = useState<StaffNotification[]>([]);
+    const [counts, setCounts] = useState<{ pending: number; in_progress: number; completed: number; dismissed: number }>({ pending: 0, in_progress: 0, completed: 0, dismissed: 0 });
     const [filter, setFilter] = useState<string>("pending");
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -56,8 +57,27 @@ export default function NotificationsPage() {
         }
     };
 
+    const fetchCounts = async () => {
+        try {
+            const res = await fetch(`${API_URL}/api/notifications/counts`);
+            const data = await res.json();
+            setCounts(data);
+        } catch (error) {
+            console.error("Failed to fetch counts:", error);
+        }
+    };
+
     useEffect(() => {
         fetchNotifications();
+        fetchCounts();
+
+        // Auto-refresh every 30 seconds
+        const interval = setInterval(() => {
+            fetchNotifications();
+            fetchCounts();
+        }, 30000);
+
+        return () => clearInterval(interval);
     }, [filter]);
 
     const createNotification = async () => {
@@ -196,18 +216,32 @@ export default function NotificationsPage() {
                 </div>
             </div>
 
-            {/* Filter Tabs */}
+            {/* Filter Tabs - Now with counts */}
             <div className="flex flex-wrap gap-2 mb-6">
-                {["pending", "in_progress", "completed", "dismissed", ""].map((status) => (
+                {[
+                    { key: "pending", label: "Pending", count: counts.pending },
+                    { key: "in_progress", label: "In Progress", count: counts.in_progress },
+                    { key: "completed", label: "Completed", count: counts.completed },
+                    { key: "dismissed", label: "Dismissed", count: counts.dismissed },
+                    { key: "", label: "All", count: counts.pending + counts.in_progress + counts.completed + counts.dismissed },
+                ].map((tab) => (
                     <button
-                        key={status || "all"}
-                        onClick={() => setFilter(status)}
-                        className={`px-4 py-2 rounded-lg font-medium transition-colors ${filter === status
-                            ? "bg-[#8B2332] text-white"
-                            : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                        key={tab.key || "all"}
+                        onClick={() => setFilter(tab.key)}
+                        className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${filter === tab.key
+                                ? "bg-[#8B2332] text-white"
+                                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                             }`}
                     >
-                        {status === "" ? "All" : status.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ")}
+                        {tab.label}
+                        {tab.count > 0 && (
+                            <span className={`px-1.5 py-0.5 text-xs rounded-full ${filter === tab.key
+                                    ? "bg-white/20 text-white"
+                                    : "bg-gray-200 text-gray-600"
+                                }`}>
+                                {tab.count}
+                            </span>
+                        )}
                     </button>
                 ))}
             </div>

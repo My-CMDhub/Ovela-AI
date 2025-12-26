@@ -103,6 +103,31 @@ async def create_notification(data: NotificationCreate):
         raise HTTPException(status_code=500, detail="Something went wrong. Please try again or contact support.")
 
 
+@router.get("/counts")
+async def get_notification_counts():
+    """
+    Get notification counts by status for tab badges.
+    Returns: {pending: N, in_progress: N, completed: N, dismissed: N, total: N}
+    """
+    try:
+        notifications = db_service.get_staff_notifications(limit=500)
+        
+        # Filter out archived
+        active = [n for n in notifications if n.get("status") != "archived"]
+        
+        counts = {
+            "pending": len([n for n in active if n.get("status") == "pending"]),
+            "in_progress": len([n for n in active if n.get("status") == "in_progress"]),
+            "completed": len([n for n in active if n.get("status") == "completed"]),
+            "dismissed": len([n for n in active if n.get("status") == "dismissed"]),
+            "total": len(active)
+        }
+        return counts
+    except Exception as e:
+        logger.error(f"Error getting notification counts: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load counts.")
+
+
 @router.get("")
 async def list_notifications(
     status: Optional[str] = None,

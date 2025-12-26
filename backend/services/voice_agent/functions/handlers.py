@@ -642,14 +642,83 @@ async def handle_request_human_callback(args: dict) -> dict:
 
 async def handle_update_guest_info(args: dict) -> dict:
     """
-    Save guest details to memory/context.
-    This is a lightweight function primarily for the AI to confirm it has the info.
+    Save guest details to memory/context AND update the latest reservation/notification.
+    This ensures guest_email is persisted even if provided after booking.
     """
+    import requests
+    from core.config import settings
+    
     guest_name = args.get("guest_name", "")
     guest_phone = args.get("guest_phone", "")
     guest_email = args.get("guest_email", "")
     
-    logger.info(f"📝 Updated guest info: {guest_name}, {guest_phone}")
+    logger.info(f"📝 Updated guest info: {guest_name}, {guest_phone}, {guest_email}")
+    
+    # If we have an email, try to update the most recent reservation and notification
+    if guest_email and guest_phone:
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "X-Appwrite-Project": settings.APPWRITE_PROJECT_ID,
+                "X-Appwrite-Key": settings.APPWRITE_API_KEY
+            }
+            
+            # Find the most recent reservation by this phone number
+            url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
+            response = requests.get(url, headers=headers)
+            
+            if response.status_code == 200:
+                docs = response.json().get("documents", [])
+                # Find most recent reservation for this phone (pending status preferred)
+                matching = [d for d in docs if d.get("guest_phone") == guest_phone]
+                if matching:
+                    # Sort by created_at descending, prefer pending
+                    matching.sort(key=lambda x: (x.get("status") != "pending", x.get("created_at", "")), reverse=True)
+                    latest = matching[0]
+                    
+                    # Update with email
+                    patch_url = f"{url}/{latest['$id']}"
+                    patch_response = requests.patch(
+                        patch_url,
+                        headers=headers,
+                        json={"data": {"guest_email": guest_email}}
+                    )
+                    if patch_response.status_code in [200, 201]:
+                        logger.info(f"✅ Updated reservation {latest['$id']} with email")
+            
+            # Also update any pending notification for this customer
+            notif_url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/staff_notifications/documents"
+            notif_response = requests.get(notif_url, headers=headers)
+            
+            if notif_response.status_code == 200:
+                notif_docs = notif_response.json().get("documents", [])
+                # Find pending notification for this phone
+                matching_notifs = [n for n in notif_docs 
+                                   if n.get("customer_phone") == guest_phone 
+                                   and n.get("status") == "pending"]
+                if matching_notifs:
+                    import json
+                    latest_notif = matching_notifs[0]
+                    
+                    # Update extra_data with guest_email
+                    extra_data_str = latest_notif.get("extra_data", "{}")
+                    try:
+                        extra_data = json.loads(extra_data_str) if extra_data_str else {}
+                    except:
+                        extra_data = {}
+                    
+                    extra_data["guest_email"] = guest_email
+                    
+                    patch_notif_url = f"{notif_url}/{latest_notif['$id']}"
+                    requests.patch(
+                        patch_notif_url,
+                        headers=headers,
+                        json={"data": {"extra_data": json.dumps(extra_data)}}
+                    )
+                    logger.info(f"✅ Updated notification {latest_notif['$id']} with email")
+                    
+        except Exception as e:
+            logger.warning(f"Could not update reservation/notification with email: {e}")
     
     return {
         "success": True,
