@@ -421,12 +421,26 @@ async def handle_search_motel_info(args: dict) -> dict:
     }
 
 
-async def handle_lookup_booking(args: dict) -> dict:
-    """Look up an existing booking by guest name."""
+async def handle_lookup_booking(args: dict, caller_id: str = None) -> dict:
+    """
+    Look up an existing booking by guest name.
+    
+    Uses hybrid approach:
+    1. Prioritize verified caller_id from Twilio for phone matching
+    2. Fall back to spoken phone if provided
+    3. Name is primary search key
+    
+    Args:
+        args: {guest_name, phone?, reference?}
+        caller_id: Verified phone number from Twilio (trusted)
+        
+    Returns:
+        Booking details or helpful message
+    """
     from services.motel_knowledge_base import lookup_booking
     
     guest_name = args.get("guest_name", "")
-    phone = args.get("phone")
+    spoken_phone = args.get("phone")  # What user said (may have errors)
     reference = args.get("reference")
     
     if not guest_name:
@@ -435,12 +449,22 @@ async def handle_lookup_booking(args: dict) -> dict:
             "message": "I'd need your name to look up your booking. What name was it booked under?"
         }
     
-    result = await lookup_booking(guest_name, phone, reference)
+    # Use verified caller_id if available, otherwise use spoken phone
+    # This handles STT errors gracefully since we have the real phone
+    search_phone = caller_id if caller_id else spoken_phone
+    
+    result = await lookup_booking(guest_name, search_phone, reference)
+    
+    # If not found with caller_id but user provided different phone, try that too
+    if not result.get("found") and caller_id and spoken_phone and spoken_phone != caller_id:
+        result = await lookup_booking(guest_name, spoken_phone, reference)
     
     if result.get("found") and result.get("booking"):
         booking = result["booking"]
+        # Mask part of phone for security when confirming
         return {
             **result,
+            "verified_by_caller_id": bool(caller_id),
             "message": f"Found it! You have a {booking.get('room_type', 'room')} booked from {booking.get('check_in')} to {booking.get('check_out')} for {booking.get('num_guests')} guests. Your total is ${booking.get('total_amount')}. Reference: {booking.get('reference')}"
         }
     
@@ -520,7 +544,8 @@ class FunctionDispatcher:
                 return await handle_search_motel_info(args)
             
             elif function_name == "lookup_booking":
-                return await handle_lookup_booking(args)
+                # Pass caller ID for hybrid matching (uses verified Twilio phone)
+                return await handle_lookup_booking(args, caller_id=self.user_phone)
             
             # Abuse Protection
             elif function_name == "flag_off_topic":

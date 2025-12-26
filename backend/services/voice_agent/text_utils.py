@@ -91,6 +91,58 @@ def normalize_phone_number(spoken_phone: str) -> str:
     return ''.join(result)
 
 
+def is_valid_au_phone(phone: str) -> tuple[bool, str]:
+    """
+    Validate if a phone number is a valid Australian format.
+    
+    Valid formats:
+    - 04XX XXX XXX (10 digits, mobile)
+    - +614XX XXX XXX (11/12 digits with country code)
+    - 03 XXXX XXXX (10 digits, landline)
+    
+    Args:
+        phone: Phone number (can be spoken words or digits)
+        
+    Returns:
+        Tuple of (is_valid, message)
+        - If valid: (True, "")
+        - If invalid: (False, "reason for rejection")
+    """
+    # First normalize to digits
+    normalized = normalize_phone_number(phone)
+    
+    if not normalized:
+        return False, "I didn't catch a phone number. Could you say it again slowly?"
+    
+    # Remove country code prefix for length check
+    digits_only = normalized.lstrip('+')
+    
+    # Handle +61 prefix (11 digits is valid: 61 + 9 remaining)
+    if digits_only.startswith('61'):
+        digits_for_length = digits_only[2:]  # Remove country code
+    else:
+        digits_for_length = digits_only
+    
+    # Australian phones are 10 digits (or 9 without leading zero sometimes)
+    if len(digits_for_length) < 9:
+        missing = 10 - len(digits_for_length)
+        return False, f"That phone number seems too short - I only got {len(digits_for_length)} digits and need 10. Could you repeat all 10 digits?"
+    
+    if len(digits_only) > 12:
+        return False, f"That phone number seems too long ({len(digits_only)} digits). Could you repeat it more slowly?"
+    
+    # Check valid Australian prefixes
+    valid_prefixes = ['04', '614', '61', '02', '03', '07', '08']
+    has_valid_prefix = any(digits_only.startswith(p) for p in valid_prefixes)
+    
+    if not has_valid_prefix and len(digits_only) >= 10:
+        # Might be missing leading zero
+        return False, "That doesn't look like an Australian number. Should it start with 04 for mobile or 03 for landline?"
+    
+    # Valid!
+    return True, ""
+
+
 def convert_word_to_digit(word: str) -> str:
     """Convert a single word to digit(s)."""
     word = word.lower()

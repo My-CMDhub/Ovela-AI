@@ -399,12 +399,14 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
             normalize_phone_number,
             normalize_guest_name,
             fuzzy_name_match,
+            is_valid_au_phone,
         )
     except ImportError:
         # Fallback to basic normalization if utils not available
         normalize_phone_number = lambda x: x.replace(" ", "")
         normalize_guest_name = lambda x: x.lower().strip()
         fuzzy_name_match = lambda a, b, t=0.6: normalize_guest_name(a) in normalize_guest_name(b) or normalize_guest_name(b) in normalize_guest_name(a)
+        is_valid_au_phone = lambda x: (True, "")
     
     # Get Appwrite config from environment
     endpoint = os.getenv("APPWRITE_ENDPOINT")
@@ -426,6 +428,17 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
     import logging
     logger = logging.getLogger(__name__)
     logger.info(f"🔍 Booking lookup: name='{guest_name}' -> '{search_name}', phone='{phone}' -> '{search_phone}'")
+    
+    # Validate phone format if provided
+    if phone:
+        is_valid, validation_msg = is_valid_au_phone(phone)
+        if not is_valid:
+            logger.info(f"⚠️ Invalid phone format: {validation_msg}")
+            return {
+                "found": False,
+                "phone_invalid": True,
+                "message": validation_msg
+            }
     
     try:
         # Fetch reservations from Appwrite
