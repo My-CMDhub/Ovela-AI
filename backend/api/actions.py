@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from services.magic_links import verify_action_token
 from services.appwrite import db_service
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,7 @@ async def dismiss_action(token: str = Query(...)):
 async def reject_action(token: str = Query(...)):
     """
     Reject a booking/request - shows phone dialer to call customer.
+    Magic link is ONE-TIME USE ONLY. Subsequent clicks redirect to dashboard.
     """
     is_valid, payload, error = verify_action_token(token)
     
@@ -196,19 +198,56 @@ async def reject_action(token: str = Query(...)):
     if not notification:
         return HTMLResponse(content=error_page("Not Found", "Could not find this notification."), status_code=404)
     
-    customer_phone = notification.get("customerPhone", notification.get("customer_phone", ""))
-    customer_name = notification.get("customerName", notification.get("customer_name", "Customer"))
-    
-    # Update notification status to rejected
-    db_service.update_staff_notification(notification_id, {"status": "rejected"})
-    
-    # Also update reservation status to 'cancelled'
+    # Check if magic link already consumed (ONE-TIME USE)
     import json
     extra_data_str = notification.get("extra_data", "{}")
     try:
         extra_data = json.loads(extra_data_str) if isinstance(extra_data_str, str) else extra_data_str
     except:
         extra_data = {}
+    
+    if extra_data.get("link_consumed"):
+        # Link was already used - show info page
+        first_action = extra_data.get("first_action", "processed")
+        return HTMLResponse(content=f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Link Already Used</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f7; margin: 0; padding: 40px 20px; }}
+        .container {{ max-width: 500px; margin: 0 auto; background: white; border-radius: 16px; padding: 40px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }}
+        h1 {{ font-size: 24px; color: #1d1d1f; margin-bottom: 16px; }}
+        p {{ color: #86868b; font-size: 16px; line-height: 1.6; }}
+        .action-badge {{ display: inline-block; padding: 6px 16px; background: #ef4444; color: white; border-radius: 20px; font-size: 14px; font-weight: 600; margin: 16px 0; }}
+        .btn {{ display: inline-block; padding: 14px 28px; background: #0066cc; color: white; text-decoration: none; border-radius: 30px; font-weight: 600; margin-top: 24px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔒 Link Already Used</h1>
+        <div class="action-badge">First action: {first_action.upper()}</div>
+        <p>This email link has already been used. Each link can only be used once for security.</p>
+        <p>To make changes, please use the dashboard.</p>
+        <a href="{DASHBOARD_URL}" class="btn">Open Dashboard</a>
+    </div>
+</body>
+</html>''')
+    
+    customer_phone = notification.get("customerPhone", notification.get("customer_phone", ""))
+    customer_name = notification.get("customerName", notification.get("customer_name", "Customer"))
+    
+    # Mark link as consumed IMMEDIATELY
+    extra_data["link_consumed"] = True
+    extra_data["first_action"] = "rejected"
+    extra_data["first_action_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Update notification status to rejected with consumed flag
+    db_service.update_staff_notification(notification_id, {
+        "status": "rejected",
+        "extra_data": json.dumps(extra_data)
+    })
     
     booking_reference = extra_data.get("booking_reference", "")
     if booking_reference:
@@ -268,6 +307,7 @@ async def update_action(token: str = Query(...)):
 async def approve_action(token: str = Query(...)):
     """
     Approve a booking request - updates status and sends guest confirmation.
+    Magic link is ONE-TIME USE ONLY. Subsequent clicks redirect to dashboard.
     """
     is_valid, payload, error = verify_action_token(token)
     
@@ -283,18 +323,53 @@ async def approve_action(token: str = Query(...)):
     if not notification:
         return HTMLResponse(content=error_page("Not Found", "This notification no longer exists."), status_code=404)
     
-    # Check if already processed
-    current_status = notification.get("status", "pending")
-    if current_status == "completed":
-        return HTMLResponse(content=success_page(
-            "✅ Already Approved",
-            "This booking was already approved."
-        ))
+    # Check if magic link already consumed (ONE-TIME USE)
+    import json
+    extra_data_str = notification.get("extra_data", "{}")
+    try:
+        extra_data = json.loads(extra_data_str) if isinstance(extra_data_str, str) else extra_data_str
+    except:
+        extra_data = {}
+    
+    if extra_data.get("link_consumed"):
+        # Link was already used - show info page
+        first_action = extra_data.get("first_action", "processed")
+        return HTMLResponse(content=f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Link Already Used</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f7; margin: 0; padding: 40px 20px; }}
+        .container {{ max-width: 500px; margin: 0 auto; background: white; border-radius: 16px; padding: 40px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }}
+        h1 {{ font-size: 24px; color: #1d1d1f; margin-bottom: 16px; }}
+        p {{ color: #86868b; font-size: 16px; line-height: 1.6; }}
+        .action-badge {{ display: inline-block; padding: 6px 16px; background: #22c55e; color: white; border-radius: 20px; font-size: 14px; font-weight: 600; margin: 16px 0; }}
+        .btn {{ display: inline-block; padding: 14px 28px; background: #0066cc; color: white; text-decoration: none; border-radius: 30px; font-weight: 600; margin-top: 24px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔒 Link Already Used</h1>
+        <div class="action-badge">First action: {first_action.upper()}</div>
+        <p>This email link has already been used. Each link can only be used once for security.</p>
+        <p>To make changes, please use the dashboard.</p>
+        <a href="{DASHBOARD_URL}" class="btn">Open Dashboard</a>
+    </div>
+</body>
+</html>''')
+    
+    # Mark link as consumed IMMEDIATELY (before any action)
+    extra_data["link_consumed"] = True
+    extra_data["first_action"] = "approved"
+    extra_data["first_action_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
     
     # Mark as completed (approved)
     result = db_service.update_staff_notification(notification_id, {
         "status": "completed",
-        "staff_notes": "Approved via email"
+        "staff_notes": "Approved via email",
+        "extra_data": json.dumps(extra_data)
     })
     
     if not result:

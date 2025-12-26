@@ -442,6 +442,16 @@ class EmailService:
                     <a href="{dashboard_url}" style="display: inline-block; padding: 12px 24px; background: #3b82f6; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📝 Open Dashboard</a>
                 </div>
                 
+                <div style="margin-top: 20px; padding: 16px; background: #e8f4fd; border-radius: 8px; border-left: 4px solid #0066cc;">
+                    <div style="font-size: 13px; color: #1d4ed8; font-weight: 600; margin-bottom: 8px;">ℹ️ How These Links Work:</div>
+                    <ul style="margin: 0; padding-left: 18px; font-size: 12px; color: #1e40af; line-height: 1.6;">
+                        <li><strong>One-time use only</strong> — each link can only be clicked once</li>
+                        <li><strong>Approve</strong> = Confirms booking + sends guest confirmation email</li>
+                        <li><strong>Reject</strong> = Cancels booking + shows phone to call guest</li>
+                        <li><strong>Need to change?</strong> Use the Dashboard after first click</li>
+                    </ul>
+                </div>
+                
                 <p style="margin-top: 16px; font-size: 12px; color: #86868b;">Links expire in 48 hours.</p>
             </div>
             

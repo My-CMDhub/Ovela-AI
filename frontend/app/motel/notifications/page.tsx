@@ -12,6 +12,7 @@ interface StaffNotification {
     reason: string;
     urgency: "low" | "medium" | "high";
     staff_notes?: string;
+    extra_data?: string;  // JSON with action history
     created_at?: string;
     completed_at?: string;
 }
@@ -364,6 +365,35 @@ export default function NotificationsPage() {
                                             📝 {notif.staff_notes}
                                         </p>
                                     )}
+
+                                    {/* Action History Log */}
+                                    {notif.extra_data && (() => {
+                                        try {
+                                            const data = JSON.parse(notif.extra_data);
+                                            if (data.link_consumed || data.first_action) {
+                                                return (
+                                                    <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg border-l-4 border-blue-400">
+                                                        <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 mb-1">📋 Action Log:</p>
+                                                        <div className="text-xs text-blue-600 dark:text-blue-400 space-y-1">
+                                                            {data.first_action && (
+                                                                <p>✓ First action: <span className={`font-semibold ${data.first_action === 'approved' ? 'text-green-600' : 'text-red-600'}`}>{data.first_action.toUpperCase()}</span></p>
+                                                            )}
+                                                            {data.first_action_time && (
+                                                                <p>📅 Via email link at: {data.first_action_time}</p>
+                                                            )}
+                                                            {data.email_sent_via_dashboard && (
+                                                                <p>📧 Email sent via dashboard</p>
+                                                            )}
+                                                            {data.link_consumed && (
+                                                                <p className="text-gray-500 italic">🔒 Email links consumed (dashboard only)</p>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            }
+                                        } catch { return null; }
+                                        return null;
+                                    })()}
 
                                     <p className="text-xs text-gray-400">
                                         Received: {formatDate(notif.created_at)}

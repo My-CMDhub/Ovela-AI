@@ -179,6 +179,7 @@ async def update_notification(notification_id: str, update: NotificationUpdate):
     """
     Update a notification (change status, add notes).
     Enforces valid status transitions.
+    When a booking_approval is marked 'completed', syncs reservation and sends guest email.
     """
     try:
         # Get current notification to check status transition
@@ -213,6 +214,77 @@ async def update_notification(notification_id: str, update: NotificationUpdate):
             raise HTTPException(status_code=500, detail="Update failed. Please try again.")
         
         logger.info(f"Updated notification {notification_id}: {list(data.keys())}")
+        
+        # If completing a booking_approval, sync reservation & send guest email
+        if update.status == "completed" and current.get("type") == "booking_approval":
+            import json
+            import requests
+            import asyncio
+            from core.config import settings
+            from services.email import email_service
+            
+            MOTEL_DB_ID = "6947b8300005f5863f96"
+            
+            # Parse extra_data for booking info
+            extra_data_str = current.get("extra_data", "{}")
+            try:
+                extra_data = json.loads(extra_data_str) if isinstance(extra_data_str, str) else extra_data_str
+            except:
+                extra_data = {}
+            
+            booking_reference = extra_data.get("booking_reference", "")
+            guest_email = extra_data.get("guest_email", "")
+            
+            # Update reservation status to 'confirmed'
+            if booking_reference:
+                headers = {
+                    "Content-Type": "application/json",
+                    "X-Appwrite-Project": settings.APPWRITE_PROJECT_ID,
+                    "X-Appwrite-Key": settings.APPWRITE_API_KEY
+                }
+                
+                url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
+                response = requests.get(url, headers=headers)
+                
+                if response.status_code == 200:
+                    reservations = response.json().get("documents", [])
+                    matching = [r for r in reservations if r.get("booking_reference") == booking_reference]
+                    if matching:
+                        reservation_id = matching[0]["$id"]
+                        patch_url = f"{url}/{reservation_id}"
+                        patch_response = requests.patch(
+                            patch_url,
+                            headers=headers,
+                            json={"data": {"status": "confirmed"}}
+                        )
+                        if patch_response.status_code in [200, 201]:
+                            logger.info(f"✅ Updated reservation {booking_reference} to 'confirmed' via dashboard")
+            
+            # Send guest confirmation email ONLY on first completion (prevent duplicates)
+            is_first_completion = not extra_data.get("link_consumed") and not extra_data.get("email_sent_via_dashboard")
+            if guest_email and is_first_completion:
+                # Mark that email was sent
+                extra_data["email_sent_via_dashboard"] = True
+                db_service.update_staff_notification(notification_id, {
+                    "extra_data": json.dumps(extra_data)
+                })
+                
+                asyncio.create_task(
+                    email_service.send_guest_booking_confirmation(
+                        guest_email=guest_email,
+                        guest_name=current.get("customer_name", "Guest"),
+                        booking_reference=booking_reference,
+                        room_type=extra_data.get("room_type", "queen"),
+                        check_in=extra_data.get("check_in", ""),
+                        check_out=extra_data.get("check_out", ""),
+                        num_nights=extra_data.get("num_nights", 1),
+                        total_amount=extra_data.get("total_amount", 0)
+                    )
+                )
+                logger.info(f"📧 Sending guest confirmation to {guest_email} via dashboard complete")
+            elif guest_email and not is_first_completion:
+                logger.info(f"📧 Skipping duplicate email - guest was already notified")
+        
         return {"success": True, "notification": result}
     except HTTPException:
         raise

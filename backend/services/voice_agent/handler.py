@@ -422,6 +422,7 @@ class VoiceAgentHandler:
                 logger.info(f"[AI]: {clean_content}")
             
             # Save clean content to transcript (not raw with signals)
+            self.last_ai_message = clean_content  # Track for silence detection TTS buffer
             self.transcript.append({
                 "role": "ai",
                 "text": clean_content,
@@ -454,8 +455,9 @@ class VoiceAgentHandler:
         """Handle agent finished speaking - start silence monitoring."""
         logger.info("🔇 Agent finished speaking")
         
-        # Notify silence monitor and start checking
-        self.silence_monitor.on_ai_finished_speaking()
+        # Notify silence monitor with the AI message for TTS duration estimation
+        last_message = getattr(self, 'last_ai_message', '')
+        self.silence_monitor.on_ai_finished_speaking(last_message)
         check_id = self.silence_monitor.get_check_id()
         
         # Schedule silence check
