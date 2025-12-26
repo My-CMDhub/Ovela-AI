@@ -396,7 +396,8 @@ class EmailService:
         total_amount: float,
         booking_reference: str,
         num_nights: int = 1,
-        notification_id: str = None
+        notification_id: str = None,
+        guest_email: str = None
     ):
         """Notify staff about a new booking that needs approval with magic links."""
         if not owner_email:
@@ -472,6 +473,7 @@ class EmailService:
                     <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
                         <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Guest:</strong> {guest_name}</td></tr>
                         <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Phone:</strong> <a href="tel:{guest_phone}" style="color: #0066cc;">{guest_phone}</a></td></tr>
+                        {f'<tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Email:</strong> <a href="mailto:{guest_email}" style="color: #0066cc;">{guest_email}</a></td></tr>' if guest_email else ''}
                         <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Room:</strong> {room_type.title()} Room</td></tr>
                         <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-in:</strong> {check_in_fmt}</td></tr>
                         <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-out:</strong> {check_out_fmt}</td></tr>

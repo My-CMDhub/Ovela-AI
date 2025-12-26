@@ -199,8 +199,45 @@ async def reject_action(token: str = Query(...)):
     customer_phone = notification.get("customerPhone", notification.get("customer_phone", ""))
     customer_name = notification.get("customerName", notification.get("customer_name", "Customer"))
     
-    # Update status to rejected
+    # Update notification status to rejected
     db_service.update_staff_notification(notification_id, {"status": "rejected"})
+    
+    # Also update reservation status to 'cancelled'
+    import json
+    extra_data_str = notification.get("extra_data", "{}")
+    try:
+        extra_data = json.loads(extra_data_str) if isinstance(extra_data_str, str) else extra_data_str
+    except:
+        extra_data = {}
+    
+    booking_reference = extra_data.get("booking_reference", "")
+    if booking_reference:
+        import requests
+        from core.config import settings
+        MOTEL_DB_ID = "6947b8300005f5863f96"
+        
+        headers = {
+            "Content-Type": "application/json",
+            "X-Appwrite-Project": settings.APPWRITE_PROJECT_ID,
+            "X-Appwrite-Key": settings.APPWRITE_API_KEY
+        }
+        
+        url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            reservations = response.json().get("documents", [])
+            matching = [r for r in reservations if r.get("booking_reference") == booking_reference]
+            if matching:
+                reservation_id = matching[0]["$id"]
+                patch_url = f"{url}/{reservation_id}"
+                patch_response = requests.patch(
+                    patch_url,
+                    headers=headers,
+                    json={"data": {"status": "cancelled"}}
+                )
+                if patch_response.status_code in [200, 201]:
+                    logger.info(f"❌ Updated reservation {booking_reference} status to 'cancelled'")
     
     # Show page with call button
     return HTMLResponse(content=success_page(
@@ -262,6 +299,47 @@ async def approve_action(token: str = Query(...)):
     
     if not result:
         return HTMLResponse(content=error_page("Update Failed", "Could not approve. Please use the dashboard."), status_code=400)
+    
+    # Also update the reservation status to 'confirmed'
+    import json
+    extra_data_str = notification.get("extra_data", "{}")
+    try:
+        extra_data = json.loads(extra_data_str) if isinstance(extra_data_str, str) else extra_data_str
+    except:
+        extra_data = {}
+    
+    booking_reference = extra_data.get("booking_reference", "")
+    if booking_reference:
+        # Find and update reservation
+        import requests
+        from core.config import settings
+        MOTEL_DB_ID = "6947b8300005f5863f96"
+        
+        headers = {
+            "Content-Type": "application/json",
+            "X-Appwrite-Project": settings.APPWRITE_PROJECT_ID,
+            "X-Appwrite-Key": settings.APPWRITE_API_KEY
+        }
+        
+        # Find reservation by booking_reference
+        url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            reservations = response.json().get("documents", [])
+            matching = [r for r in reservations if r.get("booking_reference") == booking_reference]
+            if matching:
+                reservation_id = matching[0]["$id"]
+                patch_url = f"{url}/{reservation_id}"
+                patch_response = requests.patch(
+                    patch_url,
+                    headers=headers,
+                    json={"data": {"status": "confirmed"}}
+                )
+                if patch_response.status_code in [200, 201]:
+                    logger.info(f"✅ Updated reservation {booking_reference} status to 'confirmed'")
+                else:
+                    logger.warning(f"Failed to update reservation status: {patch_response.text}")
     
     # Send guest confirmation email if we have guest email in extra_data
     import json

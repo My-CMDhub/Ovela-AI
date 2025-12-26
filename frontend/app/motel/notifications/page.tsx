@@ -229,15 +229,15 @@ export default function NotificationsPage() {
                         key={tab.key || "all"}
                         onClick={() => setFilter(tab.key)}
                         className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${filter === tab.key
-                                ? "bg-[#8B2332] text-white"
-                                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                            ? "bg-[#8B2332] text-white"
+                            : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                             }`}
                     >
                         {tab.label}
                         {tab.count > 0 && (
                             <span className={`px-1.5 py-0.5 text-xs rounded-full ${filter === tab.key
-                                    ? "bg-white/20 text-white"
-                                    : "bg-gray-200 text-gray-600"
+                                ? "bg-white/20 text-white"
+                                : "bg-gray-200 text-gray-600"
                                 }`}>
                                 {tab.count}
                             </span>
@@ -409,10 +409,11 @@ export default function NotificationsPage() {
                                         <button
                                             onClick={() => updateStatus(notif.$id, "dismissed")}
                                             disabled={actionLoading === notif.$id}
+                                            title="Not needed / Invalid request (use Complete if you handled it)"
                                             className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 disabled:opacity-50"
                                         >
                                             <XCircle className="w-4 h-4" />
-                                            Dismiss
+                                            Not Needed
                                         </button>
                                     )}
 

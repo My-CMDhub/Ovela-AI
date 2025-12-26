@@ -113,7 +113,8 @@ class StaffNotificationService:
                 total_amount=total_amount,
                 booking_reference=booking_reference,
                 num_nights=num_nights,
-                notification_id=notification_id
+                notification_id=notification_id,
+                guest_email=guest_email  # Include email in staff notification
             )
             
             if success:
