@@ -602,3 +602,22 @@ async def handle_request_human_callback(args: dict) -> dict:
             "success": True, # Pretend success to user to avoid confusion, but log error was handled
             "message": "I've noted your request. Reception will be in touch as soon as they can."
         }
+
+async def handle_update_guest_info(args: dict) -> dict:
+    """
+    Save guest details to memory/context.
+    This is a lightweight function primarily for the AI to confirm it has the info.
+    """
+    guest_name = args.get("guest_name", "")
+    guest_phone = args.get("guest_phone", "")
+    guest_email = args.get("guest_email", "")
+    
+    logger.info(f"📝 Updated guest info: {guest_name}, {guest_phone}")
+    
+    return {
+        "success": True,
+        "guest_name": guest_name,
+        "guest_phone": guest_phone,
+        "guest_email": guest_email,
+        "message": f"Got it. I have your details: {guest_name}" + (f", phone {guest_phone}" if guest_phone else "")
+    }

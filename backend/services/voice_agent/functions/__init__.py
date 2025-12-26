@@ -242,5 +242,32 @@ def get_booking_functions() -> list:
                 },
                 "required": ["guest_name"]
             }
+        },
+        {
+            "name": "request_human_callback",
+            "description": "Request a human staff member to call the customer back. Use this when: (1) caller asks to speak to a human/manager, (2) you cannot answer their question (e.g., cancellation policies, refunds, complaints), (3) caller seems frustrated. Collects their name and phone, then notifies reception.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_name": {
+                        "type": "string",
+                        "description": "The customer's name"
+                    },
+                    "customer_phone": {
+                        "type": "string",
+                        "description": "The customer's phone number for callback"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief reason for callback (e.g., 'refund inquiry', 'cancellation policy', 'complaint')"
+                    },
+                    "urgency": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                        "description": "How urgent is this callback request"
+                    }
+                },
+                "required": ["customer_name", "customer_phone", "reason"]
+            }
         }
     ]
