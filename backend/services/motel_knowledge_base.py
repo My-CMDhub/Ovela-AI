@@ -443,38 +443,67 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
             data = response.json()
             documents = data.get("documents", [])
             
-            # Search for matching booking with fuzzy matching
-            matching_bookings = []
+            # Log total documents for debugging
+            logger.info(f"📊 Total reservations in database: {len(documents)}")
+            
+            # Two-pass search: First by name, then score by phone similarity
+            name_matches = []
             
             for doc in documents:
                 doc_name = doc.get("guest_name") or ""
                 doc_phone = normalize_phone_number(doc.get("guest_phone") or "")
                 doc_ref = doc.get("booking_reference", "")
                 
-                # Direct reference match takes priority
+                # Log each document being checked
+                normalized_doc_name = normalize_guest_name(doc_name)
+                logger.debug(f"   Checking: '{doc_name}' -> '{normalized_doc_name}', phone: '{doc_phone}'")
+                
+                # Direct reference match takes priority - return immediately
                 if reference and doc_ref.upper() == reference.upper():
-                    matching_bookings.append(doc)
-                    continue
+                    logger.info(f"✅ Found by reference: {doc_ref}")
+                    return {
+                        "found": True,
+                        "booking": {
+                            "guest_name": doc.get("guest_name"),
+                            "room_type": doc.get("room_type", "").title(),
+                            "check_in": doc.get("check_in_date"),
+                            "check_out": doc.get("check_out_date"),
+                            "num_guests": doc.get("num_guests"),
+                            "total_amount": doc.get("total_amount"),
+                            "status": doc.get("status", "pending"),
+                            "reference": doc.get("booking_reference")
+                        },
+                        "message": f"Found your booking! Reference: {doc.get('booking_reference')}"
+                    }
                 
                 # Fuzzy name matching
-                if not fuzzy_name_match(search_name, doc_name):
-                    continue
-                
-                # If phone provided, verify it matches (partial match OK)
-                if search_phone:
-                    # Allow partial phone matching (last 6+ digits)
-                    if len(search_phone) >= 6 and len(doc_phone) >= 6:
-                        if search_phone[-6:] == doc_phone[-6:] or search_phone in doc_phone or doc_phone in search_phone:
-                            matching_bookings.append(doc)
-                    elif search_phone in doc_phone or doc_phone in search_phone:
-                        matching_bookings.append(doc)
-                else:
-                    # Name match without phone verification
-                    matching_bookings.append(doc)
+                if fuzzy_name_match(search_name, doc_name):
+                    # Calculate phone similarity score
+                    phone_score = 0
+                    if search_phone and doc_phone:
+                        # Check various matching criteria
+                        if search_phone == doc_phone:
+                            phone_score = 100  # Exact match
+                        elif search_phone in doc_phone or doc_phone in search_phone:
+                            phone_score = 80  # Substring match
+                        elif len(search_phone) >= 6 and len(doc_phone) >= 6:
+                            # Compare last 6 digits
+                            if search_phone[-6:] == doc_phone[-6:]:
+                                phone_score = 70
+                            # Compare last 4 digits
+                            elif search_phone[-4:] == doc_phone[-4:]:
+                                phone_score = 50
+                    
+                    logger.info(f"✅ Name match: '{doc_name}' (phone score: {phone_score})")
+                    name_matches.append({
+                        "doc": doc,
+                        "phone_score": phone_score
+                    })
             
-            if not matching_bookings:
-                # Provide helpful feedback
+            # If no matches by name
+            if not name_matches:
                 normalized_display = search_name.title()
+                logger.info(f"❌ No name matches found for '{normalized_display}'")
                 return {
                     "found": False,
                     "searched_name": normalized_display,
@@ -482,17 +511,26 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
                     "message": f"I couldn't find a booking under the name '{normalized_display}'. Could you spell out your name for me, or provide a booking reference number?"
                 }
             
-            if len(matching_bookings) > 1:
-                # Multiple matches - need more info to narrow down
-                return {
-                    "found": True,
-                    "multiple": True,
-                    "count": len(matching_bookings),
-                    "message": f"I found {len(matching_bookings)} bookings that might match. Could you provide your booking reference number to find the right one?"
-                }
+            # Sort by phone score (best match first)
+            name_matches.sort(key=lambda x: x["phone_score"], reverse=True)
             
-            # Single match - return booking details
-            booking = matching_bookings[0]
+            # If multiple name matches, use phone to pick best one
+            if len(name_matches) > 1:
+                best_match = name_matches[0]
+                # If best match has significantly better phone score, use it
+                if best_match["phone_score"] >= 50:
+                    logger.info(f"📌 Selected best match by phone score: {best_match['phone_score']}")
+                    booking = best_match["doc"]
+                else:
+                    # Can't determine which one - ask for clarification
+                    return {
+                        "found": True,
+                        "multiple": True,
+                        "count": len(name_matches),
+                        "message": f"I found {len(name_matches)} bookings that might match. Could you provide your booking reference number to find the right one?"
+                    }
+            else:
+                booking = name_matches[0]["doc"]
             return {
                 "found": True,
                 "booking": {
