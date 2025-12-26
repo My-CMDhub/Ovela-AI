@@ -220,5 +220,27 @@ def get_booking_functions() -> list:
                 },
                 "required": ["reason"]
             }
+        },
+        {
+            "name": "update_guest_info",
+            "description": "Save guest details (name, phone) to memory. Call this IMMEDIATELY after a guest provides or confirms their name/contact info.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "guest_name": {
+                        "type": "string",
+                        "description": "The guest's full name"
+                    },
+                    "guest_phone": {
+                        "type": "string",
+                        "description": "The guest's phone number"
+                    },
+                    "guest_email": {
+                        "type": "string",
+                        "description": "The guest's email address (optional)"
+                    }
+                },
+                "required": ["guest_name"]
+            }
         }
     ]

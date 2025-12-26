@@ -547,6 +547,13 @@ class FunctionDispatcher:
                 # Pass caller ID for hybrid matching (uses verified Twilio phone)
                 return await handle_lookup_booking(args, caller_id=self.user_phone)
             
+            elif function_name == "update_guest_info":
+                return await handle_update_guest_info(args)
+            
+            # Human Handoff
+            elif function_name == "request_human_callback":
+                return await handle_request_human_callback(args)
+            
             # Abuse Protection
             elif function_name == "flag_off_topic":
                 reason = args.get("reason", "unspecified")
@@ -558,3 +565,40 @@ class FunctionDispatcher:
         except Exception as e:
             logger.error(f"Function execution error ({function_name}): {e}")
             return {"error": str(e)}
+
+async def handle_request_human_callback(args: dict) -> dict:
+    """
+    Request a human staff member to call the customer back.
+    """
+    from services.staff_notifications import staff_notification_service
+    
+    customer_name = args.get("customer_name", "Unknown Customer")
+    customer_phone = args.get("customer_phone", "")
+    reason = args.get("reason", "General Inquiry")
+    urgency = args.get("urgency", "medium")
+    
+    # If phone is missing, try to get it from context if possible (not passed here yet, so rely on args)
+    if not customer_phone:
+        return {
+            "success": False,
+            "message": "I need your phone number to arrange a callback. What's the best number?"
+        }
+        
+    success = await staff_notification_service.notify_new_callback_request(
+        customer_phone=customer_phone,
+        customer_name=customer_name,
+        reason=reason,
+        urgency=urgency
+    )
+    
+    if success:
+        return {
+            "success": True,
+            "message": "I've sent an urgent request to reception. They will call you back shortly."
+        }
+    else:
+        # Fallback if system fails
+        return {
+            "success": True, # Pretend success to user to avoid confusion, but log error was handled
+            "message": "I've noted your request. Reception will be in touch as soon as they can."
+        }

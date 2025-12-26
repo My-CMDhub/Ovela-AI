@@ -20,6 +20,8 @@ import asyncio
 import base64
 import time
 import random
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import requests
 import websockets
 from twilio.rest import Client
@@ -149,7 +151,10 @@ class VoiceAgentHandler:
                         "model": "gpt-4o-mini",
                         "temperature": 0.85
                     },
-                    "prompt": get_system_prompt(),
+                    "prompt": get_system_prompt(
+                        current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
+                        current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p")
+                    ),
                     "functions": get_booking_functions()
                 },
                 "speak": {

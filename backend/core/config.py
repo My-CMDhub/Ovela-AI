@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     RESEND_FROM_EMAIL: str = "hello@ovela.dev"
     # Comma-separated list of emails to receive demo alerts
     DEMO_ALERT_RECIPIENTS: str = "notifications@ovela.dev"
+    # Comma-separated list of emails for staff notifications (callbacks, approvals)
+    STAFF_NOTIFICATION_RECIPIENTS: str = "getnewone2022@gmail.com"
 
     # Twilio (Missed Call → WhatsApp)
     TWILIO_ACCOUNT_SID: str = ""
