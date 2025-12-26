@@ -2,7 +2,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
-from api import webhooks, dashboard, twilio, motel, voice
+from api import chat, dashboard, twilio, motel, voice
 
 # Configure logging to show in console
 logging.basicConfig(
@@ -29,7 +29,7 @@ app.add_middleware(
 )
 
 # Include Routers
-app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(chat.router, prefix="/webhooks", tags=["chat"])
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(twilio.router, prefix="/twilio", tags=["twilio"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])

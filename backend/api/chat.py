@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Request, HTTPException, Query
 from core.config import settings
 from services.appwrite import db_service
-from services.meta import meta_service
+from services.chat_agent import meta_service, generate_response
 from services.customers import customer_service
-from core.ai import generate_response
 import json
 import logging
 
