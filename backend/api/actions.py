@@ -230,8 +230,7 @@ async def update_action(token: str = Query(...)):
 @router.get("/approve")
 async def approve_action(token: str = Query(...)):
     """
-    Approve a booking request (future functionality).
-    Currently marks as completed and shows success.
+    Approve a booking request - updates status and sends guest confirmation.
     """
     is_valid, payload, error = verify_action_token(token)
     
@@ -239,6 +238,21 @@ async def approve_action(token: str = Query(...)):
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
     
     notification_id = payload.get("notification_id")
+    
+    # Get notification with booking data
+    notifications = db_service.get_staff_notifications()
+    notification = next((n for n in notifications if n.get("$id") == notification_id), None)
+    
+    if not notification:
+        return HTMLResponse(content=error_page("Not Found", "This notification no longer exists."), status_code=404)
+    
+    # Check if already processed
+    current_status = notification.get("status", "pending")
+    if current_status == "completed":
+        return HTMLResponse(content=success_page(
+            "✅ Already Approved",
+            "This booking was already approved."
+        ))
     
     # Mark as completed (approved)
     result = db_service.update_staff_notification(notification_id, {
@@ -249,7 +263,39 @@ async def approve_action(token: str = Query(...)):
     if not result:
         return HTMLResponse(content=error_page("Update Failed", "Could not approve. Please use the dashboard."), status_code=400)
     
-    return HTMLResponse(content=success_page(
-        "✅ Approved",
-        "The request has been approved. The guest will be notified."
-    ))
+    # Send guest confirmation email if we have guest email in extra_data
+    import json
+    extra_data_str = notification.get("extra_data", "{}")
+    try:
+        extra_data = json.loads(extra_data_str) if isinstance(extra_data_str, str) else extra_data_str
+    except:
+        extra_data = {}
+    
+    guest_email = extra_data.get("guest_email", "")
+    if guest_email:
+        import asyncio
+        from services.email import email_service
+        asyncio.create_task(
+            email_service.send_guest_booking_confirmation(
+                guest_email=guest_email,
+                guest_name=notification.get("customer_name", "Guest"),
+                booking_reference=extra_data.get("booking_reference", ""),
+                room_type=extra_data.get("room_type", "queen"),
+                check_in=extra_data.get("check_in", ""),
+                check_out=extra_data.get("check_out", ""),
+                num_nights=extra_data.get("num_nights", 1),
+                total_amount=extra_data.get("total_amount", 0)
+            )
+        )
+        logger.info(f"Magic link: Approved booking, sending confirmation to {guest_email}")
+        
+        return HTMLResponse(content=success_page(
+            "✅ Booking Approved",
+            f"The booking has been approved and a confirmation email has been sent to {guest_email}."
+        ))
+    else:
+        logger.info(f"Magic link: Approved booking (no guest email)")
+        return HTMLResponse(content=success_page(
+            "✅ Booking Approved",
+            "The booking has been approved. No guest email was provided, so please contact them directly."
+        ))

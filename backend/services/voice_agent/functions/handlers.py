@@ -164,6 +164,7 @@ async def handle_create_booking(args: dict, user_phone: str, save_reservation_fn
     room_type = args.get("room_type", "queen")
     num_guests = args.get("num_guests", 1)
     guest_phone = args.get("guest_phone", user_phone)
+    guest_email = args.get("guest_email", "")  # Optional email for confirmation
     notes = args.get("notes", "")
     
     if not guest_name or not check_in:
@@ -204,7 +205,7 @@ async def handle_create_booking(args: dict, user_phone: str, save_reservation_fn
         # Guest info
         "guest_name": guest_name,
         "guest_phone": guest_phone,
-        "guest_email": "",
+        "guest_email": guest_email,  # Now captured from args
         "num_guests": num_guests,
         
         # Room details
@@ -240,6 +241,26 @@ async def handle_create_booking(args: dict, user_phone: str, save_reservation_fn
         
         if result:
             logger.info(f"✅ Created motel reservation: {booking_ref} for {guest_name}")
+            
+            # Trigger staff notification with email (async, don't block response)
+            try:
+                import asyncio
+                from services.staff_notifications import staff_notification_service
+                asyncio.create_task(
+                    staff_notification_service.notify_new_booking_request(
+                        guest_name=guest_name,
+                        guest_phone=guest_phone,
+                        guest_email=guest_email,  # For guest confirmation on approval
+                        check_in=check_in,
+                        check_out=check_out,
+                        room_type=room_type,
+                        total_amount=total,
+                        booking_reference=booking_ref,
+                        num_nights=num_nights
+                    )
+                )
+            except Exception as notify_err:
+                logger.error(f"Failed to send staff notification: {notify_err}")
             
             return {
                 "success": True,

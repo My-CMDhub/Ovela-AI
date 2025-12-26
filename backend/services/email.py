@@ -385,6 +385,121 @@ class EmailService:
         return await self.send_email(owner_email, subject, html, from_email=sender)
 
 
+    async def send_booking_approval_request(
+        self,
+        owner_email: str,
+        guest_name: str,
+        guest_phone: str,
+        check_in: str,
+        check_out: str,
+        room_type: str,
+        total_amount: float,
+        booking_reference: str,
+        num_nights: int = 1,
+        notification_id: str = None
+    ):
+        """Notify staff about a new booking that needs approval with magic links."""
+        if not owner_email:
+            logger.warning("No owner email provided for booking approval")
+            return False
+        
+        subject = f"📋 NEW BOOKING: {guest_name} - {room_type.title()} Room"
+        
+        # Format dates nicely
+        try:
+            from datetime import datetime
+            ci = datetime.strptime(check_in, "%Y-%m-%d")
+            co = datetime.strptime(check_out, "%Y-%m-%d")
+            check_in_fmt = ci.strftime("%a, %d %b")
+            check_out_fmt = co.strftime("%a, %d %b")
+        except:
+            check_in_fmt = check_in
+            check_out_fmt = check_out
+        
+        # Generate magic link action buttons
+        action_buttons_html = ""
+        if notification_id:
+            from services.magic_links import generate_action_url
+            
+            approve_url = generate_action_url(notification_id, "approve")
+            reject_url = generate_action_url(notification_id, "reject")
+            dashboard_url = "https://ovela.dev/motel/notifications"
+            
+            action_buttons_html = f'''
+            <div style="margin: 32px 0; padding: 24px; background: #f9f9fa; border-radius: 12px; border: 1px solid #e5e5e7;">
+                <div style="font-size: 14px; font-weight: 700; color: #1d1d1f; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px;">Quick Actions</div>
+                
+                <div style="margin-bottom: 12px;">
+                    <a href="{approve_url}" style="display: inline-block; padding: 12px 24px; background: #22c55e; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">✅ Approve Booking</a>
+                </div>
+                
+                <div style="margin-bottom: 12px;">
+                    <a href="{reject_url}" style="display: inline-block; padding: 12px 24px; background: #ef4444; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">❌ Reject - Call Guest</a>
+                </div>
+                
+                <div>
+                    <a href="{dashboard_url}" style="display: inline-block; padding: 12px 24px; background: #3b82f6; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📝 Open Dashboard</a>
+                </div>
+                
+                <p style="margin-top: 16px; font-size: 12px; color: #86868b;">Links expire in 48 hours.</p>
+            </div>
+            
+            <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-top: 16px;">
+                <span style="font-size: 14px; color: #856404;">⚠️ <strong>Reminder:</strong> Add to your CRM after approving!</span>
+            </div>
+            '''
+        
+        html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
+    <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
+        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
+            <div style="padding: 40px 30px 30px; text-align: center; background: #8B2332;">
+                <div style="font-size: 32px; font-weight: 700; color: #ffffff;">The Lydoun</div>
+                <div style="font-size: 14px; color: #ffffff99; font-weight: 500;">New Booking Request</div>
+            </div>
+            
+            <div style="padding: 32px 30px;">
+                <div style="display: inline-block; padding: 6px 12px; background: #22c55e; color: #ffffff; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Approval Needed</div>
+                
+                <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">New booking from {guest_name}</h1>
+                
+                <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                    <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Guest:</strong> {guest_name}</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Phone:</strong> <a href="tel:{guest_phone}" style="color: #0066cc;">{guest_phone}</a></td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Room:</strong> {room_type.title()} Room</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-in:</strong> {check_in_fmt}</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-out:</strong> {check_out_fmt}</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Nights:</strong> {num_nights}</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 18px; color: #1d1d1f; font-weight: 700;"><strong>Total:</strong> ${total_amount}</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 13px; color: #86868b;">Ref: {booking_reference}</td></tr>
+                    </table>
+                </div>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="tel:{guest_phone}" style="display: inline-block; padding: 14px 28px; background-color: #8B2332; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call {guest_name}</a>
+                </div>
+                
+                {action_buttons_html}
+            </div>
+            
+            <div style="padding: 30px; text-align: center; background: #f9f9fa; border-top: 1px solid #f0f0f0;">
+                <p style="font-size: 12px; color: #86868b;">Powered by Ovela AI</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>'''
+        
+        sender = "Ovela Notifications <notifications@ovela.dev>"
+        return await self.send_email(owner_email, subject, html, from_email=sender)
+
+
     async def send_demo_alert(self, lead_details: dict):
         """Notify team about a new demo request."""
         name = lead_details.get("name", "Unknown")
@@ -423,6 +538,101 @@ class EmailService:
             
         sender = "Ovela System <notifications@ovela.dev>"
         return await self.send_email(recipients, subject, html, from_email=sender)
+
+
+    async def send_guest_booking_confirmation(
+        self,
+        guest_email: str,
+        guest_name: str,
+        booking_reference: str,
+        room_type: str,
+        check_in: str,
+        check_out: str,
+        num_nights: int,
+        total_amount: float
+    ):
+        """Send booking confirmation to guest when staff approves booking."""
+        if not guest_email:
+            logger.info("No guest email - skipping confirmation")
+            return False
+        
+        subject = f"✅ Booking Confirmed - The Lydoun Motel ({booking_reference})"
+        
+        # Format dates nicely
+        try:
+            ci = datetime.strptime(check_in, "%Y-%m-%d")
+            co = datetime.strptime(check_out, "%Y-%m-%d")
+            check_in_fmt = ci.strftime("%A, %d %B %Y")
+            check_out_fmt = co.strftime("%A, %d %B %Y")
+        except:
+            check_in_fmt = check_in
+            check_out_fmt = check_out
+        
+        html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
+    <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
+        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
+            <div style="padding: 40px 30px 30px; text-align: center; background: #8B2332;">
+                <div style="font-size: 32px; font-weight: 700; color: #ffffff;">The Lydoun</div>
+                <div style="font-size: 14px; color: #ffffff99; font-weight: 500;">Motel & Function Centre</div>
+            </div>
+            
+            <div style="padding: 32px 30px;">
+                <div style="display: inline-block; padding: 6px 12px; background: #22c55e; color: #ffffff; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Booking Confirmed</div>
+                
+                <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">Your booking is confirmed, {guest_name}!</h1>
+                
+                <p style="font-size: 16px; color: #86868b; margin-bottom: 24px;">Thank you for choosing The Lydoun Motel. We look forward to welcoming you!</p>
+                
+                <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                    <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
+                        <tr><td style="padding: 8px 0; font-size: 13px; color: #86868b;">Booking Reference</td></tr>
+                        <tr><td style="padding: 0 0 16px; font-size: 20px; color: #1d1d1f; font-weight: 700;">{booking_reference}</td></tr>
+                        
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Room:</strong> {room_type.title()} Room</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-in:</strong> {check_in_fmt}</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-out:</strong> {check_out_fmt}</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Nights:</strong> {num_nights}</td></tr>
+                        <tr><td style="padding: 16px 0 8px; font-size: 20px; color: #1d1d1f; font-weight: 700; border-top: 1px solid #e5e5e7;">Total: ${total_amount}</td></tr>
+                    </table>
+                </div>
+                
+                <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 16px; margin: 24px 0;">
+                    <p style="margin: 0; font-size: 14px; color: #856404;">
+                        <strong>Check-in time:</strong> From 2:00 PM<br>
+                        <strong>Check-out time:</strong> By 10:00 AM
+                    </p>
+                </div>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="tel:0357261788" style="display: inline-block; padding: 14px 28px; background-color: #8B2332; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call Us: (03) 5726 1788</a>
+                </div>
+                
+                <p style="font-size: 14px; color: #86868b; text-align: center;">
+                    30 High Street, Nagambie VIC 3608
+                </p>
+            </div>
+            
+            <div style="padding: 30px; text-align: center; background: #f9f9fa; border-top: 1px solid #f0f0f0;">
+                <p style="font-size: 12px; color: #86868b;">Powered by Ovela AI</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>'''
+        
+        sender = "The Lydoun Motel <notifications@ovela.dev>"
+        success = await self.send_email(guest_email, subject, html, from_email=sender)
+        
+        if success:
+            logger.info(f"Guest confirmation sent to {guest_email} ({booking_reference})")
+        
+        return success
 
 
 email_service = EmailService()

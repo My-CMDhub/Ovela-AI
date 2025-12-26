@@ -76,6 +76,10 @@ def get_booking_functions() -> list:
                     "notes": {
                         "type": "string",
                         "description": "Any special requests or notes"
+                    },
+                    "guest_email": {
+                        "type": "string",
+                        "description": "Guest email address for booking confirmation (optional)"
                     }
                 },
                 "required": ["guest_name", "check_in_date", "room_type"]
