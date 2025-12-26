@@ -274,7 +274,16 @@ class EmailService:
         sender = "Ovela Notifications <notifications@ovela.dev>"
         return await self.send_email(owner_email, subject, html, from_email=sender)
 
-    async def send_human_callback_request(self, owner_email: str, customer_name: str, customer_phone: str, reason: str, urgency: str = "medium", business_phone: str = None):
+    async def send_human_callback_request(
+        self, 
+        owner_email: str, 
+        customer_name: str, 
+        customer_phone: str, 
+        reason: str, 
+        urgency: str = "medium", 
+        business_phone: str = None,
+        notification_id: str = None  # NEW: for magic links
+    ):
         """Notify business owner that a customer wants to speak to a human."""
         if not owner_email:
             logger.warning("No owner email provided for callback request")
@@ -287,7 +296,7 @@ class EmailService:
         if urgency == "high":
             subject = f"🔴 URGENT: Customer Callback Request - {customer_name}"
         
-        # Build steps
+        # Build steps with copy-friendly formatting
         steps = [
             f"<strong>Customer:</strong> {customer_name}",
             f"<strong>Phone:</strong> <a href='tel:{customer_phone}' style='color: #0066cc;'>{customer_phone}</a>",
@@ -296,16 +305,81 @@ class EmailService:
             f"<strong>Requested:</strong> {datetime.now(MELBOURNE_TZ).strftime('%I:%M %p, %d %B')}"
         ]
         
-        html = self._base_template(
-            badge="Callback Requested",
-            title=f"{customer_name} wants to speak with you",
-            content="A customer has requested a callback. They've asked to speak with someone from your team directly. Please call them back within 30 minutes.",
-            business_name="Ovela Dashboard",
-            steps=steps,
-            button_text=f"Call {customer_name} Now",
-            button_url=f"tel:{customer_phone}",
-            closing_text="Tap the button above to call the customer directly from your phone."
-        )
+        # Generate magic link action buttons if we have a notification ID
+        action_buttons_html = ""
+        if notification_id:
+            from services.magic_links import generate_action_url
+            
+            complete_url = generate_action_url(notification_id, "complete")
+            dismiss_url = generate_action_url(notification_id, "dismiss")
+            dashboard_url = "https://ovela.dev/motel/notifications"
+            
+            action_buttons_html = f'''
+            <div style="margin: 32px 0; padding: 24px; background: #f9f9fa; border-radius: 12px; border: 1px solid #e5e5e7;">
+                <div style="font-size: 14px; font-weight: 700; color: #1d1d1f; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px;">Quick Actions</div>
+                
+                <div style="margin-bottom: 12px;">
+                    <a href="{complete_url}" style="display: inline-block; padding: 12px 24px; background: #22c55e; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">✅ Called Back - Mark Complete</a>
+                </div>
+                
+                <div style="margin-bottom: 12px;">
+                    <a href="{dismiss_url}" style="display: inline-block; padding: 12px 24px; background: #6b7280; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">❌ Dismiss</a>
+                </div>
+                
+                <div>
+                    <a href="{dashboard_url}" style="display: inline-block; padding: 12px 24px; background: #3b82f6; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📝 Open Dashboard</a>
+                </div>
+                
+                <p style="margin-top: 16px; font-size: 12px; color: #86868b;">Links expire in 48 hours. Use dashboard for changes after that.</p>
+            </div>
+            
+            <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-top: 16px;">
+                <span style="font-size: 14px; color: #856404;">⚠️ <strong>Reminder:</strong> Don't forget to update your CRM too!</span>
+            </div>
+            '''
+        
+        # Build custom HTML with action buttons
+        html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
+    <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
+        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
+            <div style="padding: 40px 30px 30px; text-align: center; background: #ffffff; border-bottom: 1px solid #f0f0f0;">
+                <div style="font-size: 32px; font-weight: 700; color: #8B2332;">The Lydoun</div>
+                <div style="font-size: 14px; color: #86868b; font-weight: 500;">Staff Notification</div>
+            </div>
+            
+            <div style="padding: 32px 30px;">
+                <div style="display: inline-block; padding: 6px 12px; background: #8B2332; color: #ffffff; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Callback Requested</div>
+                
+                <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">{customer_name} wants to speak with you</h1>
+                
+                <p style="font-size: 16px; color: #1d1d1f; margin-bottom: 20px;">A guest has requested a callback. Please call them back within 30 minutes.</p>
+                
+                <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                    <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
+                        {"".join([f'<tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;">{step}</td></tr>' for step in steps])}
+                    </table>
+                </div>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="tel:{customer_phone}" style="display: inline-block; padding: 14px 28px; background-color: #8B2332; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call {customer_name} Now</a>
+                </div>
+                
+                {action_buttons_html}
+            </div>
+            
+            <div style="padding: 30px; text-align: center; background: #f9f9fa; border-top: 1px solid #f0f0f0;">
+                <p style="font-size: 12px; color: #86868b;">Powered by Ovela AI</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>'''
         
         sender = "Ovela Notifications <notifications@ovela.dev>"
         return await self.send_email(owner_email, subject, html, from_email=sender)

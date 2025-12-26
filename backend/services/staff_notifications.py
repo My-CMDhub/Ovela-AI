@@ -20,11 +20,11 @@ class StaffNotificationService:
                                         urgency: str = "medium") -> bool:
         """
         Notify staff that a customer requested a callback.
-        Also saves to database for tracking.
+        Also saves to database for tracking, and includes magic link action buttons.
         """
         try:
             # 1. Save to database first (for tracking)
-            db_service.create_staff_notification(
+            db_result = db_service.create_staff_notification(
                 notification_type="callback_request",
                 customer_name=customer_name,
                 customer_phone=customer_phone,
@@ -32,7 +32,10 @@ class StaffNotificationService:
                 urgency=urgency
             )
             
-            # 2. Send email notification
+            # Get the notification ID for magic links
+            notification_id = db_result.get("$id") if db_result else None
+            
+            # 2. Send email notification with magic link action buttons
             recipient = self.default_staff_email
             
             success = await email_service.send_human_callback_request(
@@ -40,7 +43,8 @@ class StaffNotificationService:
                 customer_name=customer_name,
                 customer_phone=customer_phone,
                 reason=reason,
-                urgency=urgency
+                urgency=urgency,
+                notification_id=notification_id  # For magic link buttons
             )
             
             if success:

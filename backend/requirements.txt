@@ -12,3 +12,4 @@ twilio
 websocket-client
 websockets
 aiohttp
+PyJWT

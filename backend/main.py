@@ -2,7 +2,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
-from api import chat, dashboard, twilio, motel, voice, notifications
+from api import chat, dashboard, twilio, motel, voice, notifications, actions
 
 # Configure logging to show in console
 logging.basicConfig(
@@ -35,6 +35,7 @@ app.include_router(twilio.router, prefix="/twilio", tags=["twilio"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 app.include_router(motel.router, tags=["motel"])
 app.include_router(notifications.router, prefix="/api", tags=["notifications"])
+app.include_router(actions.router, prefix="/api", tags=["actions"])
 
 @app.get("/")
 def read_root():

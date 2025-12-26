@@ -1,12 +1,20 @@
 "use client";
 
-import { AuthProvider } from "@/contexts/AuthContext";
-import SelectDashboardProtected from "./SelectDashboardProtected";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 
+// DISABLED: General CRM selection page
+// Redirects directly to motel CRM
 export default function SelectDashboard() {
+    const router = useRouter();
+
+    useEffect(() => {
+        router.replace("/motel");
+    }, [router]);
+
     return (
-        <AuthProvider>
-            <SelectDashboardProtected />
-        </AuthProvider>
+        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+            <div className="text-gray-400">Redirecting...</div>
+        </div>
     );
 }
