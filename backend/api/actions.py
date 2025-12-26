@@ -101,12 +101,32 @@ async def complete_action(token: str = Query(...)):
     
     notification_id = payload.get("notification_id")
     
+    # Get current status to check if already processed
+    notifications = db_service.get_staff_notifications()
+    notification = next((n for n in notifications if n.get("$id") == notification_id), None)
+    
+    if not notification:
+        return HTMLResponse(content=error_page("Not Found", "This notification no longer exists. It may have been archived."), status_code=404)
+    
+    current_status = notification.get("status", "pending")
+    
+    # Check if already processed
+    if current_status == "completed":
+        return HTMLResponse(content=success_page(
+            "✅ Already Complete",
+            "This callback was already marked as completed. No action needed."
+        ))
+    
+    if current_status == "archived":
+        return HTMLResponse(content=error_page("Archived", "This notification was archived. Please use the dashboard to restore it if needed."), status_code=400)
+    
     # Update the notification
     result = db_service.update_staff_notification(notification_id, {"status": "completed"})
     
     if not result:
-        return HTMLResponse(content=error_page("Update Failed", "Could not update the notification. It may have already been processed."), status_code=400)
+        return HTMLResponse(content=error_page("Update Failed", "Could not update the notification. Please try the dashboard instead."), status_code=400)
     
+    logger.info(f"Magic link: Marked {notification_id} as completed")
     return HTMLResponse(content=success_page(
         "✅ Marked Complete",
         "The callback request has been marked as completed."
@@ -123,11 +143,34 @@ async def dismiss_action(token: str = Query(...)):
     
     notification_id = payload.get("notification_id")
     
+    # Get current status to check if already processed
+    notifications = db_service.get_staff_notifications()
+    notification = next((n for n in notifications if n.get("$id") == notification_id), None)
+    
+    if not notification:
+        return HTMLResponse(content=error_page("Not Found", "This notification no longer exists."), status_code=404)
+    
+    current_status = notification.get("status", "pending")
+    
+    # Check if already processed
+    if current_status == "dismissed":
+        return HTMLResponse(content=success_page(
+            "✅ Already Dismissed",
+            "This notification was already dismissed. No action needed."
+        ))
+    
+    if current_status == "completed":
+        return HTMLResponse(content=error_page("Already Completed", "This callback was already completed. You can't dismiss it now."), status_code=400)
+    
+    if current_status == "archived":
+        return HTMLResponse(content=error_page("Archived", "This notification was archived."), status_code=400)
+    
     result = db_service.update_staff_notification(notification_id, {"status": "dismissed"})
     
     if not result:
         return HTMLResponse(content=error_page("Update Failed", "Could not dismiss the notification."), status_code=400)
     
+    logger.info(f"Magic link: Dismissed {notification_id}")
     return HTMLResponse(content=success_page(
         "✅ Dismissed",
         "The notification has been dismissed."

@@ -2,6 +2,11 @@
 Staff Notifications API Router.
 Provides CRUD endpoints for managing staff notifications (callback requests, etc).
 Used by the dashboard for human-in-loop operations tracking.
+
+Production-ready with:
+- Status transition validation
+- Soft delete (archive, not hard delete)
+- Clear error messages for staff
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -12,6 +17,37 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+
+
+# ============ Status Transition Rules ============
+# Only allow valid state transitions to prevent data corruption
+
+VALID_TRANSITIONS = {
+    "pending": ["in_progress", "completed", "dismissed"],
+    "in_progress": ["completed", "dismissed", "pending"],  # Allow going back to pending if needed
+    "completed": ["pending"],  # Allow reopening if mistake
+    "dismissed": ["pending"],  # Allow reopening if mistake
+}
+
+def validate_status_transition(current_status: str, new_status: str) -> tuple[bool, str]:
+    """
+    Validate if a status transition is allowed.
+    Returns (is_valid, error_message)
+    """
+    if current_status == new_status:
+        return True, ""  # No change, always valid
+    
+    allowed = VALID_TRANSITIONS.get(current_status, [])
+    if new_status in allowed:
+        return True, ""
+    
+    # Provide helpful error message for staff
+    if current_status == "completed":
+        return False, f"This request is already completed. To make changes, first reopen it by setting status back to 'pending'."
+    elif current_status == "dismissed":
+        return False, f"This request was dismissed. To make changes, first reopen it by setting status back to 'pending'."
+    else:
+        return False, f"Cannot change from '{current_status}' to '{new_status}'. Allowed transitions: {', '.join(allowed)}"
 
 
 # ============ Request Models ============
@@ -36,31 +72,47 @@ async def create_notification(data: NotificationCreate):
     """
     Manually create a staff notification (e.g., from dashboard).
     """
+    # Validate required fields
+    if not data.customer_name or not data.customer_name.strip():
+        raise HTTPException(status_code=400, detail="Customer name is required")
+    if not data.customer_phone or not data.customer_phone.strip():
+        raise HTTPException(status_code=400, detail="Customer phone is required")
+    if not data.reason or not data.reason.strip():
+        raise HTTPException(status_code=400, detail="Reason is required")
+    if data.urgency not in ["low", "medium", "high"]:
+        raise HTTPException(status_code=400, detail="Urgency must be 'low', 'medium', or 'high'")
+    
     try:
         result = db_service.create_staff_notification(
             notification_type=data.notification_type,
-            customer_name=data.customer_name,
-            customer_phone=data.customer_phone,
-            reason=data.reason,
+            customer_name=data.customer_name.strip(),
+            customer_phone=data.customer_phone.strip(),
+            reason=data.reason.strip(),
             urgency=data.urgency
         )
         
         if not result:
-            raise HTTPException(status_code=500, detail="Failed to create notification")
+            raise HTTPException(status_code=500, detail="Failed to create notification. Please try again.")
         
+        logger.info(f"Created notification for {data.customer_name} ({data.notification_type})")
         return {"success": True, "notification": result}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating notification: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again or contact support.")
+
 
 @router.get("")
 async def list_notifications(
     status: Optional[str] = None,
     type: Optional[str] = None,
-    limit: int = 50
+    limit: int = 50,
+    include_archived: bool = False
 ):
     """
     List all staff notifications with optional filters.
+    By default, excludes archived (soft-deleted) notifications.
     """
     try:
         notifications = db_service.get_staff_notifications(
@@ -68,10 +120,15 @@ async def list_notifications(
             notification_type=type,
             limit=limit
         )
+        
+        # Filter out archived unless explicitly requested
+        if not include_archived:
+            notifications = [n for n in notifications if n.get("status") != "archived"]
+        
         return {"notifications": notifications, "count": len(notifications)}
     except Exception as e:
         logger.error(f"Error listing notifications: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to load notifications. Please refresh the page.")
 
 
 @router.get("/{notification_id}")
@@ -82,56 +139,127 @@ async def get_notification(notification_id: str):
         notification = next((n for n in notifications if n.get("$id") == notification_id), None)
         
         if not notification:
-            raise HTTPException(status_code=404, detail="Notification not found")
+            raise HTTPException(status_code=404, detail="Notification not found. It may have been archived or doesn't exist.")
         
         return notification
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting notification: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to load notification. Please try again.")
 
 
 @router.patch("/{notification_id}")
 async def update_notification(notification_id: str, update: NotificationUpdate):
     """
     Update a notification (change status, add notes).
+    Enforces valid status transitions.
     """
     try:
+        # Get current notification to check status transition
+        notifications = db_service.get_staff_notifications()
+        current = next((n for n in notifications if n.get("$id") == notification_id), None)
+        
+        if not current:
+            raise HTTPException(status_code=404, detail="Notification not found. It may have been archived.")
+        
         data = {}
+        
+        # Validate status transition
         if update.status:
+            current_status = current.get("status", "pending")
+            is_valid, error_msg = validate_status_transition(current_status, update.status)
+            
+            if not is_valid:
+                raise HTTPException(status_code=400, detail=error_msg)
+            
             data["status"] = update.status
+        
+        # Allow notes update
         if update.staff_notes is not None:
             data["staff_notes"] = update.staff_notes
         
         if not data:
-            raise HTTPException(status_code=400, detail="No updates provided")
+            raise HTTPException(status_code=400, detail="No updates provided. Please specify status or notes to update.")
         
         result = db_service.update_staff_notification(notification_id, data)
         
         if not result:
-            raise HTTPException(status_code=404, detail="Notification not found or update failed")
+            raise HTTPException(status_code=500, detail="Update failed. Please try again.")
         
+        logger.info(f"Updated notification {notification_id}: {list(data.keys())}")
         return {"success": True, "notification": result}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error updating notification: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.")
 
 
 @router.delete("/{notification_id}")
 async def delete_notification(notification_id: str):
-    """Delete a notification."""
+    """
+    Soft delete (archive) a notification.
+    Sets status to 'archived' instead of hard deleting.
+    This preserves data for auditing and allows recovery if needed.
+    """
     try:
-        success = db_service.delete_staff_notification(notification_id)
+        # Get current notification
+        notifications = db_service.get_staff_notifications()
+        current = next((n for n in notifications if n.get("$id") == notification_id), None)
         
-        if not success:
-            raise HTTPException(status_code=404, detail="Notification not found or delete failed")
+        if not current:
+            raise HTTPException(status_code=404, detail="Notification not found. It may already be archived.")
         
-        return {"success": True, "message": "Notification deleted"}
+        # Don't allow archiving already-archived items
+        if current.get("status") == "archived":
+            raise HTTPException(status_code=400, detail="This notification is already archived.")
+        
+        # Soft delete: mark as archived instead of hard delete
+        result = db_service.update_staff_notification(notification_id, {
+            "status": "archived",
+            "staff_notes": f"{current.get('staff_notes', '')}\n[Archived by staff]".strip()
+        })
+        
+        if not result:
+            raise HTTPException(status_code=500, detail="Failed to archive. Please try again.")
+        
+        logger.info(f"Archived notification {notification_id}")
+        return {"success": True, "message": "Notification archived. It can be recovered if needed."}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting notification: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error archiving notification: {e}")
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.")
+
+
+@router.post("/{notification_id}/restore")
+async def restore_notification(notification_id: str):
+    """
+    Restore an archived notification back to pending status.
+    """
+    try:
+        notifications = db_service.get_staff_notifications()
+        current = next((n for n in notifications if n.get("$id") == notification_id), None)
+        
+        if not current:
+            raise HTTPException(status_code=404, detail="Notification not found.")
+        
+        if current.get("status") != "archived":
+            raise HTTPException(status_code=400, detail="This notification is not archived.")
+        
+        result = db_service.update_staff_notification(notification_id, {
+            "status": "pending",
+            "staff_notes": f"{current.get('staff_notes', '')}\n[Restored by staff]".strip()
+        })
+        
+        if not result:
+            raise HTTPException(status_code=500, detail="Failed to restore. Please try again.")
+        
+        logger.info(f"Restored notification {notification_id}")
+        return {"success": True, "message": "Notification restored to pending status."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error restoring notification: {e}")
+        raise HTTPException(status_code=500, detail="Something went wrong. Please try again.")

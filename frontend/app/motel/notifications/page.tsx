@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Phone, Clock, User, RefreshCw, Trash2, CheckCircle, XCircle, MessageSquare } from "lucide-react";
+import { Phone, Clock, User, RefreshCw, Trash2, CheckCircle, XCircle, MessageSquare, Plus } from "lucide-react";
 
 interface StaffNotification {
     $id: string;
@@ -29,6 +29,17 @@ export default function NotificationsPage() {
     const [notesText, setNotesText] = useState("");
     const [editingId, setEditingId] = useState<string | null>(null);
 
+    // Create modal
+    const [showCreateModal, setShowCreateModal] = useState(false);
+    const [createForm, setCreateForm] = useState({
+        customer_name: "",
+        customer_phone: "",
+        reason: "",
+        urgency: "medium",
+        notification_type: "callback_request"
+    });
+    const [creating, setCreating] = useState(false);
+
     const fetchNotifications = async () => {
         setLoading(true);
         try {
@@ -49,6 +60,28 @@ export default function NotificationsPage() {
         fetchNotifications();
     }, [filter]);
 
+    const createNotification = async () => {
+        if (!createForm.customer_name || !createForm.customer_phone || !createForm.reason) {
+            alert("Please fill all required fields");
+            return;
+        }
+        setCreating(true);
+        try {
+            await fetch(`${API_URL}/api/notifications`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(createForm)
+            });
+            setShowCreateModal(false);
+            setCreateForm({ customer_name: "", customer_phone: "", reason: "", urgency: "medium", notification_type: "callback_request" });
+            fetchNotifications();
+        } catch (error) {
+            console.error("Failed to create:", error);
+        } finally {
+            setCreating(false);
+        }
+    };
+
     const updateStatus = async (id: string, status: string) => {
         setActionLoading(id);
         try {
@@ -66,7 +99,7 @@ export default function NotificationsPage() {
     };
 
     const deleteNotification = async (id: string) => {
-        if (!confirm("Delete this notification?")) return;
+        if (!confirm("Archive this notification? You can restore it later if needed.")) return;
         setActionLoading(id);
         try {
             await fetch(`${API_URL}/api/notifications/${id}`, { method: "DELETE" });
@@ -145,13 +178,22 @@ export default function NotificationsPage() {
                     <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Staff Notifications</h1>
                     <p className="text-gray-500">Callback requests & human-in-loop operations</p>
                 </div>
-                <button
-                    onClick={fetchNotifications}
-                    className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 dark:text-black"
-                >
-                    <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                    Refresh
-                </button>
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => setShowCreateModal(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-[#8B2332] text-white rounded-lg hover:bg-[#6B1A26]"
+                    >
+                        <Plus className="w-4 h-4" />
+                        New Request
+                    </button>
+                    <button
+                        onClick={fetchNotifications}
+                        className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 dark:text-black"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                        Refresh
+                    </button>
+                </div>
             </div>
 
             {/* Filter Tabs */}
@@ -161,7 +203,7 @@ export default function NotificationsPage() {
                         key={status || "all"}
                         onClick={() => setFilter(status)}
                         className={`px-4 py-2 rounded-lg font-medium transition-colors ${filter === status
-                            ? "bg-indigo-600 text-white"
+                            ? "bg-[#8B2332] text-white"
                             : "bg-gray-100 text-gray-600 hover:bg-gray-200"
                             }`}
                     >
@@ -169,6 +211,77 @@ export default function NotificationsPage() {
                     </button>
                 ))}
             </div>
+
+            {/* Create Modal */}
+            {showCreateModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md shadow-xl">
+                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                            New Callback Request
+                        </h3>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Customer Name *</label>
+                                <input
+                                    type="text"
+                                    value={createForm.customer_name}
+                                    onChange={(e) => setCreateForm({ ...createForm, customer_name: e.target.value })}
+                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                    placeholder="John Smith"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone Number *</label>
+                                <input
+                                    type="tel"
+                                    value={createForm.customer_phone}
+                                    onChange={(e) => setCreateForm({ ...createForm, customer_phone: e.target.value })}
+                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                    placeholder="0412 345 678"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Reason *</label>
+                                <input
+                                    type="text"
+                                    value={createForm.reason}
+                                    onChange={(e) => setCreateForm({ ...createForm, reason: e.target.value })}
+                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                    placeholder="Room availability inquiry"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Urgency</label>
+                                <select
+                                    value={createForm.urgency}
+                                    onChange={(e) => setCreateForm({ ...createForm, urgency: e.target.value })}
+                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                                >
+                                    <option value="low">🟢 Low</option>
+                                    <option value="medium">🟡 Medium</option>
+                                    <option value="high">🔴 High</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div className="flex gap-3 justify-end mt-6">
+                            <button
+                                onClick={() => setShowCreateModal(false)}
+                                className="px-4 py-2 text-gray-600 hover:text-gray-800"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={createNotification}
+                                disabled={creating}
+                                className="flex items-center gap-2 px-4 py-2 bg-[#8B2332] text-white rounded-lg hover:bg-[#6B1A26] disabled:opacity-50"
+                            >
+                                {creating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                                Create
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Notifications List */}
             {loading ? (
@@ -280,7 +393,8 @@ export default function NotificationsPage() {
                                     <button
                                         onClick={() => deleteNotification(notif.$id)}
                                         disabled={actionLoading === notif.$id}
-                                        className="flex items-center gap-2 px-3 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 disabled:opacity-50"
+                                        title="Archive this notification"
+                                        className="flex items-center gap-2 px-3 py-2 bg-gray-200 text-gray-600 rounded-lg hover:bg-gray-300 disabled:opacity-50"
                                     >
                                         <Trash2 className="w-4 h-4" />
                                     </button>
