@@ -14,6 +14,7 @@ import {
     HelpCircle,
     Moon,
     Sun,
+    Bell,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -33,6 +34,7 @@ const navItems = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/dashboard/bookings", label: "Bookings", icon: Calendar },
     { href: "/dashboard/requests", label: "Requests", icon: ClipboardList, hasBadge: true },
+    { href: "/dashboard/notifications", label: "Notifications", icon: Bell },
     { href: "/dashboard/conversations", label: "Conversations", icon: MessageSquare },
     { href: "/dashboard/customers", label: "Customers", icon: Users },
     { href: "/dashboard/settings", label: "Settings", icon: Settings },

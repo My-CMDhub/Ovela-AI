@@ -4,13 +4,13 @@ Handles sending alerts and requests to staff members.
 """
 import logging
 from services.email import email_service
+from services.appwrite import db_service
 from core.config import settings
 
 logger = logging.getLogger(__name__)
 
 class StaffNotificationService:
     def __init__(self):
-        # In a real app, this might fetch staff from DB
         self.default_staff_email = settings.STAFF_NOTIFICATION_RECIPIENTS or "getnewone2022@gmail.com"
 
     async def notify_new_callback_request(self, 
@@ -20,12 +20,19 @@ class StaffNotificationService:
                                         urgency: str = "medium") -> bool:
         """
         Notify staff that a customer requested a callback.
+        Also saves to database for tracking.
         """
         try:
-            # We use the existing email service method
-            # In future, this could also send SMS, Slack, etc.
+            # 1. Save to database first (for tracking)
+            db_service.create_staff_notification(
+                notification_type="callback_request",
+                customer_name=customer_name,
+                customer_phone=customer_phone,
+                reason=reason,
+                urgency=urgency
+            )
             
-            # Determine best recipient (round-robin or blast)
+            # 2. Send email notification
             recipient = self.default_staff_email
             
             success = await email_service.send_human_callback_request(
@@ -39,7 +46,7 @@ class StaffNotificationService:
             if success:
                 logger.info(f"Callback request sent for {customer_name} ({customer_phone})")
             else:
-                logger.error(f"Failed to send callback request for {customer_name}")
+                logger.error(f"Failed to send callback email for {customer_name}")
                 
             return success
             
