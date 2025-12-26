@@ -21,7 +21,7 @@ export default function LoginPageContent() {
 
         try {
             await login(email, password);
-            router.push("/select");
+            router.push("/motel");
         } catch {
             setError("Invalid email or password");
         } finally {

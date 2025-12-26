@@ -14,6 +14,7 @@ import {
     X,
     LogOut,
     Phone,
+    Bell,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 
@@ -21,6 +22,8 @@ const navigation = [
     { name: "Dashboard", href: "/motel", icon: LayoutDashboard },
     { name: "Reservations", href: "/motel/reservations", icon: CalendarCheck },
     { name: "Guests", href: "/motel/guests", icon: Users },
+    { name: "Notifications", href: "/motel/notifications", icon: Bell },
+    { name: "Settings", href: "/motel/settings", icon: Settings },
 ];
 
 function MotelLayoutContent({ children }: { children: React.ReactNode }) {
@@ -140,14 +143,20 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                         {!collapsed && <span className="font-medium">Collapse</span>}
                     </button>
 
-                    {/* Back to Selection */}
+                    {/* Logout */}
                     <button
-                        onClick={() => router.push("/select")}
-                        className={`flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/10 hover:text-white transition-colors w-full
+                        onClick={async () => {
+                            try {
+                                const { account } = await import("@/lib/appwrite");
+                                await account.deleteSession("current");
+                            } catch { }
+                            window.location.href = "/login";
+                        }}
+                        className={`flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-red-500/20 hover:text-red-200 transition-colors w-full
                             ${collapsed ? "justify-center" : ""}`}
                     >
                         <LogOut className="w-5 h-5" />
-                        {!collapsed && <span className="font-medium">Switch Dashboard</span>}
+                        {!collapsed && <span className="font-medium">Log Out</span>}
                     </button>
 
                     {/* Powered by Ovela */}
