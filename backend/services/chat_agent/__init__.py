@@ -21,7 +21,8 @@ from .orchestrator import generate_response
 from .prompts import DEFAULT_SYSTEM_PROMPT, build_enhanced_prompt
 from .tools import TOOLS
 from .handlers import execute_tool
-from .meta_service import meta_service, MetaService
+from .handlers import execute_tool
+from services.meta import meta_service, MetaService
 
 __all__ = [
     # Main entry point
