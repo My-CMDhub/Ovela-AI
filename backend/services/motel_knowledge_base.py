@@ -380,12 +380,11 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
     """
     Look up an existing booking by guest name and optional verification.
     
-    For DEMO: Search by guest name only (simplified)
-    For PROD: Should verify with name + phone/email + reference number
+    Uses fuzzy matching for names and normalizes phone numbers from speech.
     
     Args:
-        guest_name: The guest's name (required)
-        phone: Guest's phone number (optional, for verification)
+        guest_name: The guest's name (required) - can include titles like "mister"
+        phone: Guest's phone number (optional) - can be spoken like "o four nine..."
         reference: Booking reference number (optional, for direct lookup)
     
     Returns:
@@ -393,6 +392,19 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
     """
     import httpx
     import os
+    
+    # Import text utilities for normalization
+    try:
+        from services.voice_agent.text_utils import (
+            normalize_phone_number,
+            normalize_guest_name,
+            fuzzy_name_match,
+        )
+    except ImportError:
+        # Fallback to basic normalization if utils not available
+        normalize_phone_number = lambda x: x.replace(" ", "")
+        normalize_guest_name = lambda x: x.lower().strip()
+        fuzzy_name_match = lambda a, b, t=0.6: normalize_guest_name(a) in normalize_guest_name(b) or normalize_guest_name(b) in normalize_guest_name(a)
     
     # Get Appwrite config from environment
     endpoint = os.getenv("APPWRITE_ENDPOINT")
@@ -405,6 +417,15 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
         "X-Appwrite-Project": project_id,
         "X-Appwrite-Key": api_key
     }
+    
+    # Normalize inputs
+    search_name = normalize_guest_name(guest_name)
+    search_phone = normalize_phone_number(phone) if phone else None
+    
+    # Log normalized values for debugging
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"🔍 Booking lookup: name='{guest_name}' -> '{search_name}', phone='{phone}' -> '{search_phone}'")
     
     try:
         # Fetch reservations from Appwrite
@@ -422,33 +443,43 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
             data = response.json()
             documents = data.get("documents", [])
             
-            # Search for matching booking
+            # Search for matching booking with fuzzy matching
             matching_bookings = []
-            search_name = guest_name.lower().strip()
             
             for doc in documents:
-                doc_name = (doc.get("guest_name") or "").lower().strip()
+                doc_name = doc.get("guest_name") or ""
+                doc_phone = normalize_phone_number(doc.get("guest_phone") or "")
+                doc_ref = doc.get("booking_reference", "")
                 
-                # Check for name match (partial matching for flexibility)
-                if search_name in doc_name or doc_name in search_name:
-                    # If reference provided, must match
-                    if reference:
-                        if doc.get("booking_reference", "").upper() != reference.upper():
-                            continue
-                    
-                    # If phone provided, should help narrow down
-                    if phone:
-                        doc_phone = (doc.get("guest_phone") or "").replace(" ", "")
-                        search_phone = phone.replace(" ", "")
-                        if search_phone not in doc_phone and doc_phone not in search_phone:
-                            continue
-                    
+                # Direct reference match takes priority
+                if reference and doc_ref.upper() == reference.upper():
+                    matching_bookings.append(doc)
+                    continue
+                
+                # Fuzzy name matching
+                if not fuzzy_name_match(search_name, doc_name):
+                    continue
+                
+                # If phone provided, verify it matches (partial match OK)
+                if search_phone:
+                    # Allow partial phone matching (last 6+ digits)
+                    if len(search_phone) >= 6 and len(doc_phone) >= 6:
+                        if search_phone[-6:] == doc_phone[-6:] or search_phone in doc_phone or doc_phone in search_phone:
+                            matching_bookings.append(doc)
+                    elif search_phone in doc_phone or doc_phone in search_phone:
+                        matching_bookings.append(doc)
+                else:
+                    # Name match without phone verification
                     matching_bookings.append(doc)
             
             if not matching_bookings:
+                # Provide helpful feedback
+                normalized_display = search_name.title()
                 return {
                     "found": False,
-                    "message": f"I couldn't find a booking under the name '{guest_name}'. Could you double-check the name you booked under? Or if you have a reference number, that would help."
+                    "searched_name": normalized_display,
+                    "searched_phone": search_phone,
+                    "message": f"I couldn't find a booking under the name '{normalized_display}'. Could you spell out your name for me, or provide a booking reference number?"
                 }
             
             if len(matching_bookings) > 1:
@@ -457,7 +488,7 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
                     "found": True,
                     "multiple": True,
                     "count": len(matching_bookings),
-                    "message": f"I found {len(matching_bookings)} bookings under that name. Could you provide your booking reference number or phone number to find the right one?"
+                    "message": f"I found {len(matching_bookings)} bookings that might match. Could you provide your booking reference number to find the right one?"
                 }
             
             # Single match - return booking details
@@ -478,6 +509,7 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
             }
             
     except Exception as e:
+        logger.error(f"Booking lookup error: {e}")
         return {
             "found": False,
             "message": "I'm having trouble looking that up right now. Please contact reception at (03) 5726 1788 for booking inquiries."

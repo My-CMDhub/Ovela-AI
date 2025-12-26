@@ -42,6 +42,7 @@ from .abuse_protection import AbuseProtection
 from .silence_detection import SilenceMonitor
 from .functions import get_booking_functions
 from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
+from .text_utils import prepare_for_tts, clean_tts_output
 
 logger = logging.getLogger(__name__)
 
@@ -405,21 +406,25 @@ class VoiceAgentHandler:
                     await self._inject_message(spam_result["warning"])
                     
         elif role == "assistant":
-            # Log with latency info
+            # Extract control signals and clean content for logging/transcript
+            clean_content, signals = prepare_for_tts(content)
+            
+            # Log clean content with latency info
             if self.ai_response_start_time:
                 latency_ms = int((time.time() - self.ai_response_start_time) * 1000)
-                logger.info(f"[AI]: {content} (Response latency: {latency_ms}ms)")
+                logger.info(f"[AI]: {clean_content} (Response latency: {latency_ms}ms)")
             else:
-                logger.info(f"[AI]: {content}")
+                logger.info(f"[AI]: {clean_content}")
             
+            # Save clean content to transcript (not raw with signals)
             self.transcript.append({
                 "role": "ai",
-                "text": content,
+                "text": clean_content,
                 "timestamp": time.strftime("%H:%M:%S")
             })
             
-            # Check for AI-initiated hangup signal
-            if "[[HANGUP]]" in content:
+            # Handle control signals that were extracted
+            if "[[HANGUP]]" in signals:
                 logger.info("📞 AI initiated hangup (Signal detected)")
                 await self._hangup_call()
     
