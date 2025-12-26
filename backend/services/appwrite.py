@@ -17,6 +17,7 @@ class AppwriteService:
         self.project_id = settings.APPWRITE_PROJECT_ID
         self.api_key = settings.APPWRITE_API_KEY
         self.db_id = "ovela_db"
+        self.motel_db_id = "6947b8300005f5863f96"  # Motel database for reservations + staff notifications
 
     def _make_request(self, method: str, path: str, data: dict = None, params: dict = None):
         """Direct HTTP request to Appwrite API."""
@@ -796,7 +797,7 @@ class AppwriteService:
             
             result = self._make_request(
                 "POST",
-                f"/databases/{self.db_id}/collections/staff_notifications/documents",
+                f"/databases/{self.motel_db_id}/collections/staff_notifications/documents",
                 data={"documentId": doc_id, "data": data}
             )
             logger.info(f"Created staff notification: {doc_id} - {notification_type}")
@@ -810,7 +811,7 @@ class AppwriteService:
         try:
             result = self._make_request(
                 "GET",
-                f"/databases/{self.db_id}/collections/staff_notifications/documents"
+                f"/databases/{self.motel_db_id}/collections/staff_notifications/documents"
             )
             notifications = result.get("documents", []) if result else []
             
@@ -839,7 +840,7 @@ class AppwriteService:
             
             result = self._make_request(
                 "PATCH",
-                f"/databases/{self.db_id}/collections/staff_notifications/documents/{notification_id}",
+                f"/databases/{self.motel_db_id}/collections/staff_notifications/documents/{notification_id}",
                 data={"data": data}
             )
             logger.info(f"Updated staff notification: {notification_id}")
@@ -851,7 +852,7 @@ class AppwriteService:
     def delete_staff_notification(self, notification_id: str) -> bool:
         """Delete a staff notification."""
         try:
-            url = f"{self.endpoint}/databases/{self.db_id}/collections/staff_notifications/documents/{notification_id}"
+            url = f"{self.endpoint}/databases/{self.motel_db_id}/collections/staff_notifications/documents/{notification_id}"
             headers = {
                 'X-Appwrite-Project': self.project_id,
                 'X-Appwrite-Key': self.api_key

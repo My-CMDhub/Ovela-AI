@@ -163,9 +163,14 @@ async def handle_create_booking(args: dict, user_phone: str, save_reservation_fn
     check_out = args.get("check_out_date", "")
     room_type = args.get("room_type", "queen")
     num_guests = args.get("num_guests", 1)
-    guest_phone = args.get("guest_phone", user_phone)
     guest_email = args.get("guest_email", "")  # Optional email for confirmation
     notes = args.get("notes", "")
+    
+    # Phone: Use provided phone, or fallback to Twilio caller ID
+    guest_phone = args.get("guest_phone", "") or user_phone
+    if guest_phone == "unknown" or not guest_phone:
+        # Still unknown - this shouldn't happen but handle gracefully
+        guest_phone = ""
     
     if not guest_name or not check_in:
         return {
