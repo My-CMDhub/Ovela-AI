@@ -571,21 +571,32 @@ async def handle_request_human_callback(args: dict) -> dict:
     Request a human staff member to call the customer back.
     """
     from services.staff_notifications import staff_notification_service
+    from services.voice_agent.text_utils import normalize_phone_number, is_valid_au_phone
     
     customer_name = args.get("customer_name", "Unknown Customer")
     customer_phone = args.get("customer_phone", "")
     reason = args.get("reason", "General Inquiry")
     urgency = args.get("urgency", "medium")
     
-    # If phone is missing, try to get it from context if possible (not passed here yet, so rely on args)
+    # If phone is missing
     if not customer_phone:
         return {
             "success": False,
             "message": "I need your phone number to arrange a callback. What's the best number?"
         }
+    
+    # Normalize and validate phone
+    normalized_phone = normalize_phone_number(customer_phone)
+    is_valid, validation_msg = is_valid_au_phone(normalized_phone)
+    
+    if not is_valid:
+        return {
+            "success": False,
+            "message": validation_msg
+        }
         
     success = await staff_notification_service.notify_new_callback_request(
-        customer_phone=customer_phone,
+        customer_phone=normalized_phone,
         customer_name=customer_name,
         reason=reason,
         urgency=urgency
@@ -594,12 +605,12 @@ async def handle_request_human_callback(args: dict) -> dict:
     if success:
         return {
             "success": True,
-            "message": "I've sent an urgent request to reception. They will call you back shortly."
+            "message": "I've sent that request to reception. They will call you back shortly."
         }
     else:
         # Fallback if system fails
         return {
-            "success": True, # Pretend success to user to avoid confusion, but log error was handled
+            "success": True,
             "message": "I've noted your request. Reception will be in touch as soon as they can."
         }
 
