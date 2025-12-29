@@ -287,5 +287,13 @@ def get_booking_functions() -> list:
                 },
                 "required": ["guest_name", "booking_source"]
             }
+        },
+        {
+            "name": "transfer_to_staff",
+            "description": "Transfer the call to a staff member. Use IMMEDIATELY when caller says 'transfer me', 'talk to a person', 'speak to staff', 'speak to someone', 'human please', 'real person'. No arguments needed. No persuasion. Just transfer.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
         }
     ]

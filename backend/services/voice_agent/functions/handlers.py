@@ -504,11 +504,24 @@ async def handle_lookup_booking(args: dict, caller_id: str = None) -> dict:
 async def handle_report_missing_booking(args: dict) -> dict:
     """Report a missing booking to staff."""
     from services.staff_notifications import staff_notification_service
+    from services.voice_agent.text_utils import normalize_phone_number, is_valid_au_phone
     
     name = args.get("guest_name", "Unknown")
     source = args.get("booking_source", "unknown")
     check_in = args.get("expected_check_in", "Unknown")
     phone = args.get("contact_phone", "")
+    
+    # Validate phone if provided
+    if phone:
+        normalized = normalize_phone_number(phone)
+        is_valid, error_msg = is_valid_au_phone(normalized)
+        if not is_valid:
+            return {
+                "success": False,
+                "needs_phone_correction": True,
+                "message": error_msg
+            }
+        phone = normalized  # Use cleaned version
     
     reason = f"MISSING BOOKING REPORT: Customer claims booked via {source}. Check-in: {check_in}"
     
@@ -529,6 +542,20 @@ async def handle_report_missing_booking(args: dict) -> dict:
             "success": False,
             "message": "I've noted your details. Please call reception at (03) 5726 1788 during business hours to resolve this."
         }
+
+
+async def handle_transfer_to_staff() -> dict:
+    """
+    Initiate call transfer to staff.
+    Returns a signal that the handler will use to execute Twilio transfer.
+    """
+    from core.config import settings
+    
+    return {
+        "action": "transfer",
+        "transfer_to": settings.STAFF_PHONE_NUMBER,
+        "message": "Sure, I'll transfer you to our team now. Please hold."
+    }
 
 
 # =============================================================================
@@ -620,6 +647,10 @@ class FunctionDispatcher:
                     args["contact_phone"] = self.user_phone
                 return await handle_report_missing_booking(args)
             
+            # Call Transfer
+            elif function_name == "transfer_to_staff":
+                return await handle_transfer_to_staff()
+            
             # Abuse Protection
             elif function_name == "flag_off_topic":
                 reason = args.get("reason", "unspecified")
@@ -687,10 +718,23 @@ async def handle_update_guest_info(args: dict) -> dict:
     """
     import requests
     from core.config import settings
+    from services.voice_agent.text_utils import normalize_phone_number, is_valid_au_phone
     
     guest_name = args.get("guest_name", "")
     guest_phone = args.get("guest_phone", "")
     guest_email = args.get("guest_email", "")
+    
+    # Validate and normalize phone if provided
+    if guest_phone:
+        normalized = normalize_phone_number(guest_phone)
+        is_valid, error_msg = is_valid_au_phone(normalized)
+        if not is_valid:
+            return {
+                "success": False,
+                "needs_phone_correction": True,
+                "message": error_msg
+            }
+        guest_phone = normalized  # Use cleaned version
     
     logger.info(f"📝 Updated guest info: {guest_name}, {guest_phone}, {guest_email}")
     

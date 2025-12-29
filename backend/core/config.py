@@ -39,6 +39,10 @@ class Settings(BaseSettings):
 
     # Deepgram
     DEEPGRAM_API_KEY: str = ""
+    
+    # Call Transfer Settings
+    STAFF_PHONE_NUMBER: str = "+61493291626"  # Reception for call transfers
+    TRANSFER_TIMEOUT: int = 30  # Seconds before fallback to AI
 
     class Config:
         case_sensitive = True

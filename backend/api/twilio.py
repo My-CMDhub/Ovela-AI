@@ -188,3 +188,39 @@ I'll forward your request to the team and they'll confirm your booking! 💅"""
         logger.info(f"ℹ️ Call was answered - no WhatsApp message sent")
     
     return {"status": "ok"}
+
+
+@router.post("/transfer-status")
+async def handle_transfer_status(
+    CallSid: str = Form(...),
+    From: str = Form(...),
+    DialCallStatus: str = Form(default=None),
+    DialCallDuration: str = Form(default="0")
+):
+    """
+    Handle transfer result callback.
+    
+    DialCallStatus values:
+    - "completed": Staff answered and conversation ended
+    - "no-answer": Staff didn't answer within timeout
+    - "busy": Staff line was busy
+    - "failed": Call failed to connect
+    """
+    logger.info(f"📞 Transfer status: {CallSid} - DialCallStatus: {DialCallStatus}")
+    
+    if DialCallStatus == "completed":
+        # Transfer succeeded, call ended normally
+        logger.info(f"✅ Transfer completed successfully for {From}")
+        return Response(content="<Response><Hangup/></Response>", media_type="application/xml")
+    
+    # Transfer failed - return caller to AI
+    logger.info(f"⚠️ Transfer failed ({DialCallStatus}) - returning to AI for {From}")
+    
+    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">Our staff are currently unavailable. Let me see how else I can help you.</Say>
+    <Redirect method="POST">/twilio/voice</Redirect>
+</Response>"""
+    
+    return Response(content=twiml, media_type="application/xml")
+

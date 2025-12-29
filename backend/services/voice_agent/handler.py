@@ -490,8 +490,26 @@ class VoiceAgentHandler:
         
         logger.info(f"🔧 Function call: {function_name}({function_args})")
         
+        # Inject acknowledgment for slow/database tools to avoid silence
+        SLOW_TOOLS = [
+            "report_missing_booking", 
+            "create_booking", 
+            "request_human_callback",
+            "lookup_booking"
+        ]
+        if function_name in SLOW_TOOLS:
+            await self._inject_message("Got it, just one moment...")
+        
         # Execute via dispatcher
         result = await self.function_dispatcher.execute(function_name, function_args)
+        
+        # Check for transfer signal
+        if result.get("action") == "transfer":
+            logger.info(f"📞 Transfer requested to {result.get('transfer_to')}")
+            await self._inject_message(result.get("message", "Transferring you now..."))
+            await asyncio.sleep(2)  # Let message play
+            await self._execute_twilio_transfer(result.get("transfer_to"))
+            return  # Don't send function response, call is being transferred
         
         # Check for hangup signal from flag_off_topic
         if result.get("should_hangup"):
@@ -689,6 +707,52 @@ class VoiceAgentHandler:
             logger.warning(f"Failed to send farewell: {e}")
         
         await self._hangup_call()
+    
+    async def _execute_twilio_transfer(self, transfer_to: str):
+        """
+        Execute Twilio call transfer using TwiML update.
+        
+        Uses <Dial> to connect caller to staff phone.
+        Falls back to AI if no answer within TRANSFER_TIMEOUT.
+        """
+        if not self.call_sid:
+            logger.warning("Cannot transfer: No Call SID")
+            await self._inject_message("I'm sorry, I couldn't complete the transfer. Let me take a message instead.")
+            return
+        
+        logger.info(f"📞 Executing transfer to {transfer_to}")
+        
+        try:
+            from twilio.twiml.voice_response import VoiceResponse, Dial
+            
+            # Build TwiML for transfer
+            twiml = VoiceResponse()
+            
+            # Dial staff with timeout
+            dial = Dial(
+                timeout=settings.TRANSFER_TIMEOUT,
+                caller_id=settings.TWILIO_PHONE_NUMBER,
+                action=f"{settings.BACKEND_URL}/twilio/transfer-status"
+            )
+            dial.number(transfer_to)
+            twiml.append(dial)
+            
+            # Fallback message if no answer (action callback handles this)
+            twiml.say("Our staff are currently unavailable. Let me see how else I can help you.")
+            twiml.redirect(f"{settings.BACKEND_URL}/twilio/voice")  # Return to AI
+            
+            # Update the live call with new TwiML
+            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            client.calls(self.call_sid).update(twiml=str(twiml))
+            
+            logger.info(f"✅ Call transfer initiated to {transfer_to}")
+            self.call_outcome = "transferred"
+            self.is_running = False  # Stop AI processing during transfer
+            
+        except Exception as e:
+            logger.error(f"Transfer failed: {e}")
+            await self._inject_message("I'm sorry, I couldn't complete the transfer. Let me take a message instead.")
+
     
     # =========================================================================
     # DATABASE & CLEANUP
