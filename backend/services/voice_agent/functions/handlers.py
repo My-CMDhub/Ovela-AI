@@ -494,7 +494,41 @@ async def handle_lookup_booking(args: dict, caller_id: str = None) -> dict:
             "message": f"Found it! You have a {booking.get('room_type', 'room')} booked from {booking.get('check_in')} to {booking.get('check_out')} for {booking.get('num_guests')} guests. Your total is ${booking.get('total_amount')}. Reference: {booking.get('reference')}"
         }
     
-    return result
+    # Not found - guide the AI to ask about source
+    return {
+        "found": False,
+        "message": "I couldn't find a booking under that name. To help me track it down, did you book directly at the desk (walk-in), through a website, or over the phone?"
+    }
+
+
+async def handle_report_missing_booking(args: dict) -> dict:
+    """Report a missing booking to staff."""
+    from services.staff_notifications import staff_notification_service
+    
+    name = args.get("guest_name", "Unknown")
+    source = args.get("booking_source", "unknown")
+    check_in = args.get("expected_check_in", "Unknown")
+    phone = args.get("contact_phone", "")
+    
+    reason = f"MISSING BOOKING REPORT: Customer claims booked via {source}. Check-in: {check_in}"
+    
+    success = await staff_notification_service.notify_new_callback_request(
+        customer_phone=phone or "Unknown",
+        customer_name=name,
+        reason=reason,
+        urgency="high"
+    )
+    
+    if success:
+        return {
+            "success": True,
+            "message": "I've sent an urgent report to the team with those details. They will check the records and call you back shortly to confirm."
+        }
+    else:
+        return {
+            "success": False,
+            "message": "I've noted your details. Please call reception at (03) 5726 1788 during business hours to resolve this."
+        }
 
 
 # =============================================================================
@@ -576,9 +610,15 @@ class FunctionDispatcher:
             elif function_name == "update_guest_info":
                 return await handle_update_guest_info(args)
             
-            # Human Handoff
+            # Human Handoff & Reporting
             elif function_name == "request_human_callback":
                 return await handle_request_human_callback(args)
+                
+            elif function_name == "report_missing_booking":
+                # Ensure phone is captured if not in args
+                if "contact_phone" not in args or not args["contact_phone"]:
+                    args["contact_phone"] = self.user_phone
+                return await handle_report_missing_booking(args)
             
             # Abuse Protection
             elif function_name == "flag_off_topic":

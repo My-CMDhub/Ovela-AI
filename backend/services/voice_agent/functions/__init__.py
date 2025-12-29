@@ -273,5 +273,19 @@ def get_booking_functions() -> list:
                 },
                 "required": ["customer_name", "customer_phone", "reason"]
             }
+        },
+        {
+            "name": "report_missing_booking",
+            "description": "Report a missing booking to staff. Use ONLY when: (1) You looked up a booking and found nothing, AND (2) The user claims they booked via 'Walk-in' (desk) or 'Website' (online) or 'Third Party'. Collect their details so staff can investigate manual records.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "guest_name": {"type": "string", "description": "Guest name"},
+                    "booking_source": {"type": "string", "enum": ["walk_in", "website", "ota", "other"], "description": "How they say they booked"},
+                    "expected_check_in": {"type": "string", "description": "Expected check-in date (optional)"},
+                    "contact_phone": {"type": "string", "description": "Phone number to reach them back"}
+                },
+                "required": ["guest_name", "booking_source"]
+            }
         }
     ]
