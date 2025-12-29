@@ -332,6 +332,24 @@ export function Hero() {
     return () => window.removeEventListener("keydown", handleEscape)
   }, [])
 
+  // Open modal when navigating to #demo (from pricing "Try AI Demo" button)
+  useEffect(() => {
+    const handleOpenDemo = () => {
+      setIsDemoOpen(true)
+    }
+
+    // Listen for custom event from other components
+    window.addEventListener("openDemoModal", handleOpenDemo)
+
+    // Also check for hash on mount (fallback)
+    if (window.location.hash === "#demo") {
+      setIsDemoOpen(true)
+      window.history.replaceState(null, "", window.location.pathname)
+    }
+
+    return () => window.removeEventListener("openDemoModal", handleOpenDemo)
+  }, [])
+
 
   return (
     <section className="relative min-h-screen flex items-center justify-center pt-20 pb-12 overflow-hidden">
@@ -559,7 +577,7 @@ export function Hero() {
                       d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
                     />
                   </svg>
-                  app.Ovela.dev / dashboard
+                  ovela.dev/dashboard
                 </div>
               </div>
               <div className="flex items-center gap-2">

@@ -1,35 +1,8 @@
 "use client"
 
 import { motion } from "framer-motion"
-import { Check } from "lucide-react"
+import { Check, Shield, Zap, Users } from "lucide-react"
 import Link from "next/link"
-
-const plans = [
-  {
-    name: "Starter",
-    description: "Perfect for solo businesses",
-    features: [
-      "Unlimited AI calls answered",
-      "Automated booking & SMS confirmations",
-      "Calendar sync (Google, Outlook)",
-      "Daily call summary email",
-      "1 phone line",
-    ],
-  },
-  {
-    name: "Pro",
-    description: "For growing service businesses",
-    features: [
-      "Everything in Starter",
-      "CRM integration (ServiceM8, HubSpot)",
-      "Multiple phone lines",
-      "Priority support",
-      "Advanced call analytics",
-      "Custom AI voice & responses",
-    ],
-    featured: true,
-  },
-]
 
 export function Pricing() {
   return (
@@ -41,113 +14,167 @@ export function Pricing() {
       </div>
 
       <div className="max-w-4xl mx-auto relative z-10">
+        {/* Header */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.6, ease: "easeOut" }}
-          className="text-center mb-20"
+          className="text-center mb-16"
         >
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-accent/10 text-accent text-xs font-medium tracking-wider uppercase mb-6 border border-accent/20">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
-            </span>
-            Limited Intake
-          </div>
-          <h2 className="font-serif text-4xl md:text-5xl tracking-tight mb-6">Exclusive Pilot Program</h2>
+          <h2 className="font-serif text-4xl md:text-5xl tracking-tight mb-6">
+            Simple, Transparent Pricing
+          </h2>
           <p className="text-muted-foreground text-lg max-w-2xl mx-auto leading-relaxed">
-            Experience the power of Ovela AI with <strong className="text-foreground">zero risk</strong>. We are onboarding a limited number of founding partners this month to ensure maximum success.
+            Our AI receptionist uses a straightforward two-part pricing structure.
+            No hidden fees. No surprises.
           </p>
         </motion.div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Standard Access */}
+        {/* Pricing Structure Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-16">
+          {/* One-Time Setup */}
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
             transition={{ duration: 0.6, ease: "easeOut" }}
-            className="p-8 rounded-3xl border border-border/50 bg-background/50 backdrop-blur-sm hover:border-border transition-colors duration-300"
+            className="p-8 rounded-3xl border border-border/50 bg-background/50 backdrop-blur-sm"
           >
-            <h3 className="text-2xl font-serif mb-2">Standard Access</h3>
-            <p className="text-sm text-muted-foreground mb-8">Perfect for independent service businesses ready to automate.</p>
+            <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mb-6">
+              <Zap className="w-6 h-6 text-accent" />
+            </div>
+            <h3 className="text-2xl font-serif mb-3">One-Time Setup Fee</h3>
+            <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+              A single onboarding payment that covers everything needed to get your AI receptionist live.
+            </p>
 
-            <ul className="space-y-4 mb-10">
-              <li className="flex items-center gap-3">
-                <div className="w-5 h-5 rounded-full bg-accent/10 flex items-center justify-center shrink-0">
-                  <Check className="w-3 h-3 text-accent" />
-                </div>
-                <span className="text-sm font-medium text-foreground">30-Day Performance Pilot (No Cost)</span>
+            {/* 7-Day Trial Highlight */}
+            <div className="mb-6 p-3 rounded-xl bg-accent/10 border border-accent/20">
+              <p className="text-sm text-accent font-medium">✨ 7-Day Free Trial Included</p>
+              <p className="text-xs text-muted-foreground mt-1">Test after setup. Cancel if not satisfied.</p>
+            </div>
+
+            <ul className="space-y-3">
+              <li className="flex items-start gap-3">
+                <Check className="w-4 h-4 text-accent mt-0.5 shrink-0" />
+                <span className="text-sm text-foreground/80">Dedicated phone number setup</span>
               </li>
-              <li className="flex items-center gap-3">
-                <Check className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Unlimited AI call answering</span>
+              <li className="flex items-start gap-3">
+                <Check className="w-4 h-4 text-accent mt-0.5 shrink-0" />
+                <span className="text-sm text-foreground/80">AI configuration for your business</span>
               </li>
-              <li className="flex items-center gap-3">
-                <Check className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">White-Glove Setup Included</span>
+              <li className="flex items-start gap-3">
+                <Check className="w-4 h-4 text-accent mt-0.5 shrink-0" />
+                <span className="text-sm text-foreground/80">Staff workflow alignment</span>
               </li>
-              <li className="flex items-center gap-3">
-                <Check className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Daily call & booking summary</span>
+              <li className="flex items-start gap-3">
+                <Check className="w-4 h-4 text-accent mt-0.5 shrink-0" />
+                <span className="text-sm text-foreground/80">Training & onboarding session</span>
               </li>
             </ul>
-
-            <Link
-              href="#contact"
-              className="block text-center py-4 rounded-full text-sm font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-all"
-            >
-              Request Invitation
-            </Link>
           </motion.div>
 
-          {/* Priority Access */}
+          {/* Monthly Subscription */}
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
-            transition={{ duration: 0.6, ease: "easeOut", delay: 0.2 }}
-            className="relative p-8 rounded-3xl border border-primary/20 bg-primary/5 backdrop-blur-sm"
+            transition={{ duration: 0.6, ease: "easeOut", delay: 0.15 }}
+            className="p-8 rounded-3xl border border-primary/20 bg-primary/5 backdrop-blur-sm"
           >
-            <div className="absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1 bg-primary text-primary-foreground text-xs font-bold uppercase tracking-wider rounded-full shadow-lg">
-              Founding Partner Slot
+            <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-6">
+              <Users className="w-6 h-6 text-primary" />
             </div>
+            <h3 className="text-2xl font-serif mb-3">Monthly Subscription</h3>
+            <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
+              Ongoing monthly fee that keeps your AI receptionist running and improving.
+            </p>
 
-            <h3 className="text-2xl font-serif mb-2">Priority Access</h3>
-            <p className="text-sm text-muted-foreground mb-8">For growing businesses requiring dedicated support.</p>
-
-            <ul className="space-y-4 mb-10">
-              <li className="flex items-center gap-3">
-                <div className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
-                  <Check className="w-3 h-3 text-primary" />
-                </div>
-                <span className="text-sm font-medium text-foreground">Priority Onboarding Slot</span>
+            <ul className="space-y-3">
+              <li className="flex items-start gap-3">
+                <Check className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+                <span className="text-sm text-foreground/80">Unlimited AI call handling</span>
               </li>
-              <li className="flex items-center gap-3">
-                <div className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center shrink-0">
-                  <Check className="w-3 h-3 text-primary" />
-                </div>
-                <span className="text-sm font-medium text-foreground">Dedicated Success Manager</span>
+              <li className="flex items-start gap-3">
+                <Check className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+                <span className="text-sm text-foreground/80">Booking & confirmation automation</span>
               </li>
-              <li className="flex items-center gap-3">
-                <Check className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">CRM integrations (ServiceM8, HubSpot)</span>
+              <li className="flex items-start gap-3">
+                <Check className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+                <span className="text-sm text-foreground/80">System maintenance & updates</span>
               </li>
-              <li className="flex items-center gap-3">
-                <Check className="w-4 h-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">Custom AI voice & responses</span>
+              <li className="flex items-start gap-3">
+                <Check className="w-4 h-4 text-primary mt-0.5 shrink-0" />
+                <span className="text-sm text-foreground/80">Ongoing improvements & support</span>
               </li>
             </ul>
-
-            <Link
-              href="#contact"
-              className="block text-center py-4 rounded-full text-sm font-medium bg-primary text-primary-foreground hover:opacity-90 transition-all shadow-lg shadow-primary/20"
-            >
-              Request Invitation
-            </Link>
           </motion.div>
         </div>
+
+        {/* Pricing Depends On */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.6, ease: "easeOut", delay: 0.3 }}
+          className="text-center mb-12"
+        >
+          <p className="text-muted-foreground text-sm mb-4">
+            Your quote is tailored based on:
+          </p>
+          <div className="flex flex-wrap justify-center gap-3">
+            <span className="px-4 py-2 rounded-full bg-secondary/50 text-sm text-foreground/80">
+              Call volume
+            </span>
+            <span className="px-4 py-2 rounded-full bg-secondary/50 text-sm text-foreground/80">
+              Business size
+            </span>
+            <span className="px-4 py-2 rounded-full bg-secondary/50 text-sm text-foreground/80">
+              Required integrations
+            </span>
+          </div>
+        </motion.div>
+
+        {/* Trust Line + CTA */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ duration: 0.6, ease: "easeOut", delay: 0.4 }}
+          className="text-center"
+        >
+          {/* Trust Statement */}
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent/10 text-accent text-sm font-medium mb-8 border border-accent/20">
+            <Shield className="w-4 h-4" />
+            <span>You'll know your exact costs before anything is charged</span>
+          </div>
+
+          {/* CTA */}
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent("openDemoModal"))
+                // Scroll to top so modal is visible
+                window.scrollTo({ top: 0, behavior: "smooth" })
+              }}
+              className="px-8 py-4 rounded-full text-sm font-medium bg-primary text-primary-foreground hover:opacity-90 transition-all shadow-lg shadow-primary/20 cursor-pointer"
+            >
+              Try AI Demo
+            </button>
+            <Link
+              href="#contact"
+              className="px-8 py-4 rounded-full text-sm font-medium bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-all"
+            >
+              Join Waitlist
+            </Link>
+          </div>
+
+          {/* Footer Line */}
+          <p className="mt-8 text-xs text-muted-foreground">
+            Transparent pricing. No hidden fees. No lock-in.
+          </p>
+        </motion.div>
       </div>
     </section>
   )

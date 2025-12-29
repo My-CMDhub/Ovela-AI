@@ -4,7 +4,7 @@ import type React from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
 
-// Conversation transcript with timing - Real, emotionally engaging dialogue
+// Conversation transcript
 const conversation = [
   { speaker: "ovela", text: "Hey there! Thanks for calling. This is Ovela - what can I help you with today?", duration: 3500 },
   { speaker: "user", text: "Oh hi! I've been trying to call all morning but kept getting voicemail...", duration: 3000 },
@@ -16,11 +16,10 @@ const conversation = [
   { speaker: "user", text: "No, that's it. You're a lifesaver!", duration: 2000 },
 ]
 
-// Brand colors - consistent pinkish tones
 const BRAND_GRADIENT = "linear-gradient(to bottom, #e8d5d0 0%, #dcc8c3 50%, #d4bdb8 100%)"
 const BRAND_GRADIENT_ANSWERED = "linear-gradient(to bottom, #d4bdb8 0%, #c9b0ab 50%, #bfa5a0 100%)"
 
-// iPhone-Style Split Waveform - Both colors visible, only active side animates
+// iPhone-Style Waveform
 function SplitWaveform({
   currentSpeaker,
   isActive,
@@ -30,109 +29,123 @@ function SplitWaveform({
   isActive: boolean
   currentText?: string
 }) {
-  const bars = 6 // 6 bars per side
+  const totalBars = 12 // Total bars in the waveform
 
-  // Calculate intensity based on text length (more words = more intense)
+  // Calculate intensity based on text length
   const textIntensity = currentText ? Math.min(currentText.length / 50, 1.5) : 1
 
   const isIdle = currentSpeaker === null
+  const isOvelaActive = currentSpeaker === "ovela" && isActive
+  const isUserActive = currentSpeaker === "user" && isActive
+
+  const baseColor = "#FFE066"
+  const ovelaColor = "#22C55E"
+  const userColor = "#FFCC33"
 
   return (
-    <div className="flex items-center gap-[1px] h-5">
-      {/* Green side (Ovela) - Left */}
-      <div className="flex items-center gap-[1.5px]">
-        {Array.from({ length: bars }).map((_, i) => {
-          const isOvelaActive = currentSpeaker === "ovela" && isActive
-          const baseHeight = 3
-          const maxHeight = 12 * textIntensity
+    <div className="flex items-center gap-[1.5px] h-5">
+      {Array.from({ length: totalBars }).map((_, i) => {
+        const normalizedPosition = i / (totalBars - 1) // 0 to 1
 
-          return (
-            <motion.div
-              key={`green-${i}`}
-              className="w-[2px] rounded-full bg-green-400"
-              animate={
-                isIdle ? {
-                  // Idle: subtle breathing animation
-                  height: baseHeight + 1,
-                  opacity: 1,
-                } : isOvelaActive ? {
-                  // Active: full animation with physics
-                  height: [
-                    baseHeight + Math.sin(i * 0.5) * 1,
-                    maxHeight * (0.4 + Math.random() * 0.6),
-                    baseHeight + Math.cos(i * 0.6) * 2,
-                    maxHeight * (0.5 + Math.random() * 0.5),
-                    baseHeight + Math.sin(i * 0.5) * 1,
-                  ],
-                  opacity: 1,
-                } : {
-                  height: baseHeight,
-                  opacity: 1,
-                }
+        const idleHeight = 3
+
+        let activeHeight = idleHeight
+        let barColor = baseColor
+        let animationDelay = 0
+        let shouldAnimate = false
+
+        if (isOvelaActive) {
+          const greenZoneEnd = 8
+
+          if (i < greenZoneEnd) {
+            barColor = ovelaColor
+            const positionInGreen = i / greenZoneEnd
+            const intensity = 1 - (positionInGreen * 0.3)
+            activeHeight = idleHeight + (10 * intensity * textIntensity)
+            animationDelay = i * 0.025
+            shouldAnimate = true
+          } else if (i === greenZoneEnd) {
+            barColor = "#7DD87D"
+            activeHeight = idleHeight + 3
+            shouldAnimate = true
+          } else {
+            barColor = baseColor
+            activeHeight = idleHeight + 1
+            shouldAnimate = true
+          }
+        } else if (isUserActive) {
+          const yellowZoneStart = 4
+
+          if (i >= yellowZoneStart) {
+            barColor = userColor
+            const positionInYellow = (i - yellowZoneStart) / (totalBars - yellowZoneStart)
+            const intensity = 0.5 + (positionInYellow * 0.5)
+            activeHeight = idleHeight + (10 * intensity * textIntensity)
+            animationDelay = (totalBars - i) * 0.025
+            shouldAnimate = true
+          } else if (i === yellowZoneStart - 1) {
+            barColor = "#FFD94D"
+            activeHeight = idleHeight + 3
+            shouldAnimate = true
+          } else {
+            barColor = baseColor
+            activeHeight = idleHeight + 1
+            shouldAnimate = true
+          }
+        }
+
+        const isInActiveZone = isOvelaActive
+          ? i < 8
+          : isUserActive
+            ? i >= 4
+            : false
+
+        return (
+          <motion.div
+            key={`bar-${i}`}
+            className="w-[2px] rounded-full"
+            style={{
+              backgroundColor: isIdle ? baseColor : barColor
+            }}
+            animate={
+              isIdle ? {
+                height: idleHeight,
+                opacity: 0.9,
+              } : shouldAnimate ? {
+                height: isInActiveZone ? [
+                  idleHeight,
+                  activeHeight * (0.6 + Math.random() * 0.4),
+                  activeHeight * (0.4 + Math.random() * 0.6),
+                  activeHeight * (0.7 + Math.random() * 0.3),
+                  idleHeight,
+                ] : [
+                  idleHeight,
+                  idleHeight + 1,
+                  idleHeight + 0.5,
+                  idleHeight + 1,
+                  idleHeight,
+                ],
+                opacity: 1,
+              } : {
+                height: idleHeight,
+                opacity: 0.9,
               }
-              transition={{
-                duration: isOvelaActive ? 0.6 + (i % 3) * 0.1 : 0.3,
-                repeat: isOvelaActive ? Infinity : 0,
-                ease: "easeInOut",
-                delay: i * 0.04,
-              }}
-            />
-          )
-        })}
-      </div>
-
-      {/* Orange side (User) - Right */}
-      <div className="flex items-center gap-[1.5px]">
-        {Array.from({ length: bars }).map((_, i) => {
-          const isUserActive = currentSpeaker === "user" && isActive
-          const baseHeight = 3
-          const maxHeight = 12 * textIntensity
-
-          // When idle, show green with yellow gradient at the end
-          const colorClass = isIdle
-            ? i >= bars - 2 ? "bg-yellow-400" : "bg-green-400"
-            : "bg-orange-400"
-
-          return (
-            <motion.div
-              key={`orange-${i}`}
-              className={`w-[2px] rounded-full ${colorClass}`}
-              animate={
-                isIdle ? {
-                  // Idle: subtle breathing, green with yellow gradient
-                  height: baseHeight + 1,
-                  opacity: i >= bars - 2 ? 0.8 : 1, // Yellow bars slightly dimmer for gradient effect
-                } : isUserActive ? {
-                  // Active: full animation with physics
-                  height: [
-                    baseHeight + Math.sin(i * 0.5) * 1,
-                    maxHeight * (0.4 + Math.random() * 0.6),
-                    baseHeight + Math.cos(i * 0.6) * 2,
-                    maxHeight * (0.5 + Math.random() * 0.5),
-                    baseHeight + Math.sin(i * 0.5) * 1,
-                  ],
-                  opacity: 1,
-                } : {
-                  // Inactive: static, full visibility
-                  height: baseHeight,
-                  opacity: 1,
-                }
-              }
-              transition={{
-                duration: isUserActive ? 0.6 + (i % 3) * 0.1 : 0.3,
-                repeat: isUserActive ? Infinity : 0,
-                ease: "easeInOut",
-                delay: i * 0.04,
-              }}
-            />
-          )
-        })}
-      </div>
+            }
+            transition={{
+              duration: isInActiveZone ? 0.5 + (i % 3) * 0.08 : 1.2,
+              repeat: shouldAnimate ? Infinity : 0,
+              ease: "easeInOut",
+              delay: animationDelay,
+            }}
+          />
+        )
+      })}
     </div>
   )
 }
 
-// Compact Dynamic Island with call info
+
+// Dynamic Island
 function DynamicIsland({
   isAnswered,
   callTime,
@@ -153,13 +166,20 @@ function DynamicIsland({
   return (
     <motion.div
       className="absolute top-[10px] left-1/2 -translate-x-1/2 z-26"
+      initial={{ scale: 0.8, opacity: 0 }}
       animate={{
         width: isAnswered ? 155 : 100,
         height: isAnswered ? 30 : 28,
+        scale: 1,
+        opacity: 1,
       }}
-      transition={{ duration: 0.4, ease: [0.32, 0.72, 0, 1] }}
+      transition={{
+        duration: 0.5,
+        ease: [0.32, 0.72, 0, 1],
+        scale: { duration: 0.4, ease: "easeOut" }
+      }}
     >
-      <div className="bg-black rounded-full h-full w-full flex items-center justify-between px-2.5 overflow-hidden">
+      <div className="bg-black rounded-full h-full w-full flex items-center justify-between px-3 overflow-hidden">
         {isAnswered ? (
           <>
             <div className="flex items-center gap-1.5">
@@ -168,12 +188,6 @@ function DynamicIsland({
               </svg>
               <span className="text-green-400 text-[10px] font-medium tabular-nums">{formatTime(callTime)}</span>
             </div>
-
-            <motion.div
-              className="w-[4px] h-[4px] rounded-full bg-yellow-400"
-              animate={{ opacity: [1, 0.4, 1] }}
-              transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
-            />
 
             <SplitWaveform
               currentSpeaker={currentSpeaker}
@@ -194,7 +208,7 @@ function DynamicIsland({
   )
 }
 
-// Glassmorphism Call Button with proper spacing
+// Call Button
 function CallButton({ icon, label, isEnd = false }: { icon: React.ReactNode; label: string; isEnd?: boolean }) {
   return (
     <button className="flex flex-col items-center gap-2 active:scale-95 transition-transform">
@@ -207,7 +221,7 @@ function CallButton({ icon, label, isEnd = false }: { icon: React.ReactNode; lab
   )
 }
 
-// External Floating Transcript with Speaker Label - Theme Adaptive & Responsive
+// Floating Transcript
 function ExternalTranscript({ text, speaker, isVisible }: { text: string; speaker: "ovela" | "user"; isVisible: boolean }) {
   const isOvela = speaker === "ovela"
 

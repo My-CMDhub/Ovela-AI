@@ -259,7 +259,15 @@ export function Contact() {
 
       if (nextVideo) {
         nextVideo.currentTime = 0
-        nextVideo.play()
+        // Wrap play() in async handler to catch autoplay rejection
+        const playNext = async () => {
+          try {
+            await nextVideo.play()
+          } catch (err) {
+            console.log('Video crossfade play prevented:', err)
+          }
+        }
+        playNext()
         setActiveVideo(activeVideo === 1 ? 2 : 1)
 
         // Reset transition flag after transition completes

@@ -11,8 +11,8 @@ const features = [
   },
   {
     icon: Database,
-    title: "CRM Integration",
-    description: "Syncs with ServiceM8, HubSpot, Salesforce—your data stays in your systems.",
+    title: "Works With Your Systems",
+    description: "Integrates with your existing booking and management tools. No forced migration. No disruption.",
   },
   {
     icon: Clock,
