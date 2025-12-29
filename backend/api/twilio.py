@@ -17,6 +17,36 @@ logger = logging.getLogger(__name__)
 DEFAULT_BUSINESS_ID = "default_business"
 
 
+@router.post("/voice")
+async def handle_voice_webhook(
+    CallSid: str = Form(...),
+    From: str = Form(...)
+):
+    """
+    Main voice webhook - connects caller to AI agent.
+    
+    This is used for:
+    1. Initial call routing (when configured as voice webhook)
+    2. Transfer fallback (when staff doesn't answer)
+    """
+    logger.info(f"📞 Voice webhook from {From}, CallSid: {CallSid}")
+    
+    # Return TwiML that connects to the AI stream
+    stream_url = f"wss://{settings.BACKEND_URL.replace('https://', '')}/api/voice/stream"
+    
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Stream url="{stream_url}">
+            <Parameter name="user_phone" value="{From}" />
+        </Stream>
+    </Connect>
+    <Say voice="Polly.Nicole">I'm sorry, we seem to have lost connection. Please call back. Goodbye!</Say>
+</Response>"""
+    
+    return Response(content=twiml, media_type="application/xml")
+
+
 @router.post("/incoming-call")
 async def handle_incoming_call(
     CallSid: str = Form(...),
