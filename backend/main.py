@@ -2,7 +2,13 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
-from api import chat, dashboard, twilio, motel, voice, notifications, actions
+from api import twilio, motel, voice, notifications, actions
+# NOTE: WhatsApp chat agent and dashboard were deleted
+# from api import chat, dashboard
+
+# Initialize New Relic BEFORE creating FastAPI app
+import newrelic.agent
+newrelic.agent.initialize('newrelic.ini')
 
 # Configure logging to show in console
 logging.basicConfig(
@@ -11,6 +17,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
+# Create FastAPI app (New Relic auto-instruments ASGI apps)
 app = FastAPI(title=settings.PROJECT_NAME)
 
 # CORS middleware for dashboard frontend
@@ -29,8 +36,9 @@ app.add_middleware(
 )
 
 # Include Routers
-app.include_router(chat.router, prefix="/webhooks", tags=["chat"])
-app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+# NOTE: WhatsApp chat agent and dashboard were deleted (frozen)
+# app.include_router(chat.router, prefix="/webhooks", tags=["chat"])
+# app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(twilio.router, prefix="/twilio", tags=["twilio"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 app.include_router(motel.router, tags=["motel"])

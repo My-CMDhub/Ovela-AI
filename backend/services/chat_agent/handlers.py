@@ -10,11 +10,27 @@ import logging
 
 from services.appwrite import db_service
 from services.email import email_service
-from services.customers import customer_service
-from services.bookings import booking_service
 
 logger = logging.getLogger(__name__)
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
+
+# NOTE: WhatsApp chat agent is frozen - these services were deleted
+# Adding stubs to prevent import errors
+class _StubBookingService:
+    def get_customer_bookings(self, *args, **kwargs):
+        return []
+    def check_rate_limit(self, *args, **kwargs):
+        return (True, "")
+
+class _StubCustomerService:
+    def _make_request(self, *args, **kwargs):
+        return None
+    def report_violation(self, *args, **kwargs):
+        return False
+
+booking_service = _StubBookingService()
+customer_service = _StubCustomerService()
+
 
 
 async def execute_tool(tool_name: str, tool_args: dict, customer_id: str = None, whatsapp_id: str = None) -> str:

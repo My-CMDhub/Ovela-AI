@@ -51,11 +51,12 @@ ABANDON_THRESHOLD = 25        # End call
 # =============================================================================
 ENVIRONMENT = "demo"  # Change to "production" for prod settings
 
-# Demo settings (stricter for testing)
+# Demo settings (stricter for testing - public demos)
 DEMO_CONFIG = {
     "context_pairs": 6,           # Conversation pairs to remember
-    "soft_warning_minutes": 5,    # Gentle "wrapping up" prompt
-    "hard_cap_minutes": 8,        # Maximum call duration
+    "soft_warning_minutes": 2,    # Gentle "wrapping up" prompt (2 min for demo)
+    "hard_cap_minutes": 3,        # Maximum call duration (3 min for demo)
+    "transfer_on_cap": False,     # Demo: Just hang up, don't transfer
     "off_topic_limit": 5,         # flag_off_topic calls before auto-hangup
     "human_escalation": False,    # No human escalation in demo
 }
@@ -65,6 +66,7 @@ PROD_CONFIG = {
     "context_pairs": 8,           # More context for pattern detection
     "soft_warning_minutes": 8,    # More time for complex bookings
     "hard_cap_minutes": 12,       # Higher limit with escalation
+    "transfer_on_cap": True,      # Production: Transfer to staff when cap reached
     "off_topic_limit": 5,         # Same threshold
     "human_escalation": True,     # Log for human follow-up
 }

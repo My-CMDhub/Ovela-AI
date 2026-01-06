@@ -2,7 +2,8 @@ from fastapi import APIRouter, Request, HTTPException, Query
 from core.config import settings
 from services.appwrite import db_service
 from services.chat_agent import meta_service, generate_response
-from services.customers import customer_service
+# NOTE: WhatsApp chat agent is frozen - customer_service was deleted
+# from services.customers import customer_service
 import json
 import logging
 

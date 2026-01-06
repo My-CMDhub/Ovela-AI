@@ -12,6 +12,7 @@ from core.config import settings
 from services.voice_agent import VoiceAgentHandler
 from services.appwrite import db_service
 from services.email import email_service
+from services.magic_links import generate_demo_approval_url, verify_action_token
 from rules.whitelist import is_whitelisted
 
 router = APIRouter()
@@ -29,24 +30,21 @@ class DemoRequest(BaseModel):
 @router.post("/demo-request")
 async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     """
-    Initiates an outbound call to the user for the demo.
+    Handles demo request from website form.
+    - Whitelisted phones: Immediate call (bypass approval)
+    - Regular phones: Creates pending lead, sends approval email to team
     """
     if not request.consent:
         raise HTTPException(status_code=400, detail="Consent required")
     
-    # Basic validation for +61 (already done in frontend, but good to double check)
-    if not request.phone.startswith("+61") and not request.phone.startswith("04"):
-         # Allow 04 replacement for testing if needed, or strict +61
-         pass
-
-    # Rate Limit Check
+    # Rate Limit Check (whitelisted phones bypass this)
     if not db_service.check_demo_limit(request.phone):
         raise HTTPException(
             status_code=429, 
-            detail="You have already requested a demo today. Please try again tomorrow."
+            detail="Thanks for your interest! You've already tried our demo today. Feel free to request another demo tomorrow, or contact us directly."
         )
     
-    # Create demo lead in database for tracking
+    # Create demo lead in database
     lead_id = None
     try:
         lead_doc = db_service.create_demo_lead(
@@ -61,46 +59,248 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     except Exception as e:
         logger.warning(f"Failed to create demo lead: {e}")
 
-    try:
-        # URL-encode the parameters to handle spaces and special characters
-        encoded_name = quote(request.name)
-        encoded_business = quote(request.business_name)
-        encoded_phone = quote(request.phone)
+    # ============================================================
+    # WHITELISTED PHONES: Immediate call (bypass approval)
+    # ============================================================
+    if is_whitelisted(request.phone):
+        logger.info(f"Whitelisted phone {request.phone} - immediate call")
+        try:
+            call = _trigger_demo_call(request.name, request.business_name, request.phone)
+            
+            if lead_id:
+                db_service.update_demo_lead(lead_id=lead_id, data={"status": "called", "call_sid": call.sid})
+            
+            return {"status": "success", "call_sid": call.sid, "message": "Calling you now..."}
+        except Exception as e:
+            logger.error(f"Failed to initiate call: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ============================================================
+    # REGULAR PHONES: Pending approval flow
+    # ============================================================
+    if lead_id:
+        # Update status to pending_approval
+        db_service.update_demo_lead(lead_id=lead_id, data={"status": "pending_approval"})
         
-        # Construct the TwiML URL with encoded parameters (including phone)
-        twiml_url = f"{settings.BACKEND_URL}/api/voice/twiml?name={encoded_name}&business={encoded_business}&phone={encoded_phone}"
+        # Generate magic links for approve/reject
+        extra_data = {"name": request.name, "phone": request.phone, "business": request.business_name}
+        approve_url = generate_demo_approval_url(lead_id, "demo-approve", extra_data)
+        reject_url = generate_demo_approval_url(lead_id, "demo-reject", extra_data)
         
-        call = twilio_client.calls.create(
-            to=request.phone,
-            from_=settings.TWILIO_PHONE_NUMBER,
-            url=twiml_url,
-            record=True # optional
+        # Send approval email to team in background
+        background_tasks.add_task(
+            email_service.send_demo_approval_request,
+            {
+                "name": request.name,
+                "business_name": request.business_name,
+                "phone": request.phone,
+                "created_at": datetime.now().isoformat(),
+                "approve_url": approve_url,
+                "reject_url": reject_url
+            }
         )
         
-        if lead_id:
-            try:
-                db_service.update_demo_lead(lead_id=lead_id, data={"call_sid": call.sid, "status": "called"})
-                logger.info(f"Updated demo lead {lead_id} status to 'called'")
-            except Exception as e:
-                logger.warning(f"Failed to update demo lead status: {e}")
-        
-        # Send email alert in background (ONLY for non-whitelisted numbers)
-        if not is_whitelisted(request.phone):
-            background_tasks.add_task(
-                email_service.send_demo_alert,
-                {
-                    "name": request.name,
-                    "business_name": request.business_name,
-                    "phone": request.phone,
-                    "created_at": datetime.now().isoformat()
-                }
-            )
-
-        return {"status": "success", "call_sid": call.sid, "message": "Calling you now..."}
+        logger.info(f"Demo request {lead_id} pending approval for {request.phone}")
     
+    return {
+        "status": "pending", 
+        "message": "Thanks! Your phone will ring shortly—keep it close."
+    }
+
+
+@router.get("/demo-approve")
+async def approve_demo(token: str, background_tasks: BackgroundTasks):
+    """
+    Approve a demo request via magic link.
+    Triggers the Twilio call to the user.
+    """
+    # Verify the magic link token
+    is_valid, payload, error_msg = verify_action_token(token)
+    
+    if not is_valid:
+        return HTMLResponse(
+            content=f"""
+            <html>
+            <head><title>Demo Approval</title></head>
+            <body style="font-family: system-ui; padding: 40px; text-align: center;">
+                <h1>⚠️ Link Invalid</h1>
+                <p>{error_msg}</p>
+            </body>
+            </html>
+            """,
+            status_code=400
+        )
+    
+    lead_id = payload.get("identifier")
+    extra = payload.get("extra", {})
+    phone = extra.get("phone")
+    name = extra.get("name", "there")
+    business = extra.get("business", "your business")
+    
+    if not phone:
+        return HTMLResponse(
+            content="""
+            <html>
+            <head><title>Demo Approval</title></head>
+            <body style="font-family: system-ui; padding: 40px; text-align: center;">
+                <h1>❌ Error</h1>
+                <p>Missing phone number in token. Please check the dashboard.</p>
+            </body>
+            </html>
+            """,
+            status_code=400
+        )
+    
+    # Check if already processed
+    try:
+        lead = db_service.get_demo_lead(lead_id)
+        if lead and lead.get("status") in ["called", "approved", "rejected"]:
+            status = lead.get("status")
+            return HTMLResponse(
+                content=f"""
+                <html>
+                <head><title>Demo Approval</title></head>
+                <body style="font-family: system-ui; padding: 40px; text-align: center;">
+                    <h1>ℹ️ Already Processed</h1>
+                    <p>This demo request was already {status}.</p>
+                </body>
+                </html>
+                """
+            )
     except Exception as e:
-        logger.error(f"Failed to initiate call: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(f"Could not check lead status: {e}")
+    
+    # Trigger the call
+    try:
+        call = _trigger_demo_call(name, business, phone)
+        
+        # Update lead status
+        db_service.update_demo_lead(lead_id=lead_id, data={
+            "status": "called",
+            "call_sid": call.sid,
+            "approved_at": datetime.now().isoformat()
+        })
+        
+        logger.info(f"Demo approved and call triggered for {phone}")
+        
+        return HTMLResponse(
+            content=f"""
+            <html>
+            <head><title>Demo Approved</title></head>
+            <body style="font-family: system-ui; padding: 40px; text-align: center;">
+                <h1>✅ Demo Approved!</h1>
+                <p>Calling <strong>{name}</strong> at <strong>{phone}</strong> now.</p>
+                <p style="color: #666; margin-top: 20px;">You can close this tab.</p>
+            </body>
+            </html>
+            """
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to trigger demo call: {e}")
+        return HTMLResponse(
+            content=f"""
+            <html>
+            <head><title>Demo Approval</title></head>
+            <body style="font-family: system-ui; padding: 40px; text-align: center;">
+                <h1>❌ Call Failed</h1>
+                <p>Could not initiate call: {str(e)}</p>
+                <p>Please try calling manually or check the logs.</p>
+            </body>
+            </html>
+            """,
+            status_code=500
+        )
+
+
+@router.get("/demo-reject")
+async def reject_demo(token: str):
+    """
+    Reject a demo request via magic link.
+    Updates lead status to rejected.
+    """
+    # Verify the magic link token
+    is_valid, payload, error_msg = verify_action_token(token)
+    
+    if not is_valid:
+        return HTMLResponse(
+            content=f"""
+            <html>
+            <head><title>Demo Rejection</title></head>
+            <body style="font-family: system-ui; padding: 40px; text-align: center;">
+                <h1>⚠️ Link Invalid</h1>
+                <p>{error_msg}</p>
+            </body>
+            </html>
+            """,
+            status_code=400
+        )
+    
+    lead_id = payload.get("identifier")
+    extra = payload.get("extra", {})
+    name = extra.get("name", "User")
+    
+    # Update lead status
+    try:
+        db_service.update_demo_lead(lead_id=lead_id, data={
+            "status": "rejected",
+            "rejected_at": datetime.now().isoformat()
+        })
+        
+        logger.info(f"Demo rejected for lead {lead_id}")
+        
+        return HTMLResponse(
+            content=f"""
+            <html>
+            <head><title>Demo Rejected</title></head>
+            <body style="font-family: system-ui; padding: 40px; text-align: center;">
+                <h1>🚫 Demo Rejected</h1>
+                <p>Request from <strong>{name}</strong> has been declined.</p>
+                <p style="color: #666; margin-top: 20px;">You can close this tab.</p>
+            </body>
+            </html>
+            """
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to reject demo: {e}")
+        return HTMLResponse(
+            content=f"""
+            <html>
+            <head><title>Demo Rejection</title></head>
+            <body style="font-family: system-ui; padding: 40px; text-align: center;">
+                <h1>❌ Error</h1>
+                <p>Could not update status: {str(e)}</p>
+            </body>
+            </html>
+            """,
+            status_code=500
+        )
+
+
+def _trigger_demo_call(name: str, business_name: str, phone: str):
+    """
+    Helper function to trigger a Twilio demo call.
+    Returns the call object.
+    """
+    # URL-encode the parameters
+    encoded_name = quote(name)
+    encoded_business = quote(business_name)
+    encoded_phone = quote(phone)
+    
+    # Construct the TwiML URL
+    twiml_url = f"{settings.BACKEND_URL}/api/voice/twiml?name={encoded_name}&business={encoded_business}&phone={encoded_phone}"
+    
+    call = twilio_client.calls.create(
+        to=phone,
+        from_=settings.TWILIO_PHONE_NUMBER,
+        url=twiml_url,
+        record=True
+    )
+    
+    logger.info(f"Triggered demo call to {phone}, SID: {call.sid}")
+    return call
+
 
 @router.post("/twiml")
 async def get_twiml(request: Request):

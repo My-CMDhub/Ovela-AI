@@ -624,6 +624,18 @@ class AppwriteService:
             logger.error(f"Error creating demo lead: {e}")
             return None
     
+    def get_demo_lead(self, lead_id: str) -> dict:
+        """Get a single demo lead by ID."""
+        try:
+            result = self._make_request(
+                "GET",
+                f"/databases/{self.db_id}/collections/demo_leads/documents/{lead_id}"
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Error getting demo lead {lead_id}: {e}")
+            return None
+    
     def update_demo_lead(self, lead_id: str = None, phone: str = None, data: dict = None):
         """Update a demo lead by ID or phone."""
         try:
@@ -693,10 +705,11 @@ class AppwriteService:
     def create_demo_transcript(self, phone: str, transcript: list, 
                                 exchange_count: int = 0, duration_seconds: int = 0,
                                 outcome: str = "completed", call_sid: str = None,
-                                demo_lead_id: str = None) -> dict:
+                                demo_lead_id: str = None, tenant_id: str = "ovela_demo") -> dict:
         """
         Store a demo call transcript for AI analysis.
         transcript: List of {"role": "ai"|"user", "text": "...", "timestamp": "..."}
+        tenant_id: Multi-tenant identifier (e.g., "ovela_demo", "lydoun")
         """
         from appwrite.id import ID
         try:
@@ -711,6 +724,7 @@ class AppwriteService:
                 "outcome": outcome,
                 "call_sid": call_sid or "",
                 "demo_lead_id": demo_lead_id or "",
+                "tenant_id": tenant_id,  # Multi-tenant support
                 "created_at": now
             }
             
@@ -766,15 +780,66 @@ class AppwriteService:
         except Exception as e:
             logger.error(f"Error fetching transcripts for review: {e}")
             return []
+    
+    def get_call_transcripts(self, start_date: str = None, end_date: str = None, 
+                             phone: str = None, limit: int = 100) -> list:
+        """
+        Get call transcripts with optional filters.
+        Returns sorted by created_at descending (newest first).
+        
+        Used by the Staff Call Logs Dashboard.
+        
+        Args:
+            start_date: Optional ISO date string to filter from
+            end_date: Optional ISO date string to filter until
+            phone: Optional phone number to filter by
+            limit: Maximum number of results (default 100)
+        
+        Returns:
+            List of transcript documents
+        """
+        try:
+            result = self._make_request(
+                "GET",
+                f"/databases/{self.db_id}/collections/demo_transcripts/documents"
+            )
+            transcripts = result.get("documents", []) if result else []
+            
+            # Filter by phone if provided
+            if phone:
+                # Normalize phone for matching (handle +61 vs 04 etc)
+                normalized_phone = phone.replace(" ", "").replace("-", "")
+                transcripts = [
+                    t for t in transcripts 
+                    if normalized_phone in t.get("phone", "").replace(" ", "").replace("-", "")
+                ]
+            
+            # Filter by date range if provided
+            if start_date:
+                transcripts = [t for t in transcripts if t.get("created_at", "") >= start_date]
+            if end_date:
+                # Add end of day to include full day
+                end_date_full = end_date + "T23:59:59" if "T" not in end_date else end_date
+                transcripts = [t for t in transcripts if t.get("created_at", "") <= end_date_full]
+            
+            # Sort by created_at descending (newest first)
+            transcripts.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+            
+            return transcripts[:limit]
+        except Exception as e:
+            logger.error(f"Error fetching call transcripts: {e}")
+            return []
 
     # ==================== STAFF NOTIFICATIONS (Human-in-Loop) ====================
     
     def create_staff_notification(self, notification_type: str, customer_name: str, 
                                    customer_phone: str, reason: str, 
-                                   urgency: str = "medium", extra_data: dict = None) -> dict:
+                                   urgency: str = "medium", extra_data: dict = None,
+                                   tenant_id: str = "lydoun") -> dict:
         """
         Create a staff notification (callback request, approval needed, etc).
         Flexible schema - extra_data allows adding fields without schema changes.
+        tenant_id: Multi-tenant identifier for filtering by business
         """
         from appwrite.id import ID
         try:
@@ -790,6 +855,7 @@ class AppwriteService:
                 "urgency": urgency,  # low, medium, high
                 "staff_notes": "",
                 "extra_data": json.dumps(extra_data or {}),
+                "tenant_id": tenant_id,  # Multi-tenant support
                 "created_at": now,
                 "updated_at": now,
                 "completed_at": ""

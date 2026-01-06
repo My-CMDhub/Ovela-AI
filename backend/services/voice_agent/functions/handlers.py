@@ -567,11 +567,11 @@ class FunctionDispatcher:
     Dispatches function calls to appropriate handlers.
     
     Usage:
-        dispatcher = FunctionDispatcher(db_service, user_phone, save_fn, abuse_protection)
+        dispatcher = FunctionDispatcher(db_service, user_phone, save_fn, abuse_protection, tenant_id)
         result = await dispatcher.execute("check_availability", {"check_in_date": "2024-01-15"})
     """
     
-    def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection):
+    def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, tenant_id: str = "lydoun"):
         """
         Initialize dispatcher with required dependencies.
         
@@ -580,11 +580,13 @@ class FunctionDispatcher:
             user_phone: Caller's phone number
             save_reservation_fn: Function to save reservations
             abuse_protection: AbuseProtection instance for flag_off_topic
+            tenant_id: Multi-tenant identifier (e.g., "lydoun", "ovela_demo")
         """
         self.db_service = db_service
         self.user_phone = user_phone
         self.save_reservation_fn = save_reservation_fn
         self.abuse_protection = abuse_protection
+        self.tenant_id = tenant_id
     
     async def execute(self, function_name: str, args: dict) -> dict:
         """

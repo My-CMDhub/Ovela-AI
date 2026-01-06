@@ -108,6 +108,13 @@ class VoiceAgentHandler:
         # Transcript for analytics
         self.transcript = []
         self.call_outcome = "completed"
+        
+        # Environment detection (demo vs production call)
+        self.is_demo_call = False  # Set in _handle_twilio_start based on custom parameters
+        
+        # Multi-tenant support
+        # Demo calls → "ovela_demo", Production calls → resolved from phone or default "lydoun"
+        self.tenant_id = "ovela_demo"  # Default to demo, updated in _handle_twilio_start
     
     # =========================================================================
     # DEEPGRAM SETTINGS
@@ -226,7 +233,21 @@ class VoiceAgentHandler:
         self.business_name = custom_params.get("business_name", "your business")
         self.user_phone = custom_params.get("user_phone", "unknown")
         
-        logger.info(f"🟢 Twilio stream started: {self.stream_sid} for {self.user_name}")
+        # Detect if this is a demo call (from website form) or production call (direct inbound)
+        # Demo calls come from /api/voice/demo endpoint which sets is_demo=true
+        self.is_demo_call = custom_params.get("is_demo", "false").lower() == "true"
+        call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
+        
+        # Multi-tenant: Resolve tenant_id based on call type
+        # Demo calls → "ovela_demo" (Ovela website demos)
+        # Production calls → "lydoun" for now (future: resolve from Twilio To number)
+        if self.is_demo_call:
+            self.tenant_id = "ovela_demo"
+        else:
+            # TODO: When adding 2nd tenant, resolve from db_service.get_tenant_by_phone(to_phone)
+            self.tenant_id = "lydoun"
+        
+        logger.info(f"🟢 Twilio stream started: {self.stream_sid} for {self.user_name} [{call_type}] tenant={self.tenant_id}")
         
         # Initialize timing
         self.call_start_time = time.time()
@@ -237,7 +258,8 @@ class VoiceAgentHandler:
             db_service=db_service,
             user_phone=self.user_phone,
             save_reservation_fn=self._save_motel_reservation,
-            abuse_protection=self.abuse_protection
+            abuse_protection=self.abuse_protection,
+            tenant_id=self.tenant_id  # Pass tenant_id to function dispatcher
         )
         
         # Connect to Deepgram Voice Agent API
@@ -505,10 +527,23 @@ class VoiceAgentHandler:
         
         # Check for transfer signal
         if result.get("action") == "transfer":
-            logger.info(f"📞 Transfer requested to {result.get('transfer_to')}")
-            await self._inject_message(result.get("message", "Transferring you now..."))
-            await asyncio.sleep(2)  # Let message play
-            await self._execute_twilio_transfer(result.get("transfer_to"))
+            transfer_to = result.get("transfer_to")
+            transfer_message = result.get("message", "Transferring you now...")
+            
+            logger.info(f"📞 Transfer requested to {transfer_to}")
+            logger.info(f"📢 Playing transfer message: '{transfer_message}'")
+            
+            await self._inject_message(transfer_message)
+            
+            # Wait for TTS to fully complete playing to caller
+            # Estimated ~12 chars/sec for TTS, plus network/buffer time
+            # TODO: Replace with hold music during transfer (see memory_bank/next_steps.md)
+            # Future: Use Twilio <Play> verb with music URL before Dial
+            tts_wait_seconds = max(6, len(transfer_message) // 10)  # At least 6s, or longer for long messages
+            logger.info(f"⏳ Waiting {tts_wait_seconds}s for TTS playback before transfer")
+            await asyncio.sleep(tts_wait_seconds)
+            
+            await self._execute_twilio_transfer(transfer_to)
             return  # Don't send function response, call is being transferred
         
         # Check for hangup signal from flag_off_topic
@@ -611,9 +646,17 @@ class VoiceAgentHandler:
         
         Uses thresholds from ABUSE_CONFIG:
         - soft_warning_minutes: Inject gentle "wrapping up" prompt
-        - hard_cap_minutes: Force end call with polite farewell
+        - hard_cap_minutes: Force end call or transfer to staff
+        
+        Behavior differs based on call type:
+        - Demo calls: Polite hangup when cap reached
+        - Production calls: Transfer to staff when cap reached
         """
-        logger.info(f"⏱️ Duration monitor started: soft={ABUSE_CONFIG['soft_warning_minutes']}min, hard={ABUSE_CONFIG['hard_cap_minutes']}min")
+        call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
+        logger.info(
+            f"⏱️ Duration monitor started [{call_type}]: "
+            f"soft={ABUSE_CONFIG['soft_warning_minutes']}min, hard={ABUSE_CONFIG['hard_cap_minutes']}min"
+        )
         
         while self.is_running:
             await asyncio.sleep(10)
@@ -626,13 +669,35 @@ class VoiceAgentHandler:
             action = duration_result.get("action")
             
             if action == "soft_warning":
-                logger.info(f"⏱️ Soft time warning")
+                logger.info(f"⏱️ Soft time warning [{call_type}]")
                 await self._inject_message(duration_result.get("message", "We've been chatting for a while..."))
                 
             elif action == "hard_cap":
-                logger.info(f"🚫 Hard time cap reached - ending call")
                 self.call_outcome = duration_result.get("outcome", "timeout_duration")
-                await self._hangup_with_farewell(duration_result.get("farewell", "Thanks for calling!"))
+                
+                # Check if we should transfer instead of hanging up
+                # Production calls get transferred; Demo calls get polite hangup
+                should_transfer = ABUSE_CONFIG.get("transfer_on_cap", False) and not self.is_demo_call
+                
+                if should_transfer:
+                    logger.info(f"🚨 Duration cap reached - transferring to staff [{call_type}]")
+                    transfer_message = (
+                        "I've been helping you for a while now. "
+                        "Let me connect you with our team who can assist you further."
+                    )
+                    await self._inject_message(transfer_message)
+                    
+                    # Wait for TTS to play before transfer
+                    await asyncio.sleep(6)
+                    
+                    # Attempt transfer - if it fails or staff doesn't answer,
+                    # the transfer-status callback will return caller to AI
+                    await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER)
+                else:
+                    # Demo mode or transfer_on_cap disabled: polite hangup
+                    logger.info(f"🚫 Hard time cap reached - ending call [{call_type}]")
+                    await self._hangup_with_farewell(duration_result.get("farewell", "Thanks for calling!"))
+                
                 break
     
     # =========================================================================
@@ -769,6 +834,9 @@ class VoiceAgentHandler:
                 "X-Appwrite-Key": settings.APPWRITE_API_KEY
             }
             
+            # Add tenant_id to reservation data
+            data["tenant_id"] = self.tenant_id
+            
             url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
             payload = {
                 "documentId": doc_id,
@@ -809,7 +877,8 @@ class VoiceAgentHandler:
                     transcript=self.transcript,
                     exchange_count=self.exchange_count,
                     duration_seconds=duration,
-                    outcome=self.call_outcome
+                    outcome=self.call_outcome,
+                    tenant_id=self.tenant_id  # Multi-tenant support
                 )
                 logger.info(f"📝 Saved transcript: {len(self.transcript)} entries, {duration}s")
         except Exception as e:

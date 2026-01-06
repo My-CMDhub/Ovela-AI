@@ -220,12 +220,9 @@ export function VoiceDemoForm({ className }: VoiceDemoFormProps) {
 
                                 {/* Simplified status message */}
                                 <div className="space-y-3">
-                                    <h4 className="text-xl font-semibold text-gray-900 dark:text-white">Call Initiated</h4>
+                                    <h4 className="text-xl font-semibold text-gray-900 dark:text-white">Request Submitted!</h4>
                                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                                        Your phone should ring shortly.
-                                    </p>
-                                    <p className="text-xs text-gray-500 dark:text-white/40">
-                                        If you don't receive a call within 30 seconds, please try again.
+                                        Thanks! Your phone will ring shortly—keep it close.
                                     </p>
                                 </div>
 

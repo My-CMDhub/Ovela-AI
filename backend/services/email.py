@@ -551,6 +551,87 @@ class EmailService:
         sender = "Ovela System <notifications@ovela.dev>"
         return await self.send_email(recipients, subject, html, from_email=sender)
 
+    async def send_demo_approval_request(self, lead_details: dict):
+        """
+        Send demo approval request email to team with Approve/Reject magic links.
+        """
+        name = lead_details.get("name", "Unknown")
+        business = lead_details.get("business_name", "Unknown")
+        phone = lead_details.get("phone", "Unknown")
+        created_at = lead_details.get("created_at", datetime.now(MELBOURNE_TZ).isoformat())
+        approve_url = lead_details.get("approve_url", "")
+        reject_url = lead_details.get("reject_url", "")
+
+        subject = f"🚀 Demo Request: {name} - {business}"
+        
+        html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
+    <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
+        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
+            <div style="padding: 40px 30px 30px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                <div style="font-size: 32px; font-weight: 700; color: #ffffff;">Ovela</div>
+                <div style="font-size: 14px; color: #ffffff99; font-weight: 500;">Demo Request Approval</div>
+            </div>
+            
+            <div style="padding: 32px 30px;">
+                <div style="display: inline-block; padding: 6px 12px; background: #fbbf24; color: #1d1d1f; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Awaiting Your Approval</div>
+                
+                <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">New demo request from {name}</h1>
+                
+                <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
+                    <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Name:</strong> {name}</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Business:</strong> {business}</td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Phone:</strong> <a href="tel:{phone}" style="color: #0066cc;">{phone}</a></td></tr>
+                        <tr><td style="padding: 8px 0; font-size: 15px; color: #86868b;"><strong>Requested:</strong> {created_at}</td></tr>
+                    </table>
+                </div>
+                
+                <div style="margin: 32px 0; text-align: center;">
+                    <p style="margin-bottom: 20px; color: #86868b; font-size: 14px;">Approve to trigger the demo call, or reject if not qualified.</p>
+                    
+                    <div style="margin-bottom: 16px;">
+                        <a href="{approve_url}" style="display: inline-block; padding: 14px 32px; background: #22c55e; color: white; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 16px; margin-right: 12px;">✅ Approve - Call Now</a>
+                    </div>
+                    
+                    <div>
+                        <a href="{reject_url}" style="display: inline-block; padding: 14px 32px; background: #ef4444; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">❌ Reject</a>
+                    </div>
+                </div>
+                
+                <div style="background: #e8f4fd; border: 1px solid #0066cc33; border-radius: 8px; padding: 16px; margin-top: 24px;">
+                    <p style="margin: 0; font-size: 13px; color: #1d4ed8;">
+                        <strong>ℹ️ How it works:</strong><br>
+                        • Approve = AI calls their phone immediately<br>
+                        • Reject = Lead marked inactive (no call)<br>
+                        • Links expire in 24 hours
+                    </p>
+                </div>
+            </div>
+            
+            <div style="padding: 30px; text-align: center; background: #f9f9fa; border-top: 1px solid #f0f0f0;">
+                <p style="font-size: 12px; color: #86868b;">Powered by Ovela AI</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>'''
+
+        # Send to internal notification emails
+        recipients_str = settings.DEMO_ALERT_RECIPIENTS
+        recipients = [email.strip() for email in recipients_str.split(",") if email.strip()]
+        
+        if not recipients:
+            recipients = ["notifications@ovela.dev"]
+            
+        sender = "Ovela System <notifications@ovela.dev>"
+        return await self.send_email(recipients, subject, html, from_email=sender)
+
 
     async def send_guest_booking_confirmation(
         self,

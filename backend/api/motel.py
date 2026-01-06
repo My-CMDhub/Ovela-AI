@@ -255,6 +255,107 @@ async def create_guest(data: dict):
         logger.error(f"Error creating guest: {e}")
         return {"success": False, "error": str(e)}
 
+
+# ============================================================================
+# CALL LOGS ENDPOINTS (Staff Conversation Logs Dashboard)
+# ============================================================================
+
+# Outcome categories for filtering
+COMPLETED_OUTCOMES = ["completed", "transferred", "booking_completed"]
+ISSUE_OUTCOMES = ["spam_terminated", "timeout_silence", "timeout_duration", "abuse_timeout"]
+
+@router.get("/call-logs")
+async def get_call_logs(
+    status: Optional[str] = Query(default="completed", description="Filter: completed, issues, or all"),
+    start_date: Optional[str] = Query(default=None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(default=None, description="End date (YYYY-MM-DD)"),
+    phone: Optional[str] = Query(default=None, description="Phone number to search"),
+    limit: int = Query(default=50, ge=1, le=200)
+):
+    """
+    Get call transcripts for staff review.
+    
+    Filters:
+    - status: "completed" (default), "issues", "all"
+    - start_date / end_date: Date range filter
+    - phone: Phone number search
+    """
+    try:
+        from services.appwrite import db_service
+        import json
+        
+        # Fetch transcripts using the service method
+        transcripts = db_service.get_call_transcripts(
+            start_date=start_date,
+            end_date=end_date,
+            phone=phone,
+            limit=limit * 2  # Fetch more to account for filtering
+        )
+        
+        # Filter by status category
+        if status == "completed":
+            # Show successful calls only (excludes very short calls < 10s)
+            transcripts = [
+                t for t in transcripts 
+                if t.get("outcome") in COMPLETED_OUTCOMES
+                and t.get("duration_seconds", 0) >= 10
+            ]
+        elif status == "issues":
+            # Show problematic calls
+            transcripts = [
+                t for t in transcripts 
+                if t.get("outcome") in ISSUE_OUTCOMES
+            ]
+        # "all" returns everything
+        
+        # Apply limit after filtering
+        transcripts = transcripts[:limit]
+        
+        # Format for frontend
+        formatted = []
+        for t in transcripts:
+            try:
+                transcript_data = json.loads(t.get("transcript_json", "[]"))
+            except:
+                transcript_data = []
+            
+            formatted.append({
+                "id": t.get("$id"),
+                "phone": t.get("phone"),
+                "created_at": t.get("created_at"),
+                "duration_seconds": t.get("duration_seconds", 0),
+                "exchange_count": t.get("exchange_count", 0),
+                "outcome": t.get("outcome", "unknown"),
+                "transcript": transcript_data,
+                "call_sid": t.get("call_sid", ""),
+            })
+        
+        # Calculate counts for each tab
+        all_transcripts = db_service.get_call_transcripts(limit=200)
+        completed_count = len([
+            t for t in all_transcripts 
+            if t.get("outcome") in COMPLETED_OUTCOMES and t.get("duration_seconds", 0) >= 10
+        ])
+        issues_count = len([
+            t for t in all_transcripts 
+            if t.get("outcome") in ISSUE_OUTCOMES
+        ])
+        
+        return {
+            "success": True,
+            "logs": formatted,
+            "total": len(formatted),
+            "counts": {
+                "completed": completed_count,
+                "issues": issues_count,
+                "all": len(all_transcripts)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting call logs: {e}")
+        return {"success": False, "error": str(e), "logs": [], "total": 0}
+
 @router.post("/reservations/manual")
 async def create_manual_booking(data: dict):
     """

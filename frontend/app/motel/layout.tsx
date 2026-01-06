@@ -15,6 +15,7 @@ import {
     LogOut,
     Phone,
     Bell,
+    MessageSquare,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 
@@ -23,6 +24,7 @@ const navigation = [
     { name: "Reservations", href: "/motel/reservations", icon: CalendarCheck },
     { name: "Guests", href: "/motel/guests", icon: Users },
     { name: "Notifications", href: "/motel/notifications", icon: Bell },
+    { name: "Call Logs", href: "/motel/call-logs", icon: MessageSquare },
     { name: "Settings", href: "/motel/settings", icon: Settings },
 ];
 
