@@ -196,6 +196,10 @@ class VoiceAgentHandler:
         """
         Get TTS configuration.
         Set USE_ELEVENLABS=true in .env to test ElevenLabs.
+        
+        Deepgram Voice Agent API spec for ElevenLabs:
+        - URL must use wss:// with stream-input endpoint
+        - Only xi-api-key header is required
         """
         if USE_ELEVENLABS:
             elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY", "")
@@ -207,15 +211,10 @@ class VoiceAgentHandler:
                     "language_code": "en-US"
                 },
                 "endpoint": {
-                    "url": f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}/stream?optimize_streaming_latency=2",
-                    "method": "POST",
+                    "url": f"wss://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}/stream-input",
                     "headers": {
-                        "xi-api-key": elevenlabs_api_key,
-                        "Content-Type": "application/json"
+                        "xi-api-key": elevenlabs_api_key
                     }
-                },
-                "audio": {
-                    "format": "mp3"
                 }
             }
         else:
