@@ -43,6 +43,8 @@ try:
     from .handler import VoiceAgentHandler, DeepgramAgentHandler
     _handler_available = True
 except ImportError as e:
+    import logging
+    logging.getLogger(__name__).error(f"Failed to import VoiceAgentHandler: {e}")
     VoiceAgentHandler = None
     DeepgramAgentHandler = None
     _handler_available = False
