@@ -334,8 +334,7 @@ class VoiceAgentHandler:
             # Log TTS provider clearly
             tts_provider = settings_msg["agent"]["speak"]["provider"]["type"]
             if tts_provider == "eleven_labs":
-                voice_id = settings_msg["agent"]["speak"]["provider"]["voice_id"]
-                logger.info(f"🎤 TTS PROVIDER: ElevenLabs (voice: {voice_id})")
+                logger.info(f"🎤 TTS PROVIDER: ElevenLabs (voice: {ELEVENLABS_VOICE_ID})")
             else:
                 model = settings_msg["agent"]["speak"]["provider"]["model"]
                 logger.info(f"🎤 TTS PROVIDER: Deepgram (model: {model})")
