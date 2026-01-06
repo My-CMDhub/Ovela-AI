@@ -440,7 +440,7 @@ class VoiceAgentHandler:
             await self._handle_user_started_speaking()
             
         elif event_type == "AgentStartedSpeaking":
-            logger.info("🔊 Agent started speaking")
+            await self._handle_agent_started_speaking()
             
         elif event_type == "AgentAudioDone":
             await self._handle_agent_audio_done()
@@ -536,15 +536,38 @@ class VoiceAgentHandler:
         }
         await self.twilio_ws.send_json(clear_message)
     
+    async def _handle_agent_started_speaking(self):
+        """
+        Handle agent starting to speak - invalidate pending silence checks.
+        
+        This is critical for proper silence detection:
+        - When AI starts responding, any pending silence checks from previous
+          utterances must be invalidated
+        - This prevents "silence while AI is speaking" false positives
+        """
+        logger.info("🔊 Agent started speaking")
+        
+        # Set AI speaking state
+        self._ai_is_speaking = True
+        
+        # Invalidate any pending silence checks by incrementing the check ID
+        self.silence_monitor.on_ai_started_speaking()
+        
+        # Cancel any silence escalation - AI is responding
+        self._in_silence_escalation = False
+    
     async def _handle_agent_audio_done(self):
         """
         Handle agent finished speaking - start silence monitoring.
         
         NOTE: Deepgram sends AgentAudioDone per-chunk when streaming long responses.
-        We debounce by waiting 500ms - if another AgentAudioDone arrives, the previous
-        silence check task gets cancelled naturally through the silence_check_id mechanism.
+        We use the _ai_is_speaking flag and a debounce delay to ensure we only
+        start silence monitoring after the COMPLETE response is done.
         """
         logger.info("🔇 Agent finished speaking")
+        
+        # Mark AI as not speaking
+        self._ai_is_speaking = False
         
         # If we're in a silence escalation cycle (soft→hard→abandon),
         # don't reset the silence state or start a new cycle
@@ -552,9 +575,14 @@ class VoiceAgentHandler:
             logger.debug("⏱️ Skipping new silence cycle - in escalation mode")
             return
         
-        # Debounce: Wait a bit for more AgentAudioDone events
-        # If this is mid-response, another chunk will come and reset everything
-        await asyncio.sleep(0.5)  # 500ms debounce
+        # Debounce: Wait a bit for more AgentAudioDone events or AgentStartedSpeaking
+        # If AI starts speaking again, _ai_is_speaking will be set to True
+        await asyncio.sleep(0.8)  # 800ms debounce
+        
+        # After debounce, check if AI started speaking again
+        if getattr(self, '_ai_is_speaking', False):
+            logger.debug("⏱️ Skipping silence check - AI started speaking again")
+            return
         
         # Notify silence monitor with the AI message for TTS duration estimation
         last_message = getattr(self, 'last_ai_message', '')

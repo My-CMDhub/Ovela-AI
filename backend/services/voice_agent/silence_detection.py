@@ -46,6 +46,16 @@ class SilenceMonitor:
         self.silence_followup_sent = False
         self.silence_followup_count = 0
     
+    def on_ai_started_speaking(self):
+        """
+        Called when AI starts speaking - invalidate pending silence checks.
+        
+        This is critical: any silence checks from previous utterances must
+        be invalidated when AI starts a new response.
+        """
+        self.silence_check_id += 1  # Invalidate any running checks
+        self.silence_check_start_time = None  # Reset timing
+    
     def on_ai_finished_speaking(self, message: str = ""):
         """
         Called when AI finishes speaking - starts silence timer.
