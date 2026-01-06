@@ -30,6 +30,7 @@ from appwrite.id import ID
 
 from core.config import settings
 from services.appwrite import db_service
+import os
 
 # Import from sibling modules
 from .config import (
@@ -40,11 +41,16 @@ from .config import (
     get_random_silence_prompt,
 )
 from .prompts import get_system_prompt
+from .demo_prompts import get_demo_prompt, get_demo_greeting, is_demo_mode
 from .abuse_protection import AbuseProtection
 from .silence_detection import SilenceMonitor
 from .functions import get_booking_functions
 from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
 from .text_utils import prepare_for_tts, clean_tts_output
+
+# TTS Provider config - set USE_ELEVENLABS=true in .env to test ElevenLabs
+USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "false").lower() == "true"
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "cgSgspJ2msm6clMCkdW9")  # Jessica voice
 
 logger = logging.getLogger(__name__)
 
@@ -158,21 +164,56 @@ class VoiceAgentHandler:
                         "model": "gpt-4o-mini",
                         "temperature": 0.85
                     },
-                    "prompt": get_system_prompt(
-                        current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
-                        current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p")
-                    ),
+                    "prompt": self._get_active_prompt(),
                     "functions": get_booking_functions()
                 },
-                "speak": {
-                    "provider": {
-                        "type": "deepgram",
-                        "model": "aura-2-thalia-en"
-                    }
-                },
-                "greeting": get_random_greeting()
+                "speak": self._get_tts_config(),
+                "greeting": self._get_active_greeting()
             }
         }
+    
+    def _get_active_prompt(self) -> str:
+        """Get the active prompt - demo prompt if configured, otherwise motel."""
+        demo_prompt = get_demo_prompt(
+            current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
+            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p")
+        )
+        if demo_prompt:
+            logger.info(f"Using DEMO prompt mode")
+            return demo_prompt
+        return get_system_prompt(
+            current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
+            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p")
+        )
+    
+    def _get_active_greeting(self) -> str:
+        """Get the active greeting - demo greeting if configured, otherwise motel."""
+        if is_demo_mode():
+            return get_demo_greeting()
+        return get_random_greeting()
+    
+    def _get_tts_config(self) -> dict:
+        """
+        Get TTS configuration.
+        Set USE_ELEVENLABS=true in .env to test ElevenLabs.
+        """
+        if USE_ELEVENLABS:
+            logger.info(f"🎤 Using ElevenLabs TTS (voice: {ELEVENLABS_VOICE_ID})")
+            return {
+                "provider": {
+                    "type": "eleven_labs",
+                    "model": "eleven_turbo_v2_5",
+                    "voice_id": ELEVENLABS_VOICE_ID
+                }
+            }
+        else:
+            logger.info(f"🎤 Using Deepgram TTS (model: aura-2-thalia-en)")
+            return {
+                "provider": {
+                    "type": "deepgram",
+                    "model": "aura-2-thalia-en"
+                }
+            }
     
     # =========================================================================
     # MAIN LOOP
@@ -277,6 +318,15 @@ class VoiceAgentHandler:
             settings_msg = self._get_settings_message()
             await self.deepgram_ws.send(json.dumps(settings_msg))
             logger.info("📤 Sent Settings to Deepgram Agent")
+            
+            # Log TTS provider clearly
+            tts_provider = settings_msg["agent"]["speak"]["provider"]["type"]
+            if tts_provider == "eleven_labs":
+                voice_id = settings_msg["agent"]["speak"]["provider"]["voice_id"]
+                logger.info(f"🎤 TTS PROVIDER: ElevenLabs (voice: {voice_id})")
+            else:
+                model = settings_msg["agent"]["speak"]["provider"]["model"]
+                logger.info(f"🎤 TTS PROVIDER: Deepgram (model: {model})")
             
             # Start background tasks
             asyncio.create_task(self._receive_from_deepgram())
