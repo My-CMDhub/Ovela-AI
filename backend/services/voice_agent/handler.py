@@ -198,12 +198,24 @@ class VoiceAgentHandler:
         Set USE_ELEVENLABS=true in .env to test ElevenLabs.
         """
         if USE_ELEVENLABS:
+            elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY", "")
             logger.info(f"🎤 Using ElevenLabs TTS (voice: {ELEVENLABS_VOICE_ID})")
             return {
                 "provider": {
                     "type": "eleven_labs",
-                    "model": "eleven_turbo_v2_5",
-                    "voice_id": ELEVENLABS_VOICE_ID
+                    "model_id": "eleven_turbo_v2_5",
+                    "language_code": "en-US"
+                },
+                "endpoint": {
+                    "url": f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}/stream?optimize_streaming_latency=2",
+                    "method": "POST",
+                    "headers": {
+                        "xi-api-key": elevenlabs_api_key,
+                        "Content-Type": "application/json"
+                    }
+                },
+                "audio": {
+                    "format": "mp3"
                 }
             }
         else:
