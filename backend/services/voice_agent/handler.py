@@ -523,6 +523,9 @@ class VoiceAgentHandler:
         # Track timing
         self.user_speech_start_time = time.time()
         
+        # User spoke - exit any silence escalation cycle
+        self._in_silence_escalation = False
+        
         # Notify silence monitor
         self.silence_monitor.on_user_speech()
         
