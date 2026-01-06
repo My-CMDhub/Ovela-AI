@@ -76,6 +76,10 @@ class SilenceMonitor:
         message_lower = message.lower()
         return any(pattern in message_lower for pattern in THINKING_PATTERNS)
     
+    def get_tts_buffer(self) -> float:
+        """Get the TTS playback buffer time (added to sleep time in handler)."""
+        return getattr(self, 'tts_buffer', 0)
+    
     def get_check_id(self) -> int:
         """Get current check ID for validation."""
         return self.silence_check_id

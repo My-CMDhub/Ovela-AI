@@ -646,8 +646,10 @@ class VoiceAgentHandler:
     async def _check_silence(self, check_id: int):
         """Check for soft silence threshold."""
         threshold = self.silence_monitor.get_soft_threshold()
-        logger.info(f"⏱️ Silence check #{check_id} scheduled: waiting {threshold}s for soft threshold")
-        await asyncio.sleep(threshold)
+        tts_buffer = self.silence_monitor.get_tts_buffer()
+        total_wait = threshold + tts_buffer
+        logger.info(f"⏱️ Silence check #{check_id} scheduled: waiting {total_wait:.1f}s (threshold={threshold}s + TTS={tts_buffer:.1f}s)")
+        await asyncio.sleep(total_wait)
         
         if not self.is_running:
             logger.debug(f"⏱️ Silence check #{check_id} cancelled: call ended")
