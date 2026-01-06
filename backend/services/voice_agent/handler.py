@@ -537,6 +537,12 @@ class VoiceAgentHandler:
         """Handle agent finished speaking - start silence monitoring."""
         logger.info("🔇 Agent finished speaking")
         
+        # If we're in a silence escalation cycle (soft→hard→abandon),
+        # don't reset the silence state or start a new cycle
+        if getattr(self, '_in_silence_escalation', False):
+            logger.debug("⏱️ Skipping new silence cycle - in escalation mode")
+            return
+        
         # Notify silence monitor with the AI message for TTS duration estimation
         last_message = getattr(self, 'last_ai_message', '')
         self.silence_monitor.on_ai_finished_speaking(last_message)
@@ -663,7 +669,9 @@ class VoiceAgentHandler:
         
         if action == "soft_prompt":
             logger.info(f"⏱️ Soft silence - gentle check-in")
+            self._in_silence_escalation = True  # Prevent new silence cycles during escalation
             await self._inject_message(result.get("prompt", get_random_silence_prompt()))
+            # Continue escalation chain with same check_id
             asyncio.create_task(self._check_hard_silence(check_id))
             
         elif action == "abandon":
@@ -672,10 +680,15 @@ class VoiceAgentHandler:
     
     async def _check_hard_silence(self, check_id: int):
         """Check for hard silence threshold (second follow-up)."""
-        additional_wait = self.silence_monitor.get_hard_threshold() - self.silence_monitor.get_soft_threshold()
-        await asyncio.sleep(additional_wait)
+        # Wait for hard threshold (10 more seconds after soft)
+        hard_wait = self.silence_monitor.get_hard_threshold() - self.silence_monitor.get_soft_threshold()
+        tts_buffer = self.silence_monitor.get_tts_buffer()
+        total_wait = hard_wait + tts_buffer
+        logger.info(f"⏱️ Hard silence check waiting {total_wait:.1f}s (hard_wait={hard_wait}s + TTS={tts_buffer:.1f}s)")
+        await asyncio.sleep(total_wait)
         
         if not self.is_running:
+            self._in_silence_escalation = False
             return
         
         result = self.silence_monitor.check_silence(check_id)
@@ -687,23 +700,35 @@ class VoiceAgentHandler:
             asyncio.create_task(self._check_abandon_silence(check_id))
             
         elif action == "abandon":
+            self._in_silence_escalation = False
             self.call_outcome = "timeout_silence"
             await self._inject_farewell_and_hangup()
+        else:
+            # User spoke or check invalidated - exit escalation
+            self._in_silence_escalation = False
     
     async def _check_abandon_silence(self, check_id: int):
         """Check for abandon threshold - end call if still silent."""
-        additional_wait = self.silence_monitor.get_abandon_threshold() - self.silence_monitor.get_hard_threshold()
-        await asyncio.sleep(additional_wait)
+        abandon_wait = self.silence_monitor.get_abandon_threshold() - self.silence_monitor.get_hard_threshold()
+        tts_buffer = self.silence_monitor.get_tts_buffer()
+        total_wait = abandon_wait + tts_buffer
+        logger.info(f"⏱️ Abandon silence check waiting {total_wait:.1f}s (abandon_wait={abandon_wait}s + TTS={tts_buffer:.1f}s)")
+        await asyncio.sleep(total_wait)
         
         if not self.is_running:
+            self._in_silence_escalation = False
             return
         
         result = self.silence_monitor.check_silence(check_id)
         
         if result.get("action") == "abandon":
-            logger.info(f"⏱️ Extended silence - ending call")
+            logger.info(f"⏱️ Extended silence ({int(result.get('duration', 0))}s) - ending call")
+            self._in_silence_escalation = False
             self.call_outcome = "timeout_silence"
             await self._inject_farewell_and_hangup()
+        else:
+            # User spoke or check invalidated
+            self._in_silence_escalation = False
     
     # =========================================================================
     # DURATION MONITORING
