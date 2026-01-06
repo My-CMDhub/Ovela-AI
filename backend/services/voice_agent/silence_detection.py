@@ -64,6 +64,10 @@ class SilenceMonitor:
         self.last_ai_message = message
         self.ai_asked_question = self._requires_thinking(message)
         
+        # CRITICAL FIX: Reset followup count so new silence detection cycle can trigger
+        self.silence_followup_count = 0
+        self.silence_followup_sent = False
+        
         if self.tts_buffer > 2:
             logger.debug(f"⏱️ Added {self.tts_buffer:.1f}s TTS buffer for {len(message)} char message")
     
