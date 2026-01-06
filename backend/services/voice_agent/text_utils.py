@@ -303,6 +303,7 @@ def clean_tts_output(text: str) -> str:
         "Have a great day! [[HANGUP]]" -> "Have a great day!"
         "Check **this** out" -> "Check this out"
         "Visit [our site](https://example.com)" -> "Visit our site"
+        "**Family Room**" -> "Family Room"
     
     Args:
         text: Raw text that might contain control signals or markdown
@@ -322,6 +323,16 @@ def clean_tts_output(text: str) -> str:
     # Apply markdown cleaning patterns
     for pattern, replacement in MARKDOWN_PATTERNS:
         result = re.sub(pattern, replacement, result, flags=re.MULTILINE)
+    
+    # IMPORTANT: Remove any remaining standalone markdown symbols
+    # This catches cases where ** or * appear without matching pairs
+    # or when text is split across multiple chunks
+    result = re.sub(r'\*{2,}', '', result)  # ** or more
+    result = re.sub(r'(?<!\w)\*(?!\w)', '', result)  # standalone *
+    result = re.sub(r'_{2,}', '', result)   # __ or more
+    result = re.sub(r'(?<!\w)_(?!\w)', '', result)   # standalone _
+    result = re.sub(r'~{2,}', '', result)   # ~~ or more
+    result = re.sub(r'`+', '', result)      # ` backticks
     
     # Clean up extra whitespace
     result = ' '.join(result.split())
