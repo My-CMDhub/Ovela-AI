@@ -537,7 +537,13 @@ class VoiceAgentHandler:
         await self.twilio_ws.send_json(clear_message)
     
     async def _handle_agent_audio_done(self):
-        """Handle agent finished speaking - start silence monitoring."""
+        """
+        Handle agent finished speaking - start silence monitoring.
+        
+        NOTE: Deepgram sends AgentAudioDone per-chunk when streaming long responses.
+        We debounce by waiting 500ms - if another AgentAudioDone arrives, the previous
+        silence check task gets cancelled naturally through the silence_check_id mechanism.
+        """
         logger.info("🔇 Agent finished speaking")
         
         # If we're in a silence escalation cycle (soft→hard→abandon),
@@ -545,6 +551,10 @@ class VoiceAgentHandler:
         if getattr(self, '_in_silence_escalation', False):
             logger.debug("⏱️ Skipping new silence cycle - in escalation mode")
             return
+        
+        # Debounce: Wait a bit for more AgentAudioDone events
+        # If this is mid-response, another chunk will come and reset everything
+        await asyncio.sleep(0.5)  # 500ms debounce
         
         # Notify silence monitor with the AI message for TTS duration estimation
         last_message = getattr(self, 'last_ai_message', '')
