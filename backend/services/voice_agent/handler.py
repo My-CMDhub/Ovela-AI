@@ -533,6 +533,7 @@ class VoiceAgentHandler:
         check_id = self.silence_monitor.get_check_id()
         
         # Schedule silence check
+        logger.info(f"⏱️ Scheduling silence check #{check_id} (soft={self.silence_monitor.get_soft_threshold()}s)")
         asyncio.create_task(self._check_silence(check_id))
     
     async def _handle_function_call(self, event: dict):
@@ -634,13 +635,19 @@ class VoiceAgentHandler:
     
     async def _check_silence(self, check_id: int):
         """Check for soft silence threshold."""
-        await asyncio.sleep(self.silence_monitor.get_soft_threshold())
+        threshold = self.silence_monitor.get_soft_threshold()
+        logger.info(f"⏱️ Silence check #{check_id} scheduled: waiting {threshold}s for soft threshold")
+        await asyncio.sleep(threshold)
         
         if not self.is_running:
+            logger.debug(f"⏱️ Silence check #{check_id} cancelled: call ended")
             return
         
         result = self.silence_monitor.check_silence(check_id)
         action = result.get("action")
+        reason = result.get("reason", "")
+        
+        logger.info(f"⏱️ Silence check #{check_id} result: action={action}, reason={reason}")
         
         if action == "soft_prompt":
             logger.info(f"⏱️ Soft silence - gentle check-in")
