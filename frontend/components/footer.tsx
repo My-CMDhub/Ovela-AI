@@ -29,7 +29,7 @@ export function Footer() {
           </Link>
         </nav>
 
-        <p className="text-sm text-muted-foreground">© Ovela 2025</p>
+        <p className="text-sm text-muted-foreground">© Ovela 2026</p>
       </div>
     </motion.footer>
   )
