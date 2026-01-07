@@ -658,7 +658,8 @@ class VoiceAgentHandler:
             # Estimated ~12 chars/sec for TTS, plus network/buffer time
             # TODO: Replace with hold music during transfer (see memory_bank/next_steps.md)
             # Future: Use Twilio <Play> verb with music URL before Dial
-            tts_wait_seconds = max(6, len(transfer_message) // 10)  # At least 6s, or longer for long messages
+            # Increase wait time to ensure full message is heard before cutoff
+            tts_wait_seconds = max(10, len(transfer_message) // 8)  
             logger.info(f"⏳ Waiting {tts_wait_seconds}s for TTS playback before transfer")
             await asyncio.sleep(tts_wait_seconds)
             
