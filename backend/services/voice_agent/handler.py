@@ -137,6 +137,32 @@ class VoiceAgentHandler:
         - TTS (Deepgram aura-2-thalia-en)
         - System prompt and functions
         """
+        # Check for transfer failure (from failover loop)
+        transfer_failed = self.custom_params.get("transfer_failed") == "true"
+        
+        # Add welcome message to start conversation (unless we have context)
+        # Deepgram's "speak" -> "greeting" handles the audio, but we also want
+        # to seed the conversation history if we're resuming
+        system_context = ""
+        if transfer_failed:
+             # System message to inform AI of context (hidden from user)
+            system_context = "System: The user has returned because the staff transfer failed (no answer). Apologize and ask how you can help."
+            logger.info("⚠️ Resuming session after failed transfer")
+            
+            # Send hidden context message to AI
+            msg = {
+                "type": "ConversationText",
+                "role": "user",  # Simulate user or system prompt
+                "content": system_context
+            }
+            # We can't send this immediately as DG might not be ready, 
+            # but providing it on first valid interaction helps.
+            # Actually, better to inject it as the first "user" message logic
+            # or rely on the fact the user says "Hello?"
+            
+            # Better approach: Append to history immediately so model sees it
+            # self.conversation_history.append({"role": "system", "content": system_context})
+            
         return {
             "type": "Settings",
             "audio": {
@@ -164,11 +190,13 @@ class VoiceAgentHandler:
                         "model": "gpt-4o-mini",
                         "temperature": 0.85
                     },
-                    "prompt": self._get_active_prompt(),
+                    "prompt": self._get_active_prompt() + ("\n\n[CONTEXT: " + system_context + "]" if system_context else ""),
                     "functions": get_booking_functions()
                 },
                 "speak": self._get_tts_config(),
-                "greeting": self._get_active_greeting()
+                "greeting": {
+                   "text": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else self._get_active_greeting()
+                }
             }
         }
     
@@ -659,7 +687,8 @@ class VoiceAgentHandler:
             # TODO: Replace with hold music during transfer (see memory_bank/next_steps.md)
             # Future: Use Twilio <Play> verb with music URL before Dial
             # Increase wait time to ensure full message is heard before cutoff
-            tts_wait_seconds = max(10, len(transfer_message) // 8)  
+            # 14s base + length calculation to be safe
+            tts_wait_seconds = max(14, len(transfer_message) // 8)  
             logger.info(f"⏳ Waiting {tts_wait_seconds}s for TTS playback before transfer")
             await asyncio.sleep(tts_wait_seconds)
             

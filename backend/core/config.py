@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     
     # Call Transfer Settings
     STAFF_PHONE_NUMBER: str = "+61493291626"  # Reception for call transfers
-    TRANSFER_TIMEOUT: int = 30  # Seconds before fallback to AI
+    TRANSFER_TIMEOUT: int = 15  # Seconds before fallback to AI
 
     class Config:
         case_sensitive = True

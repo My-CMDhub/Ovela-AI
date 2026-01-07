@@ -89,7 +89,7 @@ async def handle_incoming_call(
         
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial timeout="30" action="{callback_url}" method="POST">
+    <Dial timeout="15" action="{callback_url}" method="POST">
         <Number>{business_phone}</Number>
     </Dial>
     <Say voice="alice">Sorry, we couldn't connect your call. You'll receive a WhatsApp message shortly to help you book an appointment.</Say>
@@ -248,8 +248,7 @@ async def handle_transfer_status(
     
     twiml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="Polly.Nicole">Our staff are currently unavailable. Let me see how else I can help you.</Say>
-    <Redirect method="POST">/twilio/voice</Redirect>
+    <Redirect method="POST">/twilio/voice?transfer_failed=true</Redirect>
 </Response>"""
     
     return Response(content=twiml, media_type="application/xml")

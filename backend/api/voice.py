@@ -312,6 +312,7 @@ async def get_twiml(request: Request):
     user_name = params.get("name", "there")
     business_name = params.get("business", "your business")
     user_phone = params.get("phone", "unknown")
+    transfer_failed = params.get("transfer_failed", "false")
     
     response = VoiceResponse()
     connect = Connect()
@@ -326,6 +327,7 @@ async def get_twiml(request: Request):
     stream.parameter(name="user_name", value=user_name)
     stream.parameter(name="business_name", value=business_name)
     stream.parameter(name="user_phone", value=user_phone)
+    stream.parameter(name="transfer_failed", value=transfer_failed)
     
     response.append(connect)
     response.say("Sorry, I lost the connection. Please try again later.")
