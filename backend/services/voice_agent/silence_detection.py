@@ -51,12 +51,13 @@ class SilenceMonitor:
         Called when AI starts speaking - invalidate pending silence checks.
         
         Args:
-            preserve_check_id: If True, don't increment check ID (used during
-                               silence escalation so hard/abandon checks stay valid)
+            preserve_check_id: If True, preserve state for escalation sequence
+                               (don't increment check ID or reset timing)
         """
         if not preserve_check_id:
             self.silence_check_id += 1  # Invalidate any running checks
-        self.silence_check_start_time = None  # Reset timing
+            self.silence_check_start_time = None  # Reset timing
+        # During escalation: keep check_id and start_time intact
     
     def on_ai_finished_speaking(self, message: str = ""):
         """
