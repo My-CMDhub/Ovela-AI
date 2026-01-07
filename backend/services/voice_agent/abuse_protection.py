@@ -154,7 +154,7 @@ class AbuseProtection:
                 "action": "soft_warning",
                 "message": (
                     "Just to let you know, we've been chatting for a while. "
-                    "Is there anything else about your booking or the motel I can help wrap up quickly?"
+                    "Is there anything else about ordering food I can help wrap up quickly?"
                 )
             }
         

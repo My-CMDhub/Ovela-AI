@@ -703,9 +703,12 @@ class VoiceAgentHandler:
     
     async def _check_silence(self, check_id: int):
         """Check for soft silence threshold."""
-        # STRICT GUARD: Never run silence check while AI is speaking
+        # STRICT GUARD: Never run silence check while AI is speaking or hanging up
         if getattr(self, '_ai_is_speaking', False):
             logger.info(f"⏹️ Silence check #{check_id} cancelled - AI is speaking")
+            return
+        if getattr(self, '_is_hanging_up', False):
+            logger.info(f"⏹️ Silence check #{check_id} cancelled - call hanging up")
             return
         
         threshold = self.silence_monitor.get_soft_threshold()
@@ -897,6 +900,8 @@ class VoiceAgentHandler:
     
     async def _inject_farewell_and_hangup(self):
         """Inject farewell message before hanging up due to silence."""
+        # Set flag to stop silence detection during hangup
+        self._is_hanging_up = True
         if not self.deepgram_ws:
             await self._hangup_call()
             return
@@ -921,6 +926,9 @@ class VoiceAgentHandler:
     
     async def _hangup_with_farewell(self, farewell_message: str):
         """Send a farewell message then hangup after delay."""
+        # Set flag to stop silence detection during hangup
+        self._is_hanging_up = True
+        
         if not self.deepgram_ws:
             await self._hangup_call()
             return
