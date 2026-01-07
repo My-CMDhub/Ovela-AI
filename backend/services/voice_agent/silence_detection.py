@@ -58,28 +58,21 @@ class SilenceMonitor:
     
     def on_ai_finished_speaking(self, message: str = ""):
         """
-        Called when AI finishes speaking - starts silence timer.
+        Called when AI finishes speaking (AgentAudioDone) - starts silence timer.
         
-        Args:
-            message: The AI's last message (for context-aware timing)
+        No TTS buffer calculation - we trust the event timing from Deepgram.
+        The state machine handles AI speaking state via ConversationText events.
         """
-        # Estimate TTS playback time (about 12-15 characters per second for natural speech)
-        # This accounts for the delay between Deepgram sending audio and Twilio finishing playback
-        estimated_tts_seconds = len(message) / 12 if message else 0
-        self.tts_buffer = min(estimated_tts_seconds, 15)  # Cap at 15 seconds
-        
-        # Add TTS buffer to start time (silence timer starts after TTS finishes)
-        self.silence_check_start_time = time.time() + self.tts_buffer
-        self.silence_check_id += 1  # Invalidate any running checks
+        # Start silence timer immediately - event timing is authoritative
+        self.silence_check_start_time = time.time()
+        self.silence_check_id += 1  # New check cycle
         self.last_ai_message = message
-        self.ai_asked_question = self._requires_thinking(message)
+        self.ai_asked_question = self._requires_thinking(message) if message else False
+        self.tts_buffer = 0  # No buffer - rely on state machine
         
-        # CRITICAL FIX: Reset followup count so new silence detection cycle can trigger
+        # Reset followup count for new silence cycle
         self.silence_followup_count = 0
         self.silence_followup_sent = False
-        
-        if self.tts_buffer > 2:
-            logger.debug(f"⏱️ Added {self.tts_buffer:.1f}s TTS buffer for {len(message)} char message")
     
     def _requires_thinking(self, message: str) -> bool:
         """Check if the AI's message requires user to think (longer threshold)."""

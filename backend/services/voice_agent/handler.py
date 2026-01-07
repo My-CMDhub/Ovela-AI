@@ -501,6 +501,12 @@ class VoiceAgentHandler:
             # Extract control signals and clean content for logging/transcript
             clean_content, signals = prepare_for_tts(content)
             
+            # STATE MACHINE: AI is now speaking
+            # This replaces AgentStartedSpeaking which Deepgram doesn't send
+            self._ai_is_speaking = True
+            self.silence_monitor.on_ai_started_speaking()  # Invalidate pending checks
+            self._in_silence_escalation = False  # Cancel any silence escalation
+            
             # Log clean content with latency info
             if self.ai_response_start_time:
                 latency_ms = int((time.time() - self.ai_response_start_time) * 1000)
@@ -509,7 +515,7 @@ class VoiceAgentHandler:
                 logger.info(f"[AI]: {clean_content}")
             
             # Save clean content to transcript (not raw with signals)
-            self.last_ai_message = clean_content  # Track for silence detection TTS buffer
+            self.last_ai_message = clean_content
             self.transcript.append({
                 "role": "ai",
                 "text": clean_content,
@@ -565,33 +571,29 @@ class VoiceAgentHandler:
         """
         Handle agent finished speaking - start silence monitoring.
         
-        NOTE: Deepgram sends AgentAudioDone per-chunk when streaming long responses.
-        We use the _ai_is_speaking flag and a debounce delay to ensure we only
-        start silence monitoring after the COMPLETE response is done.
+        STATE MACHINE: AgentAudioDone means Deepgram finished sending audio.
+        We now switch to "awaiting user utterance" state.
         """
-        logger.info("🔇 Agent finished speaking")
+        logger.info("🔇 Agent audio done")
         
-        # Mark AI as not speaking
+        # Mark AI as not speaking - transition to awaiting user
         self._ai_is_speaking = False
         
-        # If we're in a silence escalation cycle (soft→hard→abandon),
-        # don't reset the silence state or start a new cycle
+        # If we're in a silence escalation cycle, don't start a new cycle
         if getattr(self, '_in_silence_escalation', False):
             logger.debug("⏱️ Skipping new silence cycle - in escalation mode")
             return
         
-        # Debounce: Wait a bit for more AgentAudioDone events or AgentStartedSpeaking
-        # If AI starts speaking again, _ai_is_speaking will be set to True
-        await asyncio.sleep(0.8)  # 800ms debounce
+        # Short grace period to allow for streaming chunks
+        await asyncio.sleep(0.3)  # 300ms grace period
         
-        # After debounce, check if AI started speaking again
+        # Check if AI started speaking again (new ConversationText came in)
         if getattr(self, '_ai_is_speaking', False):
-            logger.debug("⏱️ Skipping silence check - AI started speaking again")
+            logger.debug("⏱️ Skipping silence check - AI speaking again")
             return
         
-        # Notify silence monitor with the AI message for TTS duration estimation
-        last_message = getattr(self, 'last_ai_message', '')
-        self.silence_monitor.on_ai_finished_speaking(last_message)
+        # Start silence monitoring - no TTS buffer, trust event timing
+        self.silence_monitor.on_ai_finished_speaking()
         check_id = self.silence_monitor.get_check_id()
         
         # Schedule silence check
@@ -697,14 +699,22 @@ class VoiceAgentHandler:
     
     async def _check_silence(self, check_id: int):
         """Check for soft silence threshold."""
+        # STRICT GUARD: Never run silence check while AI is speaking
+        if getattr(self, '_ai_is_speaking', False):
+            logger.info(f"⏹️ Silence check #{check_id} cancelled - AI is speaking")
+            return
+        
         threshold = self.silence_monitor.get_soft_threshold()
-        tts_buffer = self.silence_monitor.get_tts_buffer()
-        total_wait = threshold + tts_buffer
-        logger.info(f"⏱️ Silence check #{check_id} scheduled: waiting {total_wait:.1f}s (threshold={threshold}s + TTS={tts_buffer:.1f}s)")
-        await asyncio.sleep(total_wait)
+        logger.info(f"⏱️ Silence check #{check_id} waiting {threshold}s")
+        await asyncio.sleep(threshold)
         
         if not self.is_running:
             logger.debug(f"⏱️ Silence check #{check_id} cancelled: call ended")
+            return
+        
+        # Check again if AI started speaking during wait
+        if getattr(self, '_ai_is_speaking', False):
+            logger.info(f"⏹️ Silence check #{check_id} cancelled - AI started speaking")
             return
         
         result = self.silence_monitor.check_silence(check_id)
@@ -726,14 +736,17 @@ class VoiceAgentHandler:
     
     async def _check_hard_silence(self, check_id: int):
         """Check for hard silence threshold (second follow-up)."""
-        # Wait for hard threshold (10 more seconds after soft)
-        hard_wait = self.silence_monitor.get_hard_threshold() - self.silence_monitor.get_soft_threshold()
-        tts_buffer = self.silence_monitor.get_tts_buffer()
-        total_wait = hard_wait + tts_buffer
-        logger.info(f"⏱️ Hard silence check waiting {total_wait:.1f}s (hard_wait={hard_wait}s + TTS={tts_buffer:.1f}s)")
-        await asyncio.sleep(total_wait)
+        # Guard: Exit if AI started speaking
+        if getattr(self, '_ai_is_speaking', False):
+            self._in_silence_escalation = False
+            return
         
-        if not self.is_running:
+        # Wait delta between soft and hard threshold
+        hard_wait = self.silence_monitor.get_hard_threshold() - self.silence_monitor.get_soft_threshold()
+        logger.info(f"⏱️ Hard silence check waiting {hard_wait}s")
+        await asyncio.sleep(hard_wait)
+        
+        if not self.is_running or getattr(self, '_ai_is_speaking', False):
             self._in_silence_escalation = False
             return
         
@@ -755,13 +768,16 @@ class VoiceAgentHandler:
     
     async def _check_abandon_silence(self, check_id: int):
         """Check for abandon threshold - end call if still silent."""
-        abandon_wait = self.silence_monitor.get_abandon_threshold() - self.silence_monitor.get_hard_threshold()
-        tts_buffer = self.silence_monitor.get_tts_buffer()
-        total_wait = abandon_wait + tts_buffer
-        logger.info(f"⏱️ Abandon silence check waiting {total_wait:.1f}s (abandon_wait={abandon_wait}s + TTS={tts_buffer:.1f}s)")
-        await asyncio.sleep(total_wait)
+        # Guard: Exit if AI started speaking
+        if getattr(self, '_ai_is_speaking', False):
+            self._in_silence_escalation = False
+            return
         
-        if not self.is_running:
+        abandon_wait = self.silence_monitor.get_abandon_threshold() - self.silence_monitor.get_hard_threshold()
+        logger.info(f"⏱️ Abandon silence check waiting {abandon_wait}s")
+        await asyncio.sleep(abandon_wait)
+        
+        if not self.is_running or getattr(self, '_ai_is_speaking', False):
             self._in_silence_escalation = False
             return
         
