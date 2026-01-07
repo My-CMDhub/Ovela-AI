@@ -504,8 +504,12 @@ class VoiceAgentHandler:
             # STATE MACHINE: AI is now speaking
             # This replaces AgentStartedSpeaking which Deepgram doesn't send
             self._ai_is_speaking = True
-            self.silence_monitor.on_ai_started_speaking()  # Invalidate pending checks
-            self._in_silence_escalation = False  # Cancel any silence escalation
+            
+            # During escalation, preserve check ID so hard/abandon checks stay valid
+            in_escalation = getattr(self, '_in_silence_escalation', False)
+            self.silence_monitor.on_ai_started_speaking(preserve_check_id=in_escalation)
+            
+            # Don't reset escalation flag - let the escalation sequence continue
             
             # Log clean content with latency info
             if self.ai_response_start_time:
@@ -923,7 +927,11 @@ class VoiceAgentHandler:
         
         try:
             await self._inject_message(farewell_message)
-            await asyncio.sleep(10)  # Longer wait for complex farewells
+            # Wait for TTS to complete - estimate based on message length
+            # ~12 chars/sec for TTS, plus latency buffer
+            estimated_tts_time = max(6, len(farewell_message) // 10)
+            logger.info(f"⏳ Waiting {estimated_tts_time}s for farewell TTS")
+            await asyncio.sleep(estimated_tts_time)
         except Exception as e:
             logger.warning(f"Failed to send farewell: {e}")
         
