@@ -427,6 +427,11 @@ class VoiceAgentHandler:
         """
         event_type = event.get("type")
         
+        # DEBUG: Log ALL events to understand what Deepgram sends
+        # This helps diagnose silence detection issues
+        ai_speaking = getattr(self, '_ai_is_speaking', False)
+        logger.info(f"📨 DG_EVENT: {event_type} | ai_speaking={ai_speaking} | full={event}")
+        
         if event_type == "Welcome":
             logger.info(f"🤝 Deepgram Agent welcome: {event}")
             
