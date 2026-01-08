@@ -429,16 +429,17 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
     logger = logging.getLogger(__name__)
     logger.info(f"🔍 Booking lookup: name='{guest_name}' -> '{search_name}', phone='{phone}' -> '{search_phone}'")
     
-    # Validate phone format if provided
+    # Validate phone format if provided (non-blocking - just for matching quality)
+    phone_is_valid = False
     if phone:
         is_valid, validation_msg = is_valid_au_phone(phone)
         if not is_valid:
-            logger.info(f"⚠️ Invalid phone format: {validation_msg}")
-            return {
-                "found": False,
-                "phone_invalid": True,
-                "message": validation_msg
-            }
+            logger.warning(f"⚠️ Phone validation failed: {validation_msg}")
+            logger.info(f"   Continuing with name-based search (phone will not be used for matching)")
+            search_phone = None  # Don't use invalid phone for matching
+        else:
+            phone_is_valid = True
+            logger.info(f"✅ Phone validated successfully")
     
     try:
         # Fetch reservations from Appwrite
@@ -458,6 +459,11 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
             
             # Log total documents for debugging
             logger.info(f"📊 Total reservations in database: {len(documents)}")
+            if phone:
+                phone_status = "valid" if phone_is_valid else "invalid (will not use for matching)"
+            else:
+                phone_status = "not provided"
+            logger.info(f"🔍 Search criteria: name='{search_name}', phone={phone_status}")
             
             # Two-pass search: First by name, then score by phone similarity
             name_matches = []
@@ -517,11 +523,13 @@ async def lookup_booking(guest_name: str, phone: str = None, reference: str = No
             if not name_matches:
                 normalized_display = search_name.title()
                 logger.info(f"❌ No name matches found for '{normalized_display}'")
+                logger.info(f"   Searched {len(documents)} total reservations")
                 return {
                     "found": False,
                     "searched_name": normalized_display,
                     "searched_phone": search_phone,
-                    "message": f"I couldn't find a booking under the name '{normalized_display}'. Could you spell out your name for me, or provide a booking reference number?"
+                    "total_searched": len(documents),
+                    "message": f"I couldn't find a booking under the name '{normalized_display}'. Could you spell out your name for me, or provide your check-in date or booking reference number?"
                 }
             
             # Sort by phone score (best match first)
