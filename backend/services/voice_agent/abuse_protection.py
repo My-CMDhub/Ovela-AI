@@ -96,7 +96,7 @@ class AbuseProtection:
                 "stage": 3,
                 "action": "hangup",
                 "should_hangup": True,
-                "farewell": "I've really enjoyed chatting, but I need to free up the line for other callers. If you ever need help with a booking at The Lydoun Motel, give us a call back anytime. Take care!",
+                "farewell": "I've really enjoyed chatting, but I need to free up the line for other callers. If you ever need help with reservations or food ordering, give us a call back anytime. Take care!",
                 "message": "LIMIT REACHED. The system is ending the call. Say your farewell - the call will end shortly."
             }
     
@@ -128,7 +128,7 @@ class AbuseProtection:
                     "I've really enjoyed helping you, but due to our call time guidelines, "
                     "I need to wrap up now. Don't worry - I'm logging this conversation and "
                     "a member of our team will reach out to help with anything we didn't finish. "
-                    "They'll pick up right where we left off. Thanks so much for calling The Lydoun Motel!"
+                    "They'll pick up right where we left off. Thanks so much for calling Saranda Cafe!"
                 )
             else:
                 farewell = (
@@ -203,7 +203,7 @@ class AbuseProtection:
                 logger.warning(f"🔄 Repetitive input detected (violations: {self.violation_count})")
                 return {
                     "is_spam": True,
-                    "warning": "I noticed you've said that a few times. Is there something specific about our rooms or bookings I can help with?"
+                    "warning": "I noticed you've said that a few times. Is there something specific about cafe or food I can help with?"
                 }
         
         # Track short/non-substantive responses
