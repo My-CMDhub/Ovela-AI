@@ -100,6 +100,11 @@ class VoiceAgentHandler:
         self.exchange_count = 0
         self.booking_completed = False
         
+        # Transfer state tracking
+        self._transfer_pending = False
+        self._transfer_tts_done = asyncio.Event()
+        self._transfer_target = None
+        
         # Latency tracking (for debugging/analytics)
         self.user_speech_start_time = None
         self.ai_response_start_time = None
@@ -610,6 +615,12 @@ class VoiceAgentHandler:
         
         # Mark AI as not speaking - transition to awaiting user
         self._ai_is_speaking = False
+        
+        # If we're waiting for transfer TTS to complete, signal it's done
+        if self._transfer_pending:
+            logger.info("✅ Transfer TTS playback completed")
+            self._transfer_tts_done.set()
+            return  # Don't start silence monitoring during transfer
         
         # If we're in a silence escalation cycle, don't start a new cycle
         if getattr(self, '_in_silence_escalation', False):
