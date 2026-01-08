@@ -89,7 +89,7 @@ async def handle_incoming_call(
         
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial timeout="15" action="{callback_url}" method="POST">
+    <Dial timeout="10" action="{callback_url}" method="POST">
         <Number>{business_phone}</Number>
     </Dial>
     <Say voice="alice">Sorry, we couldn't connect your call. You'll receive a WhatsApp message shortly to help you book an appointment.</Say>
