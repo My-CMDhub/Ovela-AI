@@ -195,9 +195,7 @@ class VoiceAgentHandler:
                     "functions": get_booking_functions()
                 },
                 "speak": self._get_tts_config(),
-                "greeting": {
-                   "text": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else self._get_active_greeting()
-                }
+                "greeting": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else self._get_active_greeting()
             }
         }
     
