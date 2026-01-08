@@ -691,17 +691,22 @@ class VoiceAgentHandler:
             logger.info(f"📞 Transfer requested to {transfer_to}")
             logger.info(f"📢 Playing transfer message: '{transfer_message}'")
             
+            # Set transfer pending flag and reset the event
+            self._transfer_pending = True
+            self._transfer_tts_done.clear()
+            self._transfer_target = transfer_to
+            
+            # Inject the transfer message
             await self._inject_message(transfer_message)
             
-            # Wait for TTS to fully complete playing to caller
-            # Estimated ~12 chars/sec for TTS, plus network/buffer time
-            # TODO: Replace with hold music during transfer (see memory_bank/next_steps.md)
-            # Future: Use Twilio <Play> verb with music URL before Dial
-            # Increase wait time to ensure full message is heard before cutoff
-            # 14s base + length calculation to be safe
-            tts_wait_seconds = max(14, len(transfer_message) // 8)  
-            logger.info(f"⏳ Waiting {tts_wait_seconds}s for TTS playback before transfer")
-            await asyncio.sleep(tts_wait_seconds)
+            # Wait for TTS to actually complete (AgentAudioDone event)
+            # with a timeout as safety fallback
+            logger.info("⏳ Waiting for TTS playback to complete...")
+            try:
+                await asyncio.wait_for(self._transfer_tts_done.wait(), timeout=20.0)
+                logger.info("✅ TTS confirmed complete, executing transfer")
+            except asyncio.TimeoutError:
+                logger.warning("⚠️ TTS completion timeout, proceeding with transfer anyway")
             
             await self._execute_twilio_transfer(transfer_to)
             return  # Don't send function response, call is being transferred
