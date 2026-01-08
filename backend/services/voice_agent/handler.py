@@ -91,6 +91,7 @@ class VoiceAgentHandler:
         self.user_name = "there"
         self.business_name = "your business"
         self.user_phone = "unknown"
+        self.custom_params = {}  # Store all custom params for later access
         
         # State tracking
         self.is_running = True
@@ -307,14 +308,15 @@ class VoiceAgentHandler:
         if "start" in data and "callSid" in data["start"]:
             self.call_sid = data["start"]["callSid"]
         
-        # Extract custom parameters passed from TwiML
+        # Extract custom parameters from Twilio
         custom_params = data["start"].get("customParameters", {})
+        self.custom_params = custom_params  # Store for later access (e.g., transfer_failed flag)
         self.user_name = custom_params.get("user_name", "there")
         self.business_name = custom_params.get("business_name", "your business")
         self.user_phone = custom_params.get("user_phone", "unknown")
         
-        # Detect if this is a demo call (from website form) or production call (direct inbound)
-        # Demo calls come from /api/voice/demo endpoint which sets is_demo=true
+        # Multi-tenant detection
+        self.tenant_id = custom_params.get("tenant_id", "lydoun")
         self.is_demo_call = custom_params.get("is_demo", "false").lower() == "true"
         call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
         
