@@ -74,7 +74,7 @@ class AbuseProtection:
                 "limit": limit,
                 "stage": 1,
                 "action": "redirect_gently",
-                "message": "This seems off-topic. Briefly acknowledge, then ask: 'Is there anything about the motel or a booking I can help you with?'"
+                "message": "This seems off-topic. Briefly acknowledge, then ask: 'Is there anything about the food ordering I can help you with?'"
             }
         
         # Stage 2: Firm redirect (3 to limit-1 flags)
@@ -84,7 +84,7 @@ class AbuseProtection:
                 "limit": limit,
                 "stage": 2,
                 "action": "redirect_firmly",
-                "message": f"This is off-topic comment #{count}. Say: 'I'm really here to help with bookings and motel info. If there's nothing else I can help with, we should wrap up our call.'"
+                "message": f"This is off-topic comment #{count}. Say: 'I'm really here to help with food ordering. If there's nothing else I can help with, we should wrap up our call.'"
             }
         
         # Stage 3: Auto-hangup (limit+ flags)
