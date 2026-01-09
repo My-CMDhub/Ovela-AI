@@ -295,5 +295,19 @@ def get_booking_functions() -> list:
                 "type": "object",
                 "properties": {}
             }
+        },
+        {
+            "name": "get_policies",
+            "description": "Get cancellation or payment policies. Use when customer asks about refunds, fees, or how to pay.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "policy_type": {
+                        "type": "string",
+                        "description": "Type of policy: 'cancellation' or 'payment'. Leave empty for general policy info.",
+                        "enum": ["cancellation", "payment"]
+                    }
+                }
+            }
         }
     ]

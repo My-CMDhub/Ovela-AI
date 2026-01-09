@@ -142,8 +142,27 @@ ACTIVITIES = [
     "Fishing and hunting",
     "Photography",
     "Wine tasting (Rutherglen)",
+    "Wine tasting (Rutherglen)",
     "Craft beer and spirits tasting"
 ]
+
+# =============================================================================
+# POLICIES
+# =============================================================================
+
+POLICIES = {
+    "cancellation": {
+        "standard": "24 hours notice required prior to check-in. Late cancellation forfeits first night's fee.",
+        "peak": "7 days notice required for Special Events & Public Holidays. Late cancellation forfeits first night's fee.",
+        "no_show": "Full first night tariff charged to credit card provided at booking."
+    },
+    "payment": {
+        "surcharge": "2.2% Service & Handling Fee applies to all online card payments.",
+        "methods": "Visa, MasterCard. Processed as 'Accommodation Payment Services'.",
+        "terms": "Full payment may be charged at booking. Balance collected at check-in if not pre-paid.",
+        "check_in_payment": "Balance payable at reception upon arrival."
+    }
+}
 
 # =============================================================================
 # SEARCH FUNCTIONS (Used by Voice Agent via Function Calling)
@@ -279,6 +298,26 @@ def get_activities_nearby() -> Dict[str, List[str]]:
             "Eldorado", "Myrtleford", "Bright"
         ]
     }
+
+
+def get_policies(policy_type: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Get hotel policies (cancellation, payment).
+    
+    Args:
+        policy_type: "cancellation", "payment", or None for all
+    
+    Returns:
+        Policy details
+    """
+    if policy_type:
+        policy_type = policy_type.lower()
+        if "cancel" in policy_type:
+            return {"cancellation_policy": POLICIES["cancellation"]}
+        if "pay" in policy_type:
+            return {"payment_policy": POLICIES["payment"]}
+    
+    return {"policies": POLICIES}
 
 
 def recommend_room(num_guests: int, needs_accessibility: bool = False) -> Dict[str, Any]:
@@ -709,6 +748,21 @@ def get_motel_search_functions() -> list:
                     }
                 },
                 "required": ["guest_name"]
+            }
+        }
+    ],
+        {
+            "name": "get_policies",
+            "description": "Get cancellation or payment policies. Use when customer asks about refunds, fees, or how to pay.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "policy_type": {
+                        "type": "string",
+                        "description": "Type of policy: 'cancellation' or 'payment'. Leave empty for general policy info.",
+                        "enum": ["cancellation", "payment"]
+                    }
+                }
             }
         }
     ]
