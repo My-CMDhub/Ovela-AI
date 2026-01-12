@@ -128,13 +128,15 @@ def get_random_soft_warning(tenant_id: str = "lydoun") -> str:
     """Returns a random soft warning for potential spam."""
     if tenant_id == "paddlesteamer":
         property_name = "Albury Paddlesteamer Motel"
+        short_name = "Paddlesteamer"
     else:
         property_name = "The Lydoun Motel"
+        short_name = "Lydoun"
     
     warnings = [
-        "I notice you might be having trouble. Is there something specific I can help with about the motel?",
-        "If you need a moment, no problem. I'm here to help with room enquiries and bookings.",
+        f"I notice you might be having trouble. Is there something specific I can help with about {short_name}?",
+        f"If you need a moment, no problem. I'm here to help with enquiries about {property_name}.",
         f"Just checking - were you after information about {property_name}?",
-        "I'm here to help with motel enquiries. What dates were you thinking of staying?",
+        f"I'm here to help with {short_name} enquiries. What dates were you thinking of staying?",
     ]
     return random.choice(warnings)
