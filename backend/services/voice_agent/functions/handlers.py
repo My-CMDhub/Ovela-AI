@@ -447,6 +447,36 @@ async def handle_search_motel_info(args: dict) -> dict:
     }
 
 
+async def handle_get_policies(args: dict) -> dict:
+    """Get motel policies (cancellation, payment, etc.)."""
+    from services.motel_knowledge_base import get_policies
+    
+    policy_type = args.get("policy_type")
+    result = get_policies(policy_type)
+    
+    # Build friendly message based on policy type
+    if policy_type == "cancellation":
+        cancel_info = result.get("cancellation", {})
+        standard = cancel_info.get("standard", "")
+        return {
+            **result,
+            "message": f"Our cancellation policy: {standard}"
+        }
+    elif policy_type == "payment":
+        payment_info = result.get("payment", {})
+        methods = payment_info.get("methods", "")
+        return {
+            **result,
+            "message": f"We accept {methods}. {payment_info.get('terms', '')}"
+        }
+    else:
+        # Return all policies
+        return {
+            **result,
+            "message": "I can tell you about our cancellation and payment policies. Which would you like to know about?"
+        }
+
+
 async def handle_lookup_booking(args: dict, caller_id: str = None) -> dict:
     """
     Look up an existing booking by guest name.
@@ -631,6 +661,9 @@ class FunctionDispatcher:
             
             elif function_name == "search_motel_info":
                 return await handle_search_motel_info(args)
+            
+            elif function_name == "get_policies":
+                return await handle_get_policies(args)
             
             elif function_name == "lookup_booking":
                 # Pass caller ID for hybrid matching (uses verified Twilio phone)

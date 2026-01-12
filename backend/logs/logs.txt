@@ -1,0 +1,259 @@
+heroku logs --tail
+2026-01-12T03:41:43.134179+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': "I'm here when you're ready."}
+2026-01-12T03:41:43.134310+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: I'm here when you're ready. (Response latency: 2603ms)
+2026-01-12T03:41:43.134636+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "I'm here when you're ready."}
+2026-01-12T03:41:43.171691+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏹️ Silence check #37 cancelled - AI started speaking
+2026-01-12T03:41:43.205323+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:41:43.205379+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:41:43.506169+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #41 (soft=10s)
+2026-01-12T03:41:43.506258+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #41 waiting 10s
+2026-01-12T03:41:46.530878+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:41:46.530930+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:41:49.234598+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'user', 'content': 'What about with the food? Like, your restaurant is closed or open?', 'words': []}
+2026-01-12T03:41:49.234654+00:00 app[web.1]: INFO:     services.voice_agent.handler - [User]: What about with the food? Like, your restaurant is closed or open? (STT latency: 2703ms)
+2026-01-12T03:41:49.248105+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'role': 'user', 'content': 'What about with the food? Like, your restaurant is closed or open?', 'words': []}
+2026-01-12T03:41:50.272002+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': "We don't have an on-site restaurant at Albury Paddlesteamer Motel, but we do offer room service for meals."}
+2026-01-12T03:41:50.272147+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: We don't have an on-site restaurant at Albury Paddlesteamer Motel, but we do offer room service for meals. (Response latency: 1037ms)
+2026-01-12T03:41:50.272440+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "We don't have an on-site restaurant at Albury Paddlesteamer Motel, but we do offer room service for meals."}
+2026-01-12T03:41:53.507684+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏹️ Silence check #41 cancelled - AI started speaking
+2026-01-12T03:41:56.394325+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': "If you're looking for dining options, there are several restaurants nearby in Albury that are open."}
+2026-01-12T03:41:56.394490+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: If you're looking for dining options, there are several restaurants nearby in Albury that are open. (Response latency: 7159ms)
+2026-01-12T03:41:56.394583+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "If you're looking for dining options, there are several restaurants nearby in Albury that are open."}
+2026-01-12T03:41:59.320954+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=True | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:41:59.321025+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:41:59.328443+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:41:59.328505+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:41:59.629792+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #44 (soft=10s)
+2026-01-12T03:41:59.629884+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #44 waiting 10s
+2026-01-12T03:41:59.874698+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'user', 'content': 'And what about events?', 'words': []}
+2026-01-12T03:41:59.874791+00:00 app[web.1]: INFO:     services.voice_agent.handler - [User]: And what about events? (STT latency: 553ms)
+2026-01-12T03:41:59.888128+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'role': 'user', 'content': 'And what about events?', 'words': []}
+2026-01-12T03:42:00.828039+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': "We don't host events at Albury Paddlesteamer Motel, but we can accommodate group bookings."}
+2026-01-12T03:42:00.828200+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: We don't host events at Albury Paddlesteamer Motel, but we can accommodate group bookings. (Response latency: 953ms)
+2026-01-12T03:42:00.828473+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "We don't host events at Albury Paddlesteamer Motel, but we can accommodate group bookings."}
+2026-01-12T03:42:06.109807+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': "For events or larger gatherings, it's best to contact us directly so we can discuss your specific needs and arrangements."}
+2026-01-12T03:42:06.109991+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: For events or larger gatherings, it's best to contact us directly so we can discuss your specific needs and arrangements. (Response latency: 6235ms)
+2026-01-12T03:42:06.180941+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "For events or larger gatherings, it's best to contact us directly so we can discuss your specific needs and arrangements."}
+2026-01-12T03:42:06.252468+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:42:06.252531+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:42:06.553729+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #47 (soft=10s)
+2026-01-12T03:42:06.553844+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #47 waiting 10s
+2026-01-12T03:42:09.630769+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #44 result: action=none, reason=check_invalidated
+2026-01-12T03:42:16.435939+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:42:16.436005+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:42:16.555130+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #47 result: action=none, reason=user_spoke
+2026-01-12T03:42:19.566142+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:42:19.566212+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:42:21.491582+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:42:21.491645+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:42:21.608711+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'user', 'content': 'Nice. So, like, how many maximum people you can allow in events?', 'words': []}
+2026-01-12T03:42:21.608794+00:00 app[web.1]: INFO:     services.voice_agent.handler - [User]: Nice. So, like, how many maximum people you can allow in events? (STT latency: 117ms)
+2026-01-12T03:42:21.628537+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'role': 'user', 'content': 'Nice. So, like, how many maximum people you can allow in events?', 'words': []}
+2026-01-12T03:42:22.719955+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'We primarily focus on accommodations rather than event hosting, but we can handle group bookings for rooms.'}
+2026-01-12T03:42:22.720100+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: We primarily focus on accommodations rather than event hosting, but we can handle group bookings for rooms. (Response latency: 1111ms)
+2026-01-12T03:42:22.720362+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'We primarily focus on accommodations rather than event hosting, but we can handle group bookings for rooms.'}
+2026-01-12T03:42:23.177469+00:00 app[web.1]: INFO:     services.voice_agent.abuse_protection - 🚫 Hard time cap reached at 3 minutes
+2026-01-12T03:42:23.177536+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🚫 Hard time cap reached - ending call [PRODUCTION]
+2026-01-12T03:42:23.177704+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 Injected: 'I've really enjoyed helping you today, but I need ...'
+2026-01-12T03:42:23.177769+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏳ Waiting 17s for farewell TTS
+2026-01-12T03:42:29.361409+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'The maximum number of guests would depend on the rooms booked.'}
+2026-01-12T03:42:29.361557+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: The maximum number of guests would depend on the rooms booked. (Response latency: 7752ms)
+2026-01-12T03:42:29.361850+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'The maximum number of guests would depend on the rooms booked.'}
+2026-01-12T03:42:32.722104+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': "For specific events, it's best to contact us directly so we can discuss your requirements in detail."}
+2026-01-12T03:42:32.722281+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: For specific events, it's best to contact us directly so we can discuss your requirements in detail. (Response latency: 11113ms)
+2026-01-12T03:42:32.722611+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "For specific events, it's best to contact us directly so we can discuss your requirements in detail."}
+2026-01-12T03:42:32.864065+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:42:32.864136+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:42:33.164933+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #51 (soft=10s)
+2026-01-12T03:42:33.165067+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': "I've really enjoyed helping you today, but I need to free up the line for other callers. If you need anything else, feel free to call back anytime. Take care and have a great day!"}
+2026-01-12T03:42:33.165230+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: I've really enjoyed helping you today, but I need to free up the line for other callers. If you need anything else, feel free to call back anytime. Take care and have a great day! (Response latency: 11556ms)
+2026-01-12T03:42:33.165323+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "I've really enjoyed helping you today, but I need to free up the line for other callers. If you need anything else, feel free to call back anytime. Take care and have a great day!"}
+2026-01-12T03:42:33.165700+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏹️ Silence check #51 cancelled - AI is speaking
+2026-01-12T03:42:37.268684+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:42:37.268789+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:42:37.570059+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #53 (soft=10s)
+2026-01-12T03:42:37.570184+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏹️ Silence check #53 cancelled - call hanging up
+2026-01-12T03:42:40.179039+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📵 Hanging up call: CA37ed433f3eb8a51ddde71bc3744f26b3
+2026-01-12T03:42:40.206782+00:00 app[web.1]: INFO:     twilio.http_client - -- BEGIN Twilio API Request --
+2026-01-12T03:42:40.206848+00:00 app[web.1]: INFO:     twilio.http_client - POST Request: https://api.twilio.com/2010-04-01/Accounts/ACb66131b5c9fb546415b297179c8a6164/Calls/CA37ed433f3eb8a51ddde71bc3744f26b3.json
+2026-01-12T03:42:40.206899+00:00 app[web.1]: INFO:     twilio.http_client - Headers:
+2026-01-12T03:42:40.206955+00:00 app[web.1]: INFO:     twilio.http_client - Content-Type : application/x-www-form-urlencoded
+2026-01-12T03:42:40.207008+00:00 app[web.1]: INFO:     twilio.http_client - Accept : application/json
+2026-01-12T03:42:40.207061+00:00 app[web.1]: INFO:     twilio.http_client - User-Agent : twilio-python/9.9.1 (Linux x86_64) Python/3.14.2
+2026-01-12T03:42:40.207113+00:00 app[web.1]: INFO:     twilio.http_client - X-Twilio-Client : python-9.9.1
+2026-01-12T03:42:40.207164+00:00 app[web.1]: INFO:     twilio.http_client - Accept-Charset : utf-8
+2026-01-12T03:42:40.207214+00:00 app[web.1]: INFO:     twilio.http_client - -- END Twilio API Request --
+2026-01-12T03:42:40.307572+00:00 app[web.1]: INFO:     twilio.http_client - Response Status Code: 200
+2026-01-12T03:42:40.307676+00:00 app[web.1]: INFO:     twilio.http_client - Response Headers: {'Content-Type': 'application/json;charset=utf-8', 'Content-Length': '2132', 'Connection': 'keep-alive', 'Date': 'Mon, 12 Jan 2026 03:42:40 GMT', 'Twilio-Concurrent-Requests': '1', 'Twilio-Request-Id': 'RQ89edf85d27c0335385dcd96c1f8b4cb9', 'Twilio-Request-Duration': '0.067', 'X-Home-Region': 'us1', 'X-API-Domain': 'api.twilio.com', 'Strict-Transport-Security': 'max-age=31536000', 'X-Cache': 'Miss from cloudfront', 'Via': '1.1 8dd4c7f1d7b55b5ac0fc5b7f8532cf32.cloudfront.net (CloudFront)', 'X-Amz-Cf-Pop': 'IAD61-P2', 'X-Amz-Cf-Id': 'dmimidbDmBGRKo-jZX27b3GPWdu36bkuboY6DnS3TvwzEiQbzU8aJA==', 'X-Powered-By': 'AT-5000', 'X-Shenanigans': 'none', 'Vary': 'Origin'}
+2026-01-12T03:42:40.307877+00:00 app[web.1]: INFO:     services.voice_agent.handler - ✅ Call terminated successfully
+2026-01-12T03:42:40.308256+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🧹 Cleaning up VoiceAgentHandler
+2026-01-12T03:42:40.560665+00:00 app[web.1]: INFO:     api.twilio - 📞 Call status callback: CA37ed433f3eb8a51ddde71bc3744f26b3 from +61475677771
+2026-01-12T03:42:40.560714+00:00 app[web.1]: INFO:     api.twilio -    CallStatus: completed, CallDuration: 199s
+2026-01-12T03:42:40.560792+00:00 app[web.1]: INFO:     api.twilio -    DialCallStatus: None, DialCallDuration: 0s
+2026-01-12T03:42:40.560842+00:00 app[web.1]: INFO:     api.twilio - ℹ️ WhatsApp automation disabled - no message will be sent
+2026-01-12T03:42:40.560889+00:00 app[web.1]: INFO:     api.twilio - ℹ️ Call was answered - no WhatsApp message sent
+2026-01-12T03:42:40.561116+00:00 app[web.1]: INFO:     54.226.196.126:0 - "POST /twilio/call-status HTTP/1.1" 200 OK
+2026-01-12T03:42:40.561582+00:00 heroku[router]: at=info method=POST path="/twilio/call-status" host=ovela-12c561a30285.herokuapp.com request_id=795064ae-d05e-72aa-95db-c0cf51da1f2d fwd="54.226.196.126" dyno=web.1 connect=0ms service=3ms status=200 bytes=15 protocol=http1.1 tls=true tls_version=unknown
+2026-01-12T03:42:40.780001+00:00 app[web.1]: INFO:     services.appwrite - Created demo transcript: 69646db00036dcc5a3b7 (14 exchanges)
+2026-01-12T03:42:40.780082+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📝 Saved transcript: 51 entries, 197s
+2026-01-12T03:42:41.529272+00:00 heroku[router]: at=info method=GET path="/api/voice/stream" host=ovela-12c561a30285.herokuapp.com request_id=eaeb9878-1ca6-7268-ad3c-5614d35ae801 fwd="44.208.164.57" dyno=web.1 connect=0ms service=198600ms status=101 bytes=0 protocol=http1.1 tls=true tls_version=unknown
+2026-01-12T03:42:41.530182+00:00 app[web.1]: INFO:     connection closed
+2026-01-12T03:46:44.810244+00:00 app[api]: Log session created by user getnewone2022@gmail.com
+2026-01-12T03:47:03.276296+00:00 heroku[router]: at=info method=POST path="/twilio/voice" host=ovela-12c561a30285.herokuapp.com request_id=10676381-de88-ff8f-ead4-ce920536466a fwd="54.144.74.217" dyno=web.1 connect=0ms service=3ms status=200 bytes=359 protocol=http1.1 tls=true tls_version=unknown
+2026-01-12T03:47:03.275319+00:00 app[web.1]: INFO:     api.twilio - 📞 Voice webhook from +61475677771, CallSid: CAb6525edd3dd52daf39f2c06a36561a18
+2026-01-12T03:47:03.275488+00:00 app[web.1]: INFO:     54.144.74.217:0 - "POST /twilio/voice HTTP/1.1" 200 OK
+2026-01-12T03:47:03.323484+00:00 app[web.1]: INFO:     ('54.209.32.178', 0) - "WebSocket /api/voice/stream" [accepted]
+2026-01-12T03:47:03.323612+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🚀 VoiceAgentHandler starting
+2026-01-12T03:47:03.323913+00:00 app[web.1]: INFO:     connection open
+2026-01-12T03:47:03.326199+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🟢 Twilio stream started: MZf46de571da4cda8e3a6329629245728b for there [PRODUCTION] tenant=paddlesteamer
+2026-01-12T03:47:03.557211+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🟢 Connected to Deepgram Voice Agent API
+2026-01-12T03:47:03.557474+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 Using Deepgram TTS (model: aura-2-thalia-en)
+2026-01-12T03:47:03.558097+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📤 Sent Settings to Deepgram Agent
+2026-01-12T03:47:03.558167+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 TTS PROVIDER: Deepgram (model: aura-2-thalia-en)
+2026-01-12T03:47:03.558331+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎧 Started receiving from Deepgram Agent
+2026-01-12T03:47:03.558436+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: Welcome | ai_speaking=False | full={'type': 'Welcome', 'request_id': 'bd66eb75-f6e2-4acf-986b-adf2a4731221'}
+2026-01-12T03:47:03.558498+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🤝 Deepgram Agent welcome: {'type': 'Welcome', 'request_id': 'bd66eb75-f6e2-4acf-986b-adf2a4731221'}
+2026-01-12T03:47:03.558568+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Duration monitor started [PRODUCTION]: soft=2min, hard=3min
+2026-01-12T03:47:03.703286+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: SettingsApplied | ai_speaking=False | full={'type': 'SettingsApplied'}
+2026-01-12T03:47:03.703345+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⚙️ Deepgram Agent settings applied
+2026-01-12T03:47:03.963082+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'Hi there! This is Ovela at Albury Paddlesteamer Motel. What can I help you with?'}
+2026-01-12T03:47:03.964487+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: Hi there! This is Ovela at Albury Paddlesteamer Motel. What can I help you with?
+2026-01-12T03:47:03.964816+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'Hi there! This is Ovela at Albury Paddlesteamer Motel. What can I help you with?'}
+2026-01-12T03:47:05.959113+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:47:05.959191+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:47:06.260067+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #2 (soft=10s)
+2026-01-12T03:47:06.260188+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #2 waiting 10s
+2026-01-12T03:47:11.337676+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:47:11.337746+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:47:13.340623+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'user', 'content': 'Hey. Do you have any dining options on-site?', 'words': []}
+2026-01-12T03:47:13.340704+00:00 app[web.1]: INFO:     services.voice_agent.handler - [User]: Hey. Do you have any dining options on-site? (STT latency: 2002ms)
+2026-01-12T03:47:13.360504+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'role': 'user', 'content': 'Hey. Do you have any dining options on-site?', 'words': []}
+2026-01-12T03:47:14.619185+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': "We don't have a restaurant on-site, but we do offer room service for your convenience."}
+2026-01-12T03:47:14.619328+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: We don't have a restaurant on-site, but we do offer room service for your convenience. (Response latency: 1278ms)
+2026-01-12T03:47:14.619617+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "We don't have a restaurant on-site, but we do offer room service for your convenience."}
+2026-01-12T03:47:16.262130+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏹️ Silence check #2 cancelled - AI started speaking
+2026-01-12T03:47:19.140505+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'You can enjoy a meal in your room, and reception can provide you with the menu details.'}
+2026-01-12T03:47:19.140687+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: You can enjoy a meal in your room, and reception can provide you with the menu details. (Response latency: 5799ms)
+2026-01-12T03:47:19.212718+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'You can enjoy a meal in your room, and reception can provide you with the menu details.'}
+2026-01-12T03:47:23.541402+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'Is there anything else you need?'}
+2026-01-12T03:47:23.541599+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: Is there anything else you need? (Response latency: 10200ms)
+2026-01-12T03:47:23.541946+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'Is there anything else you need?'}
+2026-01-12T03:47:23.613097+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:47:23.613165+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:47:23.914325+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #6 (soft=10s)
+2026-01-12T03:47:23.914432+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #6 waiting 10s
+2026-01-12T03:47:26.424613+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:47:26.424675+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:47:26.746257+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:47:26.746322+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:47:29.899850+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'user', 'content': "Okay. I'm traveling with my wife and two kids. What room will you recommend?", 'words': []}
+2026-01-12T03:47:29.899927+00:00 app[web.1]: INFO:     services.voice_agent.handler - [User]: Okay. I'm traveling with my wife and two kids. What room will you recommend? (STT latency: 3153ms)
+2026-01-12T03:47:29.919441+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'role': 'user', 'content': "Okay. I'm traveling with my wife and two kids. What room will you recommend?", 'words': []}
+2026-01-12T03:47:30.863105+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'For you, your wife, and two kids, I recommend the Family Room.'}
+2026-01-12T03:47:30.863240+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: For you, your wife, and two kids, I recommend the Family Room. (Response latency: 963ms)
+2026-01-12T03:47:30.863502+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'For you, your wife, and two kids, I recommend the Family Room.'}
+2026-01-12T03:47:33.915205+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏹️ Silence check #6 cancelled - AI started speaking
+2026-01-12T03:47:35.024418+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'It has a queen bed and two single beds, perfect for families.'}
+2026-01-12T03:47:35.024571+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: It has a queen bed and two single beds, perfect for families. (Response latency: 5124ms)
+2026-01-12T03:47:35.024857+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'It has a queen bed and two single beds, perfect for families.'}
+2026-01-12T03:47:39.665373+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'Would you like to check availability for that room?'}
+2026-01-12T03:47:39.665524+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: Would you like to check availability for that room? (Response latency: 9765ms)
+2026-01-12T03:47:39.737256+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'Would you like to check availability for that room?'}
+2026-01-12T03:47:39.738320+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:47:39.738408+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:47:40.039343+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #10 (soft=10s)
+2026-01-12T03:47:40.039428+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #10 waiting 10s
+2026-01-12T03:47:43.782660+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:47:43.782733+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:47:46.609596+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'user', 'content': "For a minute, like, what's nearby for kids to do?", 'words': []}
+2026-01-12T03:47:46.609648+00:00 app[web.1]: INFO:     services.voice_agent.handler - [User]: For a minute, like, what's nearby for kids to do? (STT latency: 2826ms)
+2026-01-12T03:47:46.619596+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'role': 'user', 'content': "For a minute, like, what's nearby for kids to do?", 'words': []}
+2026-01-12T03:47:47.145285+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: FunctionCallRequest | ai_speaking=False | full={'type': 'FunctionCallRequest', 'functions': [{'id': 'call_jhLjzA7sdRa7tw6PyEvzc2jV', 'name': 'get_activities_nearby', 'arguments': '{}', 'client_side': True}]}
+2026-01-12T03:47:47.145358+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔧 Function call: get_activities_nearby({})
+2026-01-12T03:47:47.145460+00:00 app[web.1]: ERROR:     services.voice_agent.functions.handlers - Function execution error (get_activities_nearby): 'nearby_areas'
+2026-01-12T03:47:47.145671+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📤 Sent function response for get_activities_nearby
+2026-01-12T03:47:47.218549+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: FunctionCallResponse | ai_speaking=False | full={'type': 'FunctionCallResponse', 'id': 'call_jhLjzA7sdRa7tw6PyEvzc2jV', 'name': 'get_activities_nearby', 'content': '{"error": "\'nearby_areas\'"}'}
+2026-01-12T03:47:47.219146+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'function_calls': [{'id': 'call_jhLjzA7sdRa7tw6PyEvzc2jV', 'name': 'get_activities_nearby', 'client_side': False, 'arguments': '{}', 'response': '{"error": "\'nearby_areas\'"}'}]}
+2026-01-12T03:47:48.195096+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': "I'm sorry, I don't have the specific details of activities nearby at the moment."}
+2026-01-12T03:47:48.195243+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: I'm sorry, I don't have the specific details of activities nearby at the moment. (Response latency: 1585ms)
+2026-01-12T03:47:48.195534+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "I'm sorry, I don't have the specific details of activities nearby at the moment."}
+2026-01-12T03:47:50.041739+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏹️ Silence check #10 cancelled - AI started speaking
+2026-01-12T03:47:52.557019+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'However, Chiltern is a lovely historic town with a few parks and family-friendly spots to explore.'}
+2026-01-12T03:47:52.557173+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: However, Chiltern is a lovely historic town with a few parks and family-friendly spots to explore. (Response latency: 5947ms)
+2026-01-12T03:47:52.557492+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'However, Chiltern is a lovely historic town with a few parks and family-friendly spots to explore.'}
+2026-01-12T03:47:58.848904+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=True | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:47:58.848964+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:47:58.859273+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:47:58.859356+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:47:59.160379+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #13 (soft=10s)
+2026-01-12T03:47:59.160490+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #13 waiting 10s
+2026-01-12T03:48:05.013137+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'user', 'content': "I didn't pay anything in regards to a program. Okay. So do you have a deluxe king room available for February fourteen to sixteen?", 'words': []}
+2026-01-12T03:48:05.013208+00:00 app[web.1]: INFO:     services.voice_agent.handler - [User]: I didn't pay anything in regards to a program. Okay. So do you have a deluxe king room available for February fourteen to sixteen? (STT latency: 6164ms)
+2026-01-12T03:48:05.019573+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'role': 'user', 'content': "I didn't pay anything in regards to a program. Okay. So do you have a deluxe king room available for February fourteen to sixteen?", 'words': []}
+2026-01-12T03:48:05.771025+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': "I'm afraid we don't have a deluxe king room."}
+2026-01-12T03:48:05.771189+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: I'm afraid we don't have a deluxe king room. (Response latency: 757ms)
+2026-01-12T03:48:05.771471+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "I'm afraid we don't have a deluxe king room."}
+2026-01-12T03:48:08.212268+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'Our available room types are Queen Rooms, Twin Rooms, Family Rooms, and Accessible Rooms.'}
+2026-01-12T03:48:08.212451+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: Our available room types are Queen Rooms, Twin Rooms, Family Rooms, and Accessible Rooms. (Response latency: 3199ms)
+2026-01-12T03:48:08.212823+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'Our available room types are Queen Rooms, Twin Rooms, Family Rooms, and Accessible Rooms.'}
+2026-01-12T03:48:09.160960+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏹️ Silence check #13 cancelled - AI started speaking
+2026-01-12T03:48:14.774276+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'Would you like me to check availability for any of those for February fourteenth to sixteenth?'}
+2026-01-12T03:48:14.774466+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: Would you like me to check availability for any of those for February fourteenth to sixteenth? (Response latency: 9761ms)
+2026-01-12T03:48:14.774842+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'Would you like me to check availability for any of those for February fourteenth to sixteenth?'}
+2026-01-12T03:48:14.917600+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:48:14.917676+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:48:15.218923+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #17 (soft=10s)
+2026-01-12T03:48:15.219032+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #17 waiting 10s
+2026-01-12T03:48:17.736602+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:48:17.736660+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:48:19.020021+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'user', 'content': "What's your cancellation policy?", 'words': []}
+2026-01-12T03:48:19.020041+00:00 app[web.1]: INFO:     services.voice_agent.handler - [User]: What's your cancellation policy? (STT latency: 1283ms)
+2026-01-12T03:48:19.039595+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'role': 'user', 'content': "What's your cancellation policy?", 'words': []}
+2026-01-12T03:48:19.629470+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: FunctionCallRequest | ai_speaking=False | full={'type': 'FunctionCallRequest', 'functions': [{'id': 'call_Isjnx8Au1tleu8K4c8MXLt8E', 'name': 'get_policies', 'arguments': '{"policy_type":"cancellation"}', 'client_side': True}]}
+2026-01-12T03:48:19.629563+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔧 Function call: get_policies({'policy_type': 'cancellation'})
+2026-01-12T03:48:19.629783+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📤 Sent function response for get_policies
+2026-01-12T03:48:19.702499+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: FunctionCallResponse | ai_speaking=False | full={'type': 'FunctionCallResponse', 'id': 'call_Isjnx8Au1tleu8K4c8MXLt8E', 'name': 'get_policies', 'content': '{"error": "Unknown function: get_policies"}'}
+2026-01-12T03:48:19.719435+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'function_calls': [{'id': 'call_Isjnx8Au1tleu8K4c8MXLt8E', 'name': 'get_policies', 'client_side': False, 'arguments': '{"policy_type":"cancellation"}', 'response': '{"error": "Unknown function: get_policies"}'}]}
+2026-01-12T03:48:20.547110+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': "I'm sorry, but I can't provide details about our cancellation policy right now."}
+2026-01-12T03:48:20.547277+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: I'm sorry, but I can't provide details about our cancellation policy right now. (Response latency: 1527ms)
+2026-01-12T03:48:20.547595+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "I'm sorry, but I can't provide details about our cancellation policy right now."}
+2026-01-12T03:48:24.949238+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': "It's best to contact reception directly for that information."}
+2026-01-12T03:48:24.949429+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: It's best to contact reception directly for that information. (Response latency: 5929ms)
+2026-01-12T03:48:25.021318+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': "It's best to contact reception directly for that information."}
+2026-01-12T03:48:25.219902+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏹️ Silence check #17 cancelled - AI started speaking
+2026-01-12T03:48:28.164763+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=True | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:48:28.164834+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:48:28.178967+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:48:28.179028+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:48:28.480211+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #20 (soft=10s)
+2026-01-12T03:48:28.480336+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:48:28.480406+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:48:28.480646+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #20 waiting 10s
+2026-01-12T03:48:29.552469+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: UserStartedSpeaking | ai_speaking=False | full={'type': 'UserStartedSpeaking'}
+2026-01-12T03:48:29.552535+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🎤 User started speaking (VAD)
+2026-01-12T03:48:29.639795+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'user', 'content': 'Okay. So do you have a pool?', 'words': []}
+2026-01-12T03:48:29.639858+00:00 app[web.1]: INFO:     services.voice_agent.handler - [User]: Okay. So do you have a pool? (STT latency: 87ms)
+2026-01-12T03:48:29.659271+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=False | full={'type': 'History', 'role': 'user', 'content': 'Okay. So do you have a pool?', 'words': []}
+2026-01-12T03:48:30.691332+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=False | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'Yes, we have a seasonal pool available during the warmer months for guests to enjoy.'}
+2026-01-12T03:48:30.691540+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: Yes, we have a seasonal pool available during the warmer months for guests to enjoy. (Response latency: 1051ms)
+2026-01-12T03:48:30.691849+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'Yes, we have a seasonal pool available during the warmer months for guests to enjoy.'}
+2026-01-12T03:48:35.931854+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: ConversationText | ai_speaking=True | full={'type': 'ConversationText', 'role': 'assistant', 'content': 'Is there anything else you would like to know?'}
+2026-01-12T03:48:35.932002+00:00 app[web.1]: INFO:     services.voice_agent.handler - [AI]: Is there anything else you would like to know? (Response latency: 6292ms)
+2026-01-12T03:48:35.932291+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: History | ai_speaking=True | full={'type': 'History', 'role': 'assistant', 'content': 'Is there anything else you would like to know?'}
+2026-01-12T03:48:36.004479+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📨 DG_EVENT: AgentAudioDone | ai_speaking=True | full={'type': 'AgentAudioDone'}
+2026-01-12T03:48:36.004538+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🔇 Agent audio done
+2026-01-12T03:48:36.304960+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Scheduling silence check #23 (soft=10s)
+2026-01-12T03:48:36.305073+00:00 app[web.1]: INFO:     services.voice_agent.handler - ⏱️ Silence check #23 waiting 10s
+2026-01-12T03:48:37.002238+00:00 heroku[router]: at=info method=POST path="/twilio/call-status" host=ovela-12c561a30285.herokuapp.com request_id=df56f0d7-5c4f-16a5-1c5f-e10675a5c0b0 fwd="18.209.106.110" dyno=web.1 connect=0ms service=3ms status=200 bytes=15 protocol=http1.1 tls=true tls_version=unknown
+2026-01-12T03:48:36.973229+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📴 Twilio stream stopped
+2026-01-12T03:48:36.973383+00:00 app[web.1]: INFO:     services.voice_agent.handler - 🧹 Cleaning up VoiceAgentHandler
+2026-01-12T03:48:37.000859+00:00 app[web.1]: INFO:     api.twilio - 📞 Call status callback: CAb6525edd3dd52daf39f2c06a36561a18 from +61475677771
+2026-01-12T03:48:37.000908+00:00 app[web.1]: INFO:     api.twilio -    CallStatus: completed, CallDuration: 96s
+2026-01-12T03:48:37.000954+00:00 app[web.1]: INFO:     api.twilio -    DialCallStatus: None, DialCallDuration: 0s
+2026-01-12T03:48:37.001002+00:00 app[web.1]: INFO:     api.twilio - ℹ️ WhatsApp automation disabled - no message will be sent
+2026-01-12T03:48:37.001046+00:00 app[web.1]: INFO:     api.twilio - ℹ️ Call was answered - no WhatsApp message sent
+2026-01-12T03:48:37.001265+00:00 app[web.1]: INFO:     18.209.106.110:0 - "POST /twilio/call-status HTTP/1.1" 200 OK
+2026-01-12T03:48:37.582749+00:00 app[web.1]: INFO:     services.appwrite - Created demo transcript: 69646f1500163bbed622 (6 exchanges)
+2026-01-12T03:48:37.582833+00:00 app[web.1]: INFO:     services.voice_agent.handler - 📝 Saved transcript: 22 entries, 93s
+2026-01-12T03:48:37.973285+00:00 heroku[router]: at=info method=GET path="/api/voice/stream" host=ovela-12c561a30285.herokuapp.com request_id=1a865eff-a67b-7b9e-728d-045558c60d2b fwd="54.209.32.178" dyno=web.1 connect=0ms service=94651ms status=101 bytes=0 protocol=http1.1 tls=true tls_version=unknown
+2026-01-12T03:48:37.974429+00:00 app[web.1]: INFO:     connection closed

@@ -210,8 +210,17 @@ def get_location_info(detail: Optional[str] = None) -> Dict[str, Any]:
 def get_activities_nearby() -> Dict[str, List[str]]:
     """Get list of activities and attractions nearby."""
     data = get_active_data()
+    location = data.get("location", {})
+    
+    # Extract nearby areas from location distances
+    nearby_areas = []
+    if "distances" in location:
+        nearby_areas = list(location["distances"].keys())
+    
     return {
-        "activities": data["activities"]
+        "activities": data["activities"],
+        "nearby_areas": nearby_areas,
+        "region": location.get("region", "the area")
     }
 
 
