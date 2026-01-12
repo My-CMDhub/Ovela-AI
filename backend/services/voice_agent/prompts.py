@@ -10,13 +10,19 @@ def get_system_prompt(current_date: str = None, current_time: str = None, tenant
     Returns the full system prompt for the AI agent.
     
     This prompt defines the agent's personality, knowledge, and behavior.
-    Dynamically generates property-specific details based on tenant_id.
+    Uses dedicated prompts for each tenant.
     
     Args:
         current_date: Current date string
         current_time: Current time string
         tenant_id: Tenant identifier (lydoun, paddlesteamer)
     """
+    # Use dedicated prompt for Paddle Steamer
+    if tenant_id == "paddlesteamer":
+        from services.voice_agent.prompts_paddlesteamer import get_paddlesteamer_prompt
+        return get_paddlesteamer_prompt(current_date, current_time)
+    
+    # Otherwise use Lydoun prompt (default)
     # Build context header with current date/time
     if current_date and current_time:
         context_header = f"""
@@ -52,6 +58,24 @@ def get_system_prompt(current_date: str = None, current_time: str = None, tenant
             '"Afternoon, Lydoun Motel speaking, what can I do for you?"',
             '"Evening, The Lydoun Motel, how can I help?"'
         ]
+    # Get tenant-specific data from knowledge base
+    from services.knowledge_base.lydoun import LYDOUN_DATA
+    from services.knowledge_base.paddlesteamer import PADDLESTEAMER_DATA
+    
+    # Select data based on tenant
+    if tenant_id == "paddlesteamer":
+        data = PADDLESTEAMER_DATA
+    else:
+        data = LYDOUN_DATA
+    
+    # Build room types section dynamically
+    room_types_text = ""
+    for idx, (key, room) in enumerate(data["rooms"].items(), 1):
+        room_types_text += f"{idx}. {room['name']} - From ${room['price']}/night\n"
+        room_types_text += f"   - {room['bedding']}, {room['best_for']}\n   \n"
+    
+    # Build amenities list (first 10 most important)
+    amenities_text = "\n".join(f"- {amenity}" for amenity in data["amenities"][:10])
     
     return f"""{context_header}You are the AI receptionist named Ovela for {property_name}.
 
@@ -64,43 +88,20 @@ You're helpful, professional, and know the property well.
 Location: {location}
 Phone: {phone}
 
-**Reception Hours:** 7:30am - 9:00pm
-**Check-in:** From 2:00pm
-**Check-out:** Prior to 10:00am
+**Reception Hours:** {data['info'].get('reception_hours', '7:30am - 9:00pm')}
+**Check-in:** {data['info']['check_in']}
+**Check-out:** {data['info']['check_out']}
 
 **Room Types & Pricing:**
-1. Queen Room - From $130/night
-   - Queen bed, suits solo/couples/business travelers
-   
-2. Twin Room - From $140/night
-   - Queen bed + single bed, ideal for friends/family
-   
-3. Family Room - From $160/night
-   - Queen bed + two single beds, perfect for families
-   
-4. Accessible Room - From $130/night
-   - Reduced mobility friendly, flat floor, open shower with rails and stool
-   - Note: Not fully adjusted for special needs, but accommodates reduced mobility
-
+{room_types_text}
 **Property Features:**
-- All rooms ground level
-- 100% non-smoking
-- Complimentary WiFi
-- Seasonal pool
-- Guest BBQ facilities
-- Free onsite parking (outside your room)
-- Large vehicle parking area
-- Guest laundry facilities
-- Room service available
-- Extra single bed or cot available (on request)
-- Group bookings accepted (handled directly)
+{amenities_text}
 
-**Booking System:** Online via website (useross.com booking system)
+**Booking System:** Online via website
 
 **Location Context:**
-- Historic town of Chiltern
-- Explore Chiltern (#explorechiltern)
-- Regional Victoria destination
+- {data['location']['description']}
+- Region: {data['location']['region']}
 
 === YOUR ROLE ===
 
