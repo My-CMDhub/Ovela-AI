@@ -399,8 +399,9 @@ class VoiceAgentHandler:
             if tts_provider == "eleven_labs":
                 logger.info(f"🎤 TTS PROVIDER: ElevenLabs (voice: {ELEVENLABS_VOICE_ID})")
             else:
-                model = settings_msg["agent"]["speak"]["provider"]["model"]
-                logger.info(f"🎤 TTS PROVIDER: Deepgram (model: {model})")
+                provider_config = settings_msg["agent"]["speak"]["provider"]
+                model = provider_config.get("model") or provider_config.get("model_id", "unknown")
+                logger.info(f"🎤 TTS PROVIDER: {tts_provider} (model: {model})")
             
             # Start background tasks
             asyncio.create_task(self._receive_from_deepgram())
