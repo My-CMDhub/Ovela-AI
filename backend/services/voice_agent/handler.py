@@ -257,14 +257,18 @@ class VoiceAgentHandler:
             }
         
         elif USE_CARTESIA:
-            logger.info("🎤 Using Cartesia Sonic TTS (Deepgram-Managed)")
+            logger.info("🎤 Using Cartesia Sonic-3 TTS (Deepgram-Managed)")
             return {
                 "provider": {
                     "type": "cartesia",
-                    "model_id": "sonic-2",
+                    "model_id": "sonic-3",
                     "voice": {
                         "mode": "id",
-                        "id": "a167e0f3-df7e-4d52-a9c3-f949145efdab"
+                        "id": "043cfc81-d69f-4bee-ae1e-7862cb358650",  # Australian Woman
+                        "__experimental_controls": {
+                            "speed": "fast",
+                            "emotion": ["positivity:high", "curiosity"]
+                        }
                     }
                 }
             }
