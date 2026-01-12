@@ -231,10 +231,14 @@ class VoiceAgentHandler:
         Get TTS configuration.
         Set USE_ELEVENLABS=true in .env to test ElevenLabs.
         
-        Deepgram Voice Agent API spec for ElevenLabs:
-        - URL must use wss:// with stream-input endpoint
-        - Only xi-api-key header is required
+        Priorities:
+        1. ElevenLabs (if configured)
+        2. Cartesia Sonic (Preferred speed model)
+        3. Deepgram Aura (Fallback)
         """
+        # Flag to enable Cartesia (can be moved to config/env later)
+        USE_CARTESIA = True
+        
         if USE_ELEVENLABS:
             elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY", "")
             logger.info(f"🎤 Using ElevenLabs TTS (voice: {ELEVENLABS_VOICE_ID})")
@@ -251,6 +255,20 @@ class VoiceAgentHandler:
                     }
                 }
             }
+        
+        elif USE_CARTESIA:
+            logger.info("🎤 Using Cartesia Sonic TTS (Deepgram-Managed)")
+            return {
+                "provider": {
+                    "type": "cartesia",
+                    "model_id": "sonic-2",
+                    "voice": {
+                        "mode": "id",
+                        "id": "a167e0f3-df7e-4d52-a9c3-f949145efdab"
+                    }
+                }
+            }
+            
         else:
             logger.info(f"🎤 Using Deepgram TTS (model: aura-2-thalia-en)")
             return {
@@ -699,28 +717,11 @@ class VoiceAgentHandler:
         # Check for transfer signal
         if result.get("action") == "transfer":
             transfer_to = result.get("transfer_to")
-            transfer_message = result.get("message", "Transferring you now...")
             
             logger.info(f"📞 Transfer requested to {transfer_to}")
-            logger.info(f"📢 Playing transfer message: '{transfer_message}'")
             
-            # Set transfer pending flag and reset the event
-            self._transfer_pending = True
-            self._transfer_tts_done.clear()
-            self._transfer_target = transfer_to
-            
-            # Inject the transfer message
-            await self._inject_message(transfer_message)
-            
-            # Wait for TTS to actually complete (AgentAudioDone event)
-            # with a timeout as safety fallback
-            logger.info("⏳ Waiting for TTS playback to complete...")
-            try:
-                await asyncio.wait_for(self._transfer_tts_done.wait(), timeout=20.0)
-                logger.info("✅ TTS confirmed complete, executing transfer")
-            except asyncio.TimeoutError:
-                logger.warning("⚠️ TTS completion timeout, proceeding with transfer anyway")
-            
+            # Execute transfer immediately - TwiML <Say> handles the message
+            # (No need to inject via Deepgram - that causes race conditions)
             await self._execute_twilio_transfer(transfer_to)
             return  # Don't send function response, call is being transferred
         
@@ -1008,7 +1009,7 @@ class VoiceAgentHandler:
         """
         Execute Twilio call transfer using TwiML update.
         
-        Uses <Dial> to connect caller to staff phone.
+        Uses <Say> then <Dial> to ensure transfer message is heard.
         Falls back to AI if no answer within TRANSFER_TIMEOUT.
         """
         if not self.call_sid:
@@ -1023,6 +1024,14 @@ class VoiceAgentHandler:
             
             # Build TwiML for transfer
             twiml = VoiceResponse()
+            
+            # CRITICAL: Say transfer message FIRST via Twilio's TTS
+            # This ensures the message plays BEFORE the dial starts
+            # (Deepgram inject doesn't work - WebSocket gets disconnected before TTS completes)
+            twiml.say(
+                "Sure, I'll transfer you to our team now. Please hold.",
+                voice="Polly.Joanna"  # AWS Polly voice for natural sound
+            )
             
             # Dial staff with timeout
             dial = Dial(
