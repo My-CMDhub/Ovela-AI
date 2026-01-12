@@ -264,7 +264,7 @@ class VoiceAgentHandler:
                     "model_id": "sonic-3",
                     "voice": {
                         "mode": "id",
-                        "id": "043cfc81-d69f-4bee-ae1e-7862cb358650"
+                        "id": "8985388c-1332-4ce7-8d55-789628aa3df4"  # Australian Narrator Lady (Alternative)
                     }
                 }
             }
