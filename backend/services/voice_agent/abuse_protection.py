@@ -32,7 +32,7 @@ class AbuseProtection:
     - limit+ flags: Auto-hangup with polite message
     """
     
-    def __init__(self):
+    def __init__(self, tenant_id: str = "lydoun"):
         # Off-topic tracking
         self.off_topic_count = 0
         
@@ -45,6 +45,15 @@ class AbuseProtection:
         self.warnings_sent = 0
         self.last_inputs = []  # Track last 5 inputs for pattern detection
         self.short_response_count = 0
+        
+        # Tenant-specific details
+        self.tenant_id = tenant_id
+        if tenant_id == "paddlesteamer":
+            self.property_name = "Albury Paddlesteamer Motel"
+            self.short_name = "Paddlesteamer"
+        else:
+            self.property_name = "The Lydoun Motel"
+            self.short_name = "Lydoun"
     
     def set_call_start_time(self, start_time: float):
         """Set when the call started for duration monitoring."""
@@ -128,7 +137,7 @@ class AbuseProtection:
                     "I've really enjoyed helping you, but due to our call time guidelines, "
                     "I need to wrap up now. Don't worry - I'm logging this conversation and "
                     "a member of our team will reach out to help with anything we didn't finish. "
-                    "They'll pick up right where we left off. Thanks so much for calling Lydoun!"
+                    f"They'll pick up right where we left off. Thanks so much for calling {self.short_name}!"
                 )
             else:
                 farewell = (

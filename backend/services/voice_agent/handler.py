@@ -112,7 +112,7 @@ class VoiceAgentHandler:
         
         # Modular components
         self.silence_monitor = SilenceMonitor()
-        self.abuse_protection = AbuseProtection()
+        self.abuse_protection = None  # Initialized after tenant_id is determined
         self.function_dispatcher = None  # Initialized after getting user_phone
         
         # Background tasks
@@ -224,7 +224,7 @@ class VoiceAgentHandler:
         """Get the active greeting - demo greeting if configured, otherwise motel."""
         if is_demo_mode():
             return get_demo_greeting()
-        return get_random_greeting()
+        return get_random_greeting(self.tenant_id)  # Pass tenant_id for property-specific greeting
     
     def _get_tts_config(self) -> dict:
         """
@@ -341,6 +341,9 @@ class VoiceAgentHandler:
             
         # Set context for knowledge base so tool calls use correct data
         set_tenant_context(self.tenant_id)
+        
+        # Initialize abuse protection with tenant context
+        self.abuse_protection = AbuseProtection(tenant_id=self.tenant_id)
         
         logger.info(f"🟢 Twilio stream started: {self.stream_sid} for {self.user_name} [{call_type}] tenant={self.tenant_id}")
         

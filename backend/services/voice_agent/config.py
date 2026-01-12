@@ -12,16 +12,8 @@ import random
 # =============================================================================
 DEEPGRAM_AGENT_URL = "wss://agent.deepgram.com/v1/agent/converse"
 
-# =============================================================================
-# GREETINGS & FAREWELLS - Australian-tone for natural variety
-# =============================================================================
-GREETINGS_POOL = [
-    "G'day! Lydoun Motel, Ovela speaking. How can I help you today?",
-    "Good day! The Lydoun Motel, this is Ovela. What can I do for you?",
-    "Hello there! You've reached The Lydoun Motel. I'm Ovela, how can I help?",
-    "Ovela is here, speaking from Lydoun Motel. How can I assist you?",
-    "Hi there! This is Ovela at The Lydoun Motel. What can I help you with?",
-]
+# Greetings are now generated dynamically based on tenant
+# See get_random_greeting(tenant_id) function below
 
 FAREWELL_STYLES = [
     "No worries, have a great one! feel free to reach out us when needed",
@@ -92,12 +84,8 @@ SPAM_PATTERNS = [
     r'^[\W\d]+$',  # Only numbers/symbols
 ]
 
-SOFT_WARNINGS = [
-    "I notice you might be having trouble. Is there something specific I can help with about the motel?",
-    "If you need a moment, no problem. I'm here to help with room enquiries and bookings.",
-    "Just checking - were you after information about The Lydoun Motel?",
-    "I'm here to help with motel enquiries. What dates were you thinking of staying?",
-]
+# Soft warnings are now generated dynamically based on tenant
+# See get_random_soft_warning(tenant_id) function below
 
 MAX_VIOLATIONS_BEFORE_BAN = 3
 REPETITIVE_INPUT_THRESHOLD = 3
@@ -107,9 +95,23 @@ MIN_SUBSTANTIVE_LENGTH = 3
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
-def get_random_greeting() -> str:
-    """Returns a random Australian-tone greeting."""
-    return random.choice(GREETINGS_POOL)
+def get_random_greeting(tenant_id: str = "lydoun") -> str:
+    """Returns a random Australian-tone greeting for the specified tenant."""
+    if tenant_id == "paddlesteamer":
+        property_name = "Albury Paddlesteamer Motel"
+        short_name = "Paddlesteamer Motel"
+    else:
+        property_name = "The Lydoun Motel"
+        short_name = "Lydoun Motel"
+    
+    greetings = [
+        f"G'day! {short_name}, Ovela speaking. How can I help you today?",
+        f"Good day! {property_name}, this is Ovela. What can I do for you?",
+        f"Hello there! You've reached {property_name}. I'm Ovela, how can I help?",
+        f"Ovela is here, speaking from {short_name}. How can I assist you?",
+        f"Hi there! This is Ovela at {property_name}. What can I help you with?",
+    ]
+    return random.choice(greetings)
 
 
 def get_random_farewell() -> str:
@@ -122,6 +124,17 @@ def get_random_silence_prompt() -> str:
     return random.choice(SILENCE_PROMPTS)
 
 
-def get_random_soft_warning() -> str:
+def get_random_soft_warning(tenant_id: str = "lydoun") -> str:
     """Returns a random soft warning for potential spam."""
-    return random.choice(SOFT_WARNINGS)
+    if tenant_id == "paddlesteamer":
+        property_name = "Albury Paddlesteamer Motel"
+    else:
+        property_name = "The Lydoun Motel"
+    
+    warnings = [
+        "I notice you might be having trouble. Is there something specific I can help with about the motel?",
+        "If you need a moment, no problem. I'm here to help with room enquiries and bookings.",
+        f"Just checking - were you after information about {property_name}?",
+        "I'm here to help with motel enquiries. What dates were you thinking of staying?",
+    ]
+    return random.choice(warnings)
