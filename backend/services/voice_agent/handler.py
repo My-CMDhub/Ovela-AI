@@ -264,11 +264,7 @@ class VoiceAgentHandler:
                     "model_id": "sonic-3",
                     "voice": {
                         "mode": "id",
-                        "id": "043cfc81-d69f-4bee-ae1e-7862cb358650", 
-                        "args": {
-                            "speed": 1.3,
-                            "emotion": ["positivity:high", "curiosity"]
-                        }
+                        "id": "043cfc81-d69f-4bee-ae1e-7862cb358650"
                     }
                 }
             }
