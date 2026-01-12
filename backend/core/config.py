@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Call Transfer Settings
     STAFF_PHONE_NUMBER: str = "+61493291626"  # Reception for call transfers
     TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
+    
+    # Validation/Demo Settings
+    TENANT_ID: str = "lydoun" # lydoun, paddlesteamer
 
     class Config:
         case_sensitive = True

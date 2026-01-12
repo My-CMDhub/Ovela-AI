@@ -47,6 +47,7 @@ from .silence_detection import SilenceMonitor
 from .functions import get_booking_functions
 from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
 from .text_utils import prepare_for_tts, clean_tts_output
+from services.motel_knowledge_base import set_tenant_context
 
 # TTS Provider config - set USE_ELEVENLABS=true in .env to test ElevenLabs
 USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "false").lower() == "true"
@@ -319,18 +320,26 @@ class VoiceAgentHandler:
         self.user_phone = custom_params.get("user_phone", "unknown")
         
         # Multi-tenant detection
-        self.tenant_id = custom_params.get("tenant_id", "lydoun")
         self.is_demo_call = custom_params.get("is_demo", "false").lower() == "true"
         call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
         
-        # Multi-tenant: Resolve tenant_id based on call type
-        # Demo calls → "ovela_demo" (Ovela website demos)
-        # Production calls → "lydoun" for now (future: resolve from Twilio To number)
-        if self.is_demo_call:
+        # Multi-tenant: Resolve tenant_id
+        # 1. Explicit tenant_id (e.g. "paddlesteamer")
+        # 2. Demo flag -> "ovela_demo"
+        # 3. Default -> "lydoun"
+        
+        explicit_tenant = custom_params.get("tenant_id")
+        
+        if explicit_tenant:
+            self.tenant_id = explicit_tenant
+        elif self.is_demo_call:
             self.tenant_id = "ovela_demo"
         else:
-            # TODO: When adding 2nd tenant, resolve from db_service.get_tenant_by_phone(to_phone)
-            self.tenant_id = "lydoun"
+            # Fallback to environment variable (default "lydoun")
+            self.tenant_id = settings.TENANT_ID
+            
+        # Set context for knowledge base so tool calls use correct data
+        set_tenant_context(self.tenant_id)
         
         logger.info(f"🟢 Twilio stream started: {self.stream_sid} for {self.user_name} [{call_type}] tenant={self.tenant_id}")
         

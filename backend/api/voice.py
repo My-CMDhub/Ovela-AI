@@ -26,6 +26,7 @@ class DemoRequest(BaseModel):
     business_name: str
     phone: str
     consent: bool
+    tenant_id: Optional[str] = "ovela_demo"
 
 @router.post("/demo-request")
 async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
@@ -65,7 +66,7 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     if is_whitelisted(request.phone):
         logger.info(f"Whitelisted phone {request.phone} - immediate call")
         try:
-            call = _trigger_demo_call(request.name, request.business_name, request.phone)
+            call = _trigger_demo_call(request.name, request.business_name, request.phone, request.tenant_id)
             
             if lead_id:
                 db_service.update_demo_lead(lead_id=lead_id, data={"status": "called", "call_sid": call.sid})
@@ -172,7 +173,8 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
     
     # Trigger the call
     try:
-        call = _trigger_demo_call(name, business, phone)
+        # Defaults to ovela_demo for approved website leads
+        call = _trigger_demo_call(name, business, phone, tenant_id="ovela_demo")
         
         # Update lead status
         db_service.update_demo_lead(lead_id=lead_id, data={
@@ -278,7 +280,7 @@ async def reject_demo(token: str):
         )
 
 
-def _trigger_demo_call(name: str, business_name: str, phone: str):
+def _trigger_demo_call(name: str, business_name: str, phone: str, tenant_id: str = "ovela_demo"):
     """
     Helper function to trigger a Twilio demo call.
     Returns the call object.
@@ -287,9 +289,10 @@ def _trigger_demo_call(name: str, business_name: str, phone: str):
     encoded_name = quote(name)
     encoded_business = quote(business_name)
     encoded_phone = quote(phone)
+    encoded_tenant = quote(tenant_id)
     
     # Construct the TwiML URL
-    twiml_url = f"{settings.BACKEND_URL}/api/voice/twiml?name={encoded_name}&business={encoded_business}&phone={encoded_phone}"
+    twiml_url = f"{settings.BACKEND_URL}/api/voice/twiml?name={encoded_name}&business={encoded_business}&phone={encoded_phone}&tenant_id={encoded_tenant}"
     
     call = twilio_client.calls.create(
         to=phone,
@@ -298,7 +301,7 @@ def _trigger_demo_call(name: str, business_name: str, phone: str):
         record=True
     )
     
-    logger.info(f"Triggered demo call to {phone}, SID: {call.sid}")
+    logger.info(f"Triggered demo call to {phone} (tenant={tenant_id}), SID: {call.sid}")
     return call
 
 
@@ -313,6 +316,7 @@ async def get_twiml(request: Request):
     business_name = params.get("business", "your business")
     user_phone = params.get("phone", "unknown")
     transfer_failed = params.get("transfer_failed", "false")
+    tenant_id = params.get("tenant_id", "ovela_demo")
     
     response = VoiceResponse()
     connect = Connect()
@@ -328,6 +332,7 @@ async def get_twiml(request: Request):
     stream.parameter(name="business_name", value=business_name)
     stream.parameter(name="user_phone", value=user_phone)
     stream.parameter(name="transfer_failed", value=transfer_failed)
+    stream.parameter(name="tenant_id", value=tenant_id)
     
     response.append(connect)
     response.say("Sorry, I lost the connection. Please try again later.")
