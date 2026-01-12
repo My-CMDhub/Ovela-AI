@@ -216,7 +216,8 @@ class VoiceAgentHandler:
             return demo_prompt
         return get_system_prompt(
             current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
-            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p")
+            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p"),
+            tenant_id=self.tenant_id  # Pass tenant_id for property-specific prompt
         )
     
     def _get_active_greeting(self) -> str:

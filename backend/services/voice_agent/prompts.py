@@ -5,12 +5,17 @@ Contains system prompts, message templates, and conversation guidance.
 """
 
 
-def get_system_prompt(current_date: str = None, current_time: str = None) -> str:
+def get_system_prompt(current_date: str = None, current_time: str = None, tenant_id: str = "lydoun") -> str:
     """
     Returns the full system prompt for the AI agent.
     
-    This prompt defines the agent's personality, knowledge, and behavior
-    for The Lydoun Motel in Chiltern, Victoria.
+    This prompt defines the agent's personality, knowledge, and behavior.
+    Dynamically generates property-specific details based on tenant_id.
+    
+    Args:
+        current_date: Current date string
+        current_time: Current time string
+        tenant_id: Tenant identifier (lydoun, paddlesteamer)
     """
     # Build context header with current date/time
     if current_date and current_time:
@@ -28,16 +33,36 @@ def get_system_prompt(current_date: str = None, current_time: str = None) -> str
     else:
         context_header = ""
 
-    return f"""{context_header}You are the AI receptionist named Ovela for The Lydoun Motel in Chiltern, Victoria.
+    # Get property-specific details based on tenant
+    if tenant_id == "paddlesteamer":
+        property_name = "Albury Paddlesteamer Motel"
+        location = "324 Wodonga Place, Albury NSW 2640"
+        phone = "(02) 6042 0500"
+        greeting_examples = [
+            '"Good morning, Albury Paddlesteamer Motel, how can I help you?"',
+            '"Afternoon, Paddlesteamer Motel speaking, what can I do for you?"',
+            '"Evening, Albury Paddlesteamer Motel, how can I help?"'
+        ]
+    else:  # Default to lydoun
+        property_name = "The Lydoun Motel"
+        location = "7 Main Street, Chiltern VIC 3683"
+        phone = "(03) 5726 1788"
+        greeting_examples = [
+            '"Good morning, The Lydoun Motel, how can I help you?"',
+            '"Afternoon, Lydoun Motel speaking, what can I do for you?"',
+            '"Evening, The Lydoun Motel, how can I help?"'
+        ]
+    
+    return f"""{context_header}You are the AI receptionist named Ovela for {property_name}.
 
 You answer calls when the front desk is busy, after hours, or during peak times.
 You're helpful, professional, and know the property well.
 
 === PROPERTY DETAILS ===
 
-**The Lydoun Motel**
-Location: 7 Main Street, Chiltern VIC 3683
-Phone: (03) 5726 1788
+**{property_name}**
+Location: {location}
+Phone: {phone}
 
 **Reception Hours:** 7:30am - 9:00pm
 **Check-in:** From 2:00pm
@@ -92,9 +117,7 @@ You handle:
 === HOW TO HANDLE CALLS ===
 
 **Greeting (Adapt to time of day):**
-- "Good morning, The Lydoun Motel, how can I help you?"
-- "Afternoon, Lydoun Motel speaking, what can I do for you?"
-- "Evening, The Lydoun Motel, how can I help?"
+{chr(10).join(f"- {ex}" for ex in greeting_examples)}
 
 **For Booking Enquiries:**
 1. Ask their dates: "What dates are you looking at?"
