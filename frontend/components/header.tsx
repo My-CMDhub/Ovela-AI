@@ -4,19 +4,23 @@ import { useState, useEffect } from "react"
 import { motion, useScroll, useTransform, AnimatePresence } from "framer-motion"
 import Link from "next/link"
 import { DarkModeToggle } from "./dark-mode-toggle"
-import { Menu, X } from "lucide-react"
+import { OvelaLogo } from "./ovela-logo"
+import { Menu, X, ChevronDown } from "lucide-react"
 
 export function Header() {
   const [isDesktop, setIsDesktop] = useState(false)
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [isMobileSolutionsOpen, setIsMobileSolutionsOpen] = useState(false)
+  const [isDesktopSolutionsOpen, setIsDesktopSolutionsOpen] = useState(false)
   const { scrollY } = useScroll()
 
   // Transform scroll position to animation values
-  const width = useTransform(scrollY, [0, 300], ["100%", "35%"])
+  // Transform scroll position to animation values
+  const width = useTransform(scrollY, [0, 300], ["100%", "45%"])
   const y = useTransform(scrollY, [0, 300], [0, 12])
   const borderRadius = useTransform(scrollY, [0, 300], [0, 50])
 
-  // Border colors: Bottom is always visible (or maybe fades out if we want a pure pill look? No, pill has border all around).
+  // Border colors: Bottom is always visible
   // Top/Left/Right fade in.
   const borderColor = useTransform(
     scrollY,
@@ -61,21 +65,70 @@ export function Header() {
           borderBottomColor: borderBottomColor,
         }}
         transition={{ duration: 12, ease: "easeInOut" }}
-        className="fixed left-0 right-0 z-50 mx-auto bg-background/80 backdrop-blur-md shadow-sm border border-transparent" // border-transparent to set width/style but let style override colors
+        className="fixed left-0 right-0 z-50 mx-auto bg-background/70 backdrop-blur-xl shadow-lg border border-transparent ring-1 ring-black/5 dark:ring-white/5 dark:shadow-[0_8px_30px_rgba(0,0,0,0.5)]" // border-transparent to set width/style but let style override colors
       >
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
-            <span className="font-serif text-2xl tracking-tight">Ovela</span>
+            <OvelaLogo size="sm" />
           </Link>
 
           <nav className="hidden md:flex items-center gap-8">
-            <Link href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            {/* Solutions Dropdown */}
+            <div
+              className="relative"
+              onMouseEnter={() => setIsDesktopSolutionsOpen(true)}
+              onMouseLeave={() => setIsDesktopSolutionsOpen(false)}
+            >
+              <button
+                className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"
+                onClick={() => setIsDesktopSolutionsOpen(!isDesktopSolutionsOpen)}
+              >
+                Solutions
+                <ChevronDown className={`w-3 h-3 transition-transform ${isDesktopSolutionsOpen ? "rotate-180" : ""}`} />
+              </button>
+
+              <AnimatePresence>
+                {isDesktopSolutionsOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 10 }}
+                    transition={{ duration: 0.2 }}
+                    className="absolute top-full left-0 w-64 pt-2"
+                  >
+                    <div className="bg-popover/90 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl overflow-hidden p-2 grid gap-1 ring-1 ring-black/5 dark:ring-white/10">
+                      {[
+                        { name: "Motels & Hotels", href: "/solutions/motels", desc: "After-hours check-ins" },
+                        { name: "Dental Clinics", href: "/solutions/dental", desc: "Emergency triage" },
+                        { name: "Physio & Massage", href: "/solutions/physio", desc: "Silent rescheduling" },
+                        { name: "Salons & Barbers", href: "/solutions/salons", desc: "Deposit enforcement" },
+                      ].map((item) => (
+                        <Link
+                          key={item.name}
+                          href={item.href}
+                          className="block px-3 py-2 rounded-lg hover:bg-accent hover:text-accent-foreground transition-colors group"
+                        >
+                          <div className="text-sm font-medium text-foreground group-hover:text-accent-foreground">
+                            {item.name}
+                          </div>
+                          <div className="text-xs text-muted-foreground group-hover:text-accent-foreground/70">
+                            {item.desc}
+                          </div>
+                        </Link>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            <Link href="/#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Features
             </Link>
-            <Link href="#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <Link href="/#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Pricing
             </Link>
-            <Link href="#contact" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <Link href="/#contact" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
               Contact
             </Link>
           </nav>
@@ -96,8 +149,8 @@ export function Header() {
             </div>
 
             <Link
-              href="#contact"
-              className="px-5 py-2.5 bg-primary text-primary-foreground text-sm rounded-full hover:opacity-90 transition-opacity"
+              href="/#contact"
+              className="px-5 py-2.5 bg-primary text-primary-foreground text-sm rounded-full hover:opacity-90 transition-all hover:scale-105 shadow-md shadow-primary/20"
             >
               Get Started
             </Link>
@@ -134,7 +187,7 @@ export function Header() {
                 <div className="absolute bottom-0 right-0 w-12 h-12 border-b-2 border-r-2 border-accent/30" />
 
                 <div className="flex items-center justify-between relative z-10">
-                  <span className="font-serif text-2xl tracking-tight">Ovela</span>
+                  <OvelaLogo size="sm" />
                   <button
                     onClick={closeSidebar}
                     className="p-2 hover:bg-muted/50 rounded-lg transition-colors"
@@ -150,22 +203,60 @@ export function Header() {
 
               {/* Navigation Links */}
               <nav className="p-6 space-y-1">
+                {/* Mobile Solutions Section */}
+                <div className="space-y-1">
+                  <button
+                    onClick={() => setIsMobileSolutionsOpen(!isMobileSolutionsOpen)}
+                    className="flex items-center justify-between w-full px-4 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
+                  >
+                    <span>Solutions</span>
+                    <ChevronDown className={`w-4 h-4 transition-transform ${isMobileSolutionsOpen ? "rotate-180" : ""}`} />
+                  </button>
+
+                  <AnimatePresence>
+                    {isMobileSolutionsOpen && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden pl-4"
+                      >
+                        {[
+                          { name: "Motels & Hotels", href: "/solutions/motels" },
+                          { name: "Dental Clinics", href: "/solutions/dental" },
+                          { name: "Physio & Massage", href: "/solutions/physio" },
+                          { name: "Salons & Barbers", href: "/solutions/salons" },
+                        ].map((item) => (
+                          <Link
+                            key={item.name}
+                            href={item.href}
+                            onClick={closeSidebar}
+                            className="block px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            {item.name}
+                          </Link>
+                        ))}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
                 <Link
-                  href="#features"
+                  href="/#features"
                   onClick={closeSidebar}
                   className="block px-4 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
                 >
                   Features
                 </Link>
                 <Link
-                  href="#pricing"
+                  href="/#pricing"
                   onClick={closeSidebar}
                   className="block px-4 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
                 >
                   Pricing
                 </Link>
                 <Link
-                  href="#contact"
+                  href="/#contact"
                   onClick={closeSidebar}
                   className="block px-4 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
                 >

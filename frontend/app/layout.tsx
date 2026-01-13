@@ -23,20 +23,20 @@ const playfair = Playfair_Display({
 
 export const metadata: Metadata = {
   title: {
-    default: "Ovela – AI Receptionist for Australian Businesses",
+    default: "Ovela | Enterprise-Grade AI Phone Agents",
     template: "%s | Ovela"
   },
-  description: "Never miss a booking. AI-powered WhatsApp and phone assistant that handles enquiries, bookings, and follow-ups 24/7 for service businesses across Australia.",
+  description: "Empower your business with Ovela's human-like AI. Instantly handle 100% of phone calls, secure bookings, and drive revenue 24/7 without lifting a finger.",
   keywords: [
-    "AI receptionist Australia",
-    "WhatsApp booking automation",
-    "AI answering service",
-    "salon booking software",
-    "trades booking system",
-    "healthcare appointment booking",
-    "small business automation",
-    "automated phone answering",
-    "24/7 virtual receptionist"
+    "Enterprise AI Voice Agent",
+    "Automated Receptionist Australia",
+    "Business Phone Automation",
+    "AI Phone Answering Service",
+    "24/7 Booking Assistant",
+    "Healthcare Appointment AI",
+    "Trades Scheduling Automation",
+    "Revenue Driving AI",
+    "Human-like Voice AI"
   ],
   authors: [{ name: "Ovela AI" }],
   creator: "Ovela AI",
@@ -44,22 +44,22 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_AU",
     url: "https://ovela.dev",
-    title: "Ovela – AI Receptionist for Australian Businesses",
-    description: "Never miss a booking. AI-powered WhatsApp and phone assistant for service businesses.",
+    title: "Ovela | Enterprise-Grade AI Phone Agents",
+    description: "Empower your business with Ovela's human-like AI. Instantly handle 100% of phone calls, secure bookings, and drive revenue 24/7.",
     siteName: "Ovela",
     images: [
       {
         url: "/og-image.jpg",
         width: 1200,
         height: 630,
-        alt: "Ovela AI - Never miss a booking"
+        alt: "Ovela AI - Enterprise-Grade Phone Automation"
       }
     ]
   },
   twitter: {
     card: "summary_large_image",
-    title: "Ovela – AI Receptionist for Australian Businesses",
-    description: "Never miss a booking. AI-powered WhatsApp and phone assistant.",
+    title: "Ovela | Enterprise-Grade AI Phone Agents",
+    description: "Empower your business with Ovela's human-like AI. Instantly handle 100% of phone calls, secure bookings, and drive revenue 24/7.",
     images: ["/og-image.jpg"],
     creator: "@ovela_ai"
   },
