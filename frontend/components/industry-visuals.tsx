@@ -1,19 +1,56 @@
 "use client"
 
-import { motion, AnimatePresence } from "framer-motion"
-import { Check, Clock, HeartPulse, Key, Lock, MessageSquare, ShieldCheck, User, Volume2, Wifi } from "lucide-react"
-import { useState, useEffect } from "react"
+import { motion, AnimatePresence, useInView } from "framer-motion"
+import { Check, Clock, HeartPulse, Key, Lock, MessageSquare, ShieldCheck, User, Volume2, Wifi, Play, Pause, X } from "lucide-react"
+import { useState, useEffect, useRef } from "react"
 
 // Enhanced Minimalist Container
-function LiveCard({ children, title, status = "Active" }: { children: React.ReactNode, title: string, status?: string }) {
+function LiveCard({ children, title, status = "Active", audioSrc }: { children: React.ReactNode, title: string, status?: string, audioSrc?: string }) {
+    const [isPlaying, setIsPlaying] = useState(false)
+    const audioRef = useRef<HTMLAudioElement | null>(null)
+    const cardRef = useRef(null)
+    const isInView = useInView(cardRef, { margin: "-20% 0px -20% 0px" }) // Pause when mostly out of viewport
+
+    // Scroll-to-stop logic
+    useEffect(() => {
+        if (!isInView && isPlaying && audioRef.current) {
+            audioRef.current.pause()
+            setIsPlaying(false)
+        }
+    }, [isInView, isPlaying])
+
+    const togglePlayback = () => {
+        if (audioRef.current) {
+            if (isPlaying) {
+                audioRef.current.pause()
+            } else {
+                audioRef.current.play().catch(e => console.log("Playback failed:", e)) // Handle autoplay blocks
+            }
+            setIsPlaying(!isPlaying)
+        }
+    }
+
+    const handleEnded = () => setIsPlaying(false)
+
     return (
         <motion.div
+            ref={cardRef}
             initial={{ opacity: 0, y: 20, scale: 0.95 }}
             whileInView={{ opacity: 1, y: 0, scale: 1 }}
             viewport={{ once: true, margin: "-50px" }}
             transition={{ duration: 0.8, ease: "easeOut" }}
             className="relative w-full max-w-md md:max-w-lg mx-auto perspective-1000"
         >
+            {/* Hidden Audio Element */}
+            {audioSrc && (
+                <audio
+                    ref={audioRef}
+                    src={audioSrc}
+                    onEnded={handleEnded}
+                    preload="none"
+                />
+            )}
+
             {/* Ambient Glow - Pulse Effect */}
             <motion.div
                 animate={{ opacity: [0.4, 0.6, 0.4], scale: [0.98, 1.02, 0.98] }}
@@ -22,7 +59,7 @@ function LiveCard({ children, title, status = "Active" }: { children: React.Reac
             />
 
             {/* Glass Card */}
-            <div className="bg-background/60 backdrop-blur-xl border border-border/50 rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/10 dark:ring-white/5">
+            <div className="bg-background/60 backdrop-blur-xl border border-border/50 rounded-2xl overflow-hidden shadow-2xl ring-1 ring-white/10 dark:ring-white/5 transition-all duration-500">
                 {/* Header */}
                 <div className="px-5 py-4 border-b border-border/40 flex items-center justify-between bg-muted/20">
                     <div className="flex items-center gap-3">
@@ -34,12 +71,43 @@ function LiveCard({ children, title, status = "Active" }: { children: React.Reac
                         <div className="h-4 w-px bg-border/60 mx-1" />
                         <span className="text-[10px] font-mono font-medium text-muted-foreground uppercase tracking-widest">{title}</span>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <span className="relative flex h-2 w-2">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                        </span>
-                        <span className="text-[10px] font-medium text-green-500">{status}</span>
+
+                    <div className="flex items-center gap-3">
+                        {/* Audio Toggle */}
+                        {audioSrc && (
+                            <button
+                                onClick={togglePlayback}
+                                className={`flex items-center gap-2 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all border ${isPlaying
+                                        ? "bg-primary text-primary-foreground border-primary shadow-lg shadow-primary/25 scale-105"
+                                        : "bg-background/50 text-muted-foreground border-border/50 hover:border-primary/50 hover:text-primary"
+                                    }`}
+                            >
+                                {isPlaying ? (
+                                    <>
+                                        <Pause className="w-3 h-3 fill-current" />
+                                        <span className="hidden sm:inline">Listening</span>
+                                        <span className="flex gap-0.5 h-2 items-center ml-1">
+                                            <motion.span animate={{ height: [2, 8, 2] }} transition={{ repeat: Infinity, duration: 0.5 }} className="w-0.5 bg-current rounded-full" />
+                                            <motion.span animate={{ height: [4, 10, 4] }} transition={{ repeat: Infinity, duration: 0.4 }} className="w-0.5 bg-current rounded-full" />
+                                            <motion.span animate={{ height: [2, 6, 2] }} transition={{ repeat: Infinity, duration: 0.6 }} className="w-0.5 bg-current rounded-full" />
+                                        </span>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Play className="w-3 h-3 fill-current" />
+                                        <span>Demo Voice</span>
+                                    </>
+                                )}
+                            </button>
+                        )}
+
+                        <div className="flex items-center gap-2 pl-2 border-l border-border/30">
+                            <span className="relative flex h-2 w-2">
+                                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${status === 'Active' || status === 'Monitoring' || status === 'Enforcing' || status === 'Recording' ? 'bg-green-400' : 'bg-gray-400'}`}></span>
+                                <span className={`relative inline-flex rounded-full h-2 w-2 ${status === 'Active' || status === 'Monitoring' || status === 'Enforcing' || status === 'Recording' ? 'bg-green-500' : 'bg-gray-500'}`}></span>
+                            </span>
+                            <span className="text-[10px] font-medium text-muted-foreground hidden sm:inline-block">{status}</span>
+                        </div>
                     </div>
                 </div>
 
@@ -67,7 +135,7 @@ export function MotelVisual() {
     }, [])
 
     return (
-        <LiveCard title="Night Audit Protocol">
+        <LiveCard title="Night Audit Protocol" audioSrc="/audio/motel-demo.mp3">
             <div className="space-y-6 font-sans relative z-10 min-h-[140px]">
                 <AnimatePresence>
                     {step >= 1 && (
@@ -148,7 +216,7 @@ export function DentalVisual() {
     }, [])
 
     return (
-        <LiveCard title="Triage Agent" status="Monitoring">
+        <LiveCard title="Triage Agent" status="Monitoring" audioSrc="/audio/dental-demo.mp3">
             <div className="space-y-4">
                 {/* Status Bar */}
                 <div className="flex items-center justify-between bg-red-500/5 p-3 rounded-lg border border-red-500/10">
@@ -226,7 +294,7 @@ function CalendarIcon() {
 // Visual 3: Physio Intake - Live Form Fill
 export function PhysioVisual() {
     return (
-        <LiveCard title="Live Intake" status="Recording">
+        <LiveCard title="Live Intake" status="Recording" audioSrc="/audio/physio-demo.mp3">
             <div className="space-y-4">
                 {/* Audio Waveform */}
                 <div className="flex items-center gap-2 mb-4 px-1">
@@ -299,7 +367,7 @@ function Typewriter({ text, delay }: { text: string, delay: number }) {
 // Visual 4: Salon Deposit - Payment Secure
 export function SalonVisual() {
     return (
-        <LiveCard title="Revenue Guard" status="Enforcing">
+        <LiveCard title="Revenue Guard" status="Enforcing" audioSrc="/audio/salon-demo.mp3">
             <div className="space-y-4">
                 <div className="flex items-center justify-between pb-3 border-b border-dashed border-border/40">
                     <div>
