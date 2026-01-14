@@ -5,7 +5,7 @@ import { motion, useScroll, useTransform, AnimatePresence } from "framer-motion"
 import Link from "next/link"
 import { DarkModeToggle } from "./dark-mode-toggle"
 import { OvelaLogo } from "./ovela-logo"
-import { Menu, X, ChevronDown } from "lucide-react"
+import { Menu, X, ChevronDown, HeartPulse, Activity, Moon, Scissors, Zap, Home, Scale } from "lucide-react"
 
 export function Header() {
   const [isDesktop, setIsDesktop] = useState(false)
@@ -90,32 +90,100 @@ export function Header() {
               <AnimatePresence>
                 {isDesktopSolutionsOpen && (
                   <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 10 }}
-                    transition={{ duration: 0.2 }}
-                    className="absolute top-full left-0 w-64 pt-2"
+                    initial="hidden"
+                    animate="visible"
+                    exit="hidden"
+                    variants={{
+                      hidden: {
+                        opacity: 0,
+                        y: 10,
+                        scale: 0.95,
+                        transition: {
+                          duration: 0.2
+                        }
+                      },
+                      visible: {
+                        opacity: 1,
+                        y: 0,
+                        scale: 1,
+                        transition: {
+                          type: "spring",
+                          stiffness: 300,
+                          damping: 25,
+                          staggerChildren: 0.05,
+                          delayChildren: 0.05
+                        }
+                      }
+                    }}
+                    className="absolute top-full left-1/2 -translate-x-1/2 mt-4 w-[600px] z-50"
                   >
-                    <div className="bg-popover/90 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl overflow-hidden p-2 grid gap-1 ring-1 ring-black/5 dark:ring-white/10">
-                      {[
-                        { name: "Motels & Hotels", href: "/solutions/motels", desc: "After-hours check-ins" },
-                        { name: "Dental Clinics", href: "/solutions/dental", desc: "Emergency triage" },
-                        { name: "Physio & Massage", href: "/solutions/physio", desc: "Silent rescheduling" },
-                        { name: "Salons & Barbers", href: "/solutions/salons", desc: "Deposit enforcement" },
-                      ].map((item) => (
-                        <Link
-                          key={item.name}
-                          href={item.href}
-                          className="block px-3 py-2 rounded-lg hover:bg-accent hover:text-accent-foreground transition-colors group"
-                        >
-                          <div className="text-sm font-medium text-foreground group-hover:text-accent-foreground">
-                            {item.name}
-                          </div>
-                          <div className="text-xs text-muted-foreground group-hover:text-accent-foreground/70">
-                            {item.desc}
-                          </div>
+                    <div className="bg-popover/95 backdrop-blur-3xl border border-white/10 dark:border-white/5 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] overflow-hidden ring-1 ring-black/5 p-2">
+                      {/* Subtle internal gloss */}
+                      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+
+                      <div className="grid grid-cols-2 gap-1 p-1">
+                        {/* Left Column: Health & Wellness */}
+                        <div className="space-y-1">
+                          <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Health & Wellness</div>
+                          <DropdownItem
+                            href="/solutions/dental"
+                            title="Dental Clinics"
+                            desc="Emergency triage & booking."
+                            icon={<HeartPulse size={16} className="text-red-500" />}
+                          />
+                          <DropdownItem
+                            href="/solutions/physio"
+                            title="Physio & Massage"
+                            desc="Intake & rescheduling."
+                            icon={<Activity size={16} className="text-emerald-500" />}
+                          />
+                        </div>
+
+                        {/* Right Column: Service & Property */}
+                        <div className="space-y-1">
+                          <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground/70">Service & Operations</div>
+                          <DropdownItem
+                            href="/solutions/motels"
+                            title="Motels & Hotels"
+                            desc="Night audit automation."
+                            icon={<Moon size={16} className="text-indigo-500" />}
+                          />
+                          <DropdownItem
+                            href="/solutions/salons"
+                            title="Salons & Barbers"
+                            desc="Deposit enforcement."
+                            icon={<Scissors size={16} className="text-pink-500" />}
+                          />
+                          <DropdownItem
+                            href="/solutions/real-estate"
+                            title="Real Estate"
+                            desc="Tenant screening."
+                            icon={<Home size={16} className="text-blue-500" />}
+                          />
+                          <DropdownItem
+                            href="/solutions/energy"
+                            title="Energy & Utilities"
+                            desc="Rebate eligibility checks."
+                            icon={<Zap size={16} className="text-yellow-500" />}
+                          />
+                          <DropdownItem
+                            href="/solutions/legal"
+                            title="Legal Services"
+                            desc="Confidential client intake."
+                            icon={<Scale size={16} className="text-zinc-500" />}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Bottom Action Area */}
+                      <div className="mt-2 p-3 bg-muted/30 rounded-2xl flex items-center justify-between border border-border/50">
+                        <div className="text-xs text-muted-foreground">
+                          Don't see your industry?
+                        </div>
+                        <Link href="/#contact" className="text-xs font-medium text-foreground hover:underline">
+                          Contact Sales →
                         </Link>
-                      ))}
+                      </div>
                     </div>
                   </motion.div>
                 )}
@@ -148,12 +216,12 @@ export function Header() {
               <DarkModeToggle />
             </div>
 
-            <Link
+            <a
               href="/#contact"
               className="px-5 py-2.5 bg-primary text-primary-foreground text-sm rounded-full hover:opacity-90 transition-all hover:scale-105 shadow-md shadow-primary/20"
             >
               Get Started
-            </Link>
+            </a>
           </div>
         </div>
       </motion.header>
@@ -226,6 +294,9 @@ export function Header() {
                           { name: "Dental Clinics", href: "/solutions/dental" },
                           { name: "Physio & Massage", href: "/solutions/physio" },
                           { name: "Salons & Barbers", href: "/solutions/salons" },
+                          { name: "Energy & Utilities", href: "/solutions/energy" },
+                          { name: "Real Estate", href: "/solutions/real-estate" },
+                          { name: "Legal Services", href: "/solutions/legal" },
                         ].map((item) => (
                           <Link
                             key={item.name}
@@ -276,5 +347,48 @@ export function Header() {
         )}
       </AnimatePresence>
     </>
+  )
+}
+
+const itemVariants = {
+  hidden: { opacity: 0, scale: 0.9, y: 0 },
+  visible: {
+    opacity: 1,
+    scale: 1,
+    y: 0,
+    transition: {
+      type: "spring",
+      stiffness: 400,
+      damping: 25
+    }
+  }
+} as const
+
+function DropdownItem({ href, title, desc, icon }: { href: string, title: string, desc: string, icon: React.ReactNode }) {
+  return (
+    <motion.div variants={itemVariants}>
+      <Link
+        href={href}
+        className="group flex items-start gap-3 p-3 rounded-xl hover:bg-accent/5 transition-all duration-300 border border-transparent hover:border-white/10 relative overflow-hidden"
+      >
+        {/* Spotlight Effect - simplified for performance but effective */}
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,var(--accent-foreground)_0%,transparent_100%)] opacity-0 group-hover:opacity-10 transition-opacity duration-500 blur-xl" />
+
+        {/* Moving Gradient Shine */}
+        <div className="absolute top-0 right-0 -left-[100%] h-full bg-gradient-to-r from-transparent via-white/5 to-transparent skew-x-12 opacity-0 group-hover:animate-shine" />
+
+        <div className="relative mt-0.5 p-2 rounded-lg bg-background/40 border border-white/5 shadow-sm group-hover:scale-110 group-hover:bg-background/60 transition-all duration-300">
+          {icon}
+        </div>
+        <div className="relative z-10">
+          <div className="text-sm font-medium text-foreground group-hover:text-primary transition-colors flex items-center gap-1">
+            {title}
+          </div>
+          <div className="text-[11px] text-muted-foreground group-hover:text-muted-foreground/80 leading-tight mt-0.5">
+            {desc}
+          </div>
+        </div>
+      </Link>
+    </motion.div>
   )
 }

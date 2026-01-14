@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import dynamic from "next/dynamic"
 import { AnimatePresence, motion } from "framer-motion"
 import { Header } from "@/components/header"
@@ -51,6 +51,43 @@ const Footer = dynamic(() => import("@/components/footer").then(mod => ({ defaul
 
 export default function Home() {
   const [isLoading, setIsLoading] = useState(true)
+
+  // Handle hash navigation after loading completes
+  useEffect(() => {
+    if (!isLoading) {
+      // Prevent browser from trying to restore scroll position automatically which fights our scroll
+      if ('scrollRestoration' in window.history) {
+        window.history.scrollRestoration = 'manual'
+      }
+
+      const hash = window.location.hash
+      if (hash) {
+        const id = hash.replace('#', '')
+
+        // Poll for the element being available in the DOM
+        const checkForElement = setInterval(() => {
+          const element = document.getElementById(id)
+          if (element) {
+            clearInterval(checkForElement)
+            // Small delay to allow layout to stabilize
+            setTimeout(() => {
+              element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }, 100)
+          }
+        }, 100)
+
+        // Safety cleanup after 10 seconds (extended for slower connections)
+        const safetyTimeout = setTimeout(() => {
+          clearInterval(checkForElement)
+        }, 10000)
+
+        return () => {
+          clearInterval(checkForElement)
+          clearTimeout(safetyTimeout)
+        }
+      }
+    }
+  }, [isLoading])
 
   return (
     <main className="min-h-screen bg-background">

@@ -15,6 +15,7 @@ export default function DentalPage() {
                     <span className="italic text-muted-foreground">Admin Precision.</span>
                 </>
             }
+            heroFocusSentence="{Precision|Gentle|Quality} {Dentistry|Treatment|Trust}"
             heroSubtitle="Stop interrupting procedures to answer the phone. Ovela triages emergencies, filters price shoppers, and fills your calendar with high-value appointments."
             painPoints={[
                 {

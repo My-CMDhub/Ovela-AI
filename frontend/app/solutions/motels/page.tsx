@@ -9,13 +9,9 @@ export default function MotelsPage() {
         <IndustryTemplate
             industry="Motels & Accommodation"
             heroVisual={<MotelVisual />}
-            heroTitle={
-                <>
-                    The Front Desk That <br />
-                    <span className="italic text-muted-foreground">Never Sleeps.</span>
-                </>
-            }
-            heroSubtitle="Automate after-hours check-ins, guest inquiries, and direct bookings. Maintain 24/7 responsiveness without the overhead of night staff."
+            heroTitle="The Front Desk That"
+            heroFocusSentence="{Never|Always|Truly} {Sleeps|Welcomes|Works}"
+            heroSubtitle="Automate 24/7 guest support, booking inquiries, and check-out coordination with an AI agent that sounds exactly like your best staff member."
             painPoints={[
                 {
                     label: "The 2:00 AM Lockout",

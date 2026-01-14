@@ -9,6 +9,9 @@ import { Header } from "@/components/header"
 import { FrictionList } from "@/components/friction-list"
 import { AmbientBackground } from "@/components/ui/ambient-background"
 
+import TrueFocus from "@/components/ui/true-focus"
+import ScrollStack, { ScrollStackItem } from "@/components/scroll-stack"
+
 interface PainPoint {
     label: string
     problem: string
@@ -23,7 +26,8 @@ interface ValueProp {
 interface IndustryTemplateProps {
     industry: string
     heroTitle: ReactNode
-    heroSubtitle: string
+    heroSubtitle?: string
+    heroFocusSentence?: string // New optional prop for formatted animation
     painPoints: PainPoint[]
     valueProps: ValueProp[]
     workflowTitle?: string
@@ -37,6 +41,7 @@ export function IndustryTemplate({
     industry,
     heroTitle,
     heroSubtitle,
+    heroFocusSentence,
     painPoints,
     valueProps,
     workflowTitle = "The Workflow",
@@ -66,9 +71,27 @@ export function IndustryTemplate({
                             <h1 className="font-serif text-5xl md:text-7xl font-medium tracking-tight text-foreground max-w-4xl mb-6">
                                 {heroTitle}
                             </h1>
-                            <p className="text-xl text-muted-foreground max-w-2xl leading-relaxed mb-8">
-                                {heroSubtitle}
-                            </p>
+
+
+                            {heroFocusSentence && (
+                                <div className="mb-6 min-h-[4rem] flex items-center justify-center lg:justify-start">
+                                    <TrueFocus
+                                        sentence={heroFocusSentence}
+                                        manualMode={false}
+                                        blurAmount={6}
+                                        borderColor="var(--accent)"
+                                        glowColor="var(--accent)"
+                                        animationDuration={0.5}
+                                        pauseBetweenAnimations={1.5}
+                                    />
+                                </div>
+                            )}
+
+                            {heroSubtitle && (
+                                <p className="text-xl text-muted-foreground max-w-2xl leading-relaxed mb-8">
+                                    {heroSubtitle}
+                                </p>
+                            )}
                         </motion.div>
 
                         {heroVisual && (
@@ -106,45 +129,45 @@ export function IndustryTemplate({
                     </div>
                 </section>
 
-                {/* The Solution (Value Props) */}
-                <section className="px-6 lg:px-12 py-12 md:py-24 max-w-7xl mx-auto">
-                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                        <div className="lg:col-span-1 md:pr-12">
-                            <h2 className="text-4xl font-serif font-medium mb-6">{workflowTitle}</h2>
-                            <p className="text-muted-foreground leading-relaxed mb-8">
+                {/* The Solution (Scroll Stack Workflow) */}
+                <section className="relative w-full bg-background border-t border-border/20">
+                    <div className="max-w-7xl mx-auto flex flex-col lg:flex-row">
+
+                        {/* Left: Sticky Heading & Context */}
+                        <div className="w-full lg:w-1/2 p-6 lg:p-12 lg:h-screen lg:sticky lg:top-0 flex flex-col justify-center border-b lg:border-b-0 lg:border-r border-border/20 bg-background z-10">
+                            <h2 className="text-4xl md:text-5xl font-serif font-medium mb-6 text-foreground leading-tight">
+                                {workflowTitle}
+                            </h2>
+                            <p className="text-xl text-muted-foreground leading-relaxed mb-8 max-w-md">
                                 {workflowDescription}
                             </p>
-                            <Link
-                                href={ctaHref}
-                                className="inline-flex items-center text-primary font-medium hover:underline underline-offset-4"
-                            >
-                                {ctaText} <ArrowRight className="ml-2 w-4 h-4" />
-                            </Link>
-                        </div>
-
-                        {/* Modified Grid for Centering the odd item */}
-                        <div className="lg:col-span-2">
-                            <div className="flex flex-wrap justify-center gap-6">
-                                {valueProps.map((prop, idx) => (
-                                    <motion.div
-                                        key={idx}
-                                        initial={{ opacity: 0, y: 20 }}
-                                        whileInView={{ opacity: 1, y: 0 }}
-                                        viewport={{ once: true }}
-                                        transition={{ delay: 0.1 + idx * 0.1 }}
-                                        className="flex-1 min-w-[300px] p-6 rounded-2xl bg-card border border-border shadow-sm hover:shadow-md transition-all group"
-                                    >
-                                        <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary mb-4 group-hover:scale-110 transition-transform">
-                                            {prop.icon || <CheckCircle2 size={20} />}
-                                        </div>
-                                        <h3 className="font-medium text-lg mb-2">{prop.title}</h3>
-                                        <p className="text-sm text-muted-foreground leading-relaxed">
-                                            {prop.description}
-                                        </p>
-                                    </motion.div>
-                                ))}
+                            <div>
+                                <Link
+                                    href={ctaHref}
+                                    className="inline-flex items-center text-primary text-lg font-medium hover:underline underline-offset-4"
+                                >
+                                    {ctaText} <ArrowRight className="ml-2 w-5 h-5" />
+                                </Link>
                             </div>
                         </div>
+
+                        {/* Right: Scroll Stack Animation */}
+                        <div className="w-full lg:w-1/2 bg-background">
+                            <ScrollStack>
+                                {valueProps.map((prop, idx) => (
+                                    <ScrollStackItem key={idx} itemClassName="bg-card/80 backdrop-blur-xl border-2 border-border/50 shadow-[0_8px_30px_rgb(0,0,0,0.12),0_2px_8px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.4),0_2px_8px_rgb(0,0,0,0.3)] ring-1 ring-foreground/5 w-full h-full flex flex-col justify-center p-8 rounded-3xl">
+                                        <div className="w-14 h-14 rounded-full bg-primary/20 flex items-center justify-center text-primary mb-6">
+                                            {prop.icon || <CheckCircle2 size={28} />}
+                                        </div>
+                                        <h3 className="text-2xl md:text-3xl font-medium text-foreground mb-4 leading-tight">{prop.title}</h3>
+                                        <p className="text-lg text-muted-foreground leading-relaxed">
+                                            {prop.description}
+                                        </p>
+                                    </ScrollStackItem>
+                                ))}
+                            </ScrollStack>
+                        </div>
+
                     </div>
                 </section>
 
@@ -203,6 +226,6 @@ export function IndustryTemplate({
             </main>
 
             <Footer />
-        </div>
+        </div >
     )
 }

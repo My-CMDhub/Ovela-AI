@@ -15,6 +15,7 @@ export default function SalonsPage() {
                     <span className="italic text-muted-foreground">Chair Time.</span>
                 </>
             }
+            heroFocusSentence="{Creative|Artistic|Styled} {Beauty|Vision|Craft}"
             heroSubtitle="Eliminate the complexity of booking chemical services and enforcing deposits. Ovela understands service durations and protects your revenue."
             painPoints={[
                 {

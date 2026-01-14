@@ -1,56 +1,27 @@
 "use client"
 
 import { motion, AnimatePresence, useInView } from "framer-motion"
-import { Check, Clock, HeartPulse, Key, Lock, MessageSquare, ShieldCheck, User, Volume2, Wifi, Play, Pause, X } from "lucide-react"
+import { Check, Clock, HeartPulse, Key, Lock, MessageSquare, ShieldCheck, User, Volume2, Wifi, Play, Pause, X, Zap, Leaf, Home, FileText, ClipboardCheck, Scale } from "lucide-react"
 import { useState, useEffect, useRef } from "react"
+import { useRouter } from "next/navigation"
+import { Dialog, DialogContent, DialogTrigger, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { WaitlistForm } from "@/components/waitlist-form"
 
 // Enhanced Minimalist Container
 function LiveCard({ children, title, status = "Active", audioSrc }: { children: React.ReactNode, title: string, status?: string, audioSrc?: string }) {
-    const [isPlaying, setIsPlaying] = useState(false)
-    const audioRef = useRef<HTMLAudioElement | null>(null)
-    const cardRef = useRef(null)
-    const isInView = useInView(cardRef, { margin: "-20% 0px -20% 0px" }) // Pause when mostly out of viewport
+    const router = useRouter()
 
-    // Scroll-to-stop logic
-    useEffect(() => {
-        if (!isInView && isPlaying && audioRef.current) {
-            audioRef.current.pause()
-            setIsPlaying(false)
-        }
-    }, [isInView, isPlaying])
-
-    const togglePlayback = () => {
-        if (audioRef.current) {
-            if (isPlaying) {
-                audioRef.current.pause()
-            } else {
-                audioRef.current.play().catch(e => console.log("Playback failed:", e)) // Handle autoplay blocks
-            }
-            setIsPlaying(!isPlaying)
-        }
-    }
-
-    const handleEnded = () => setIsPlaying(false)
+    // Audio is currently preserved for future use but disabled for public demo
+    // const [isPlaying, setIsPlaying] = useState(false)
+    // const audioRef = useRef<HTMLAudioElement | null>(null)
 
     return (
         <motion.div
-            ref={cardRef}
             initial={{ opacity: 0, y: 20, scale: 0.95 }}
-            whileInView={{ opacity: 1, y: 0, scale: 1 }}
-            viewport={{ once: true, margin: "-50px" }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ duration: 0.8, ease: "easeOut" }}
             className="relative w-full max-w-md md:max-w-lg mx-auto perspective-1000"
         >
-            {/* Hidden Audio Element */}
-            {audioSrc && (
-                <audio
-                    ref={audioRef}
-                    src={audioSrc}
-                    onEnded={handleEnded}
-                    preload="none"
-                />
-            )}
-
             {/* Ambient Glow - Pulse Effect */}
             <motion.div
                 animate={{ opacity: [0.4, 0.6, 0.4], scale: [0.98, 1.02, 0.98] }}
@@ -73,38 +44,29 @@ function LiveCard({ children, title, status = "Active", audioSrc }: { children: 
                     </div>
 
                     <div className="flex items-center gap-3">
-                        {/* Audio Toggle */}
-                        {audioSrc && (
-                            <button
-                                onClick={togglePlayback}
-                                className={`flex items-center gap-2 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all border ${isPlaying
-                                        ? "bg-primary text-primary-foreground border-primary shadow-lg shadow-primary/25 scale-105"
-                                        : "bg-background/50 text-muted-foreground border-border/50 hover:border-primary/50 hover:text-primary"
-                                    }`}
-                            >
-                                {isPlaying ? (
-                                    <>
-                                        <Pause className="w-3 h-3 fill-current" />
-                                        <span className="hidden sm:inline">Listening</span>
-                                        <span className="flex gap-0.5 h-2 items-center ml-1">
-                                            <motion.span animate={{ height: [2, 8, 2] }} transition={{ repeat: Infinity, duration: 0.5 }} className="w-0.5 bg-current rounded-full" />
-                                            <motion.span animate={{ height: [4, 10, 4] }} transition={{ repeat: Infinity, duration: 0.4 }} className="w-0.5 bg-current rounded-full" />
-                                            <motion.span animate={{ height: [2, 6, 2] }} transition={{ repeat: Infinity, duration: 0.6 }} className="w-0.5 bg-current rounded-full" />
-                                        </span>
-                                    </>
-                                ) : (
-                                    <>
-                                        <Play className="w-3 h-3 fill-current" />
-                                        <span>Demo Voice</span>
-                                    </>
-                                )}
-                            </button>
-                        )}
+                        {/* Demo Action Button - Redirects to Contact */}
+                        {/* Demo Action Button - Native Link for reliable scrolling */}
+                        {/* Demo Action Button - Modal Trigger */}
+                        <Dialog>
+                            <DialogTrigger asChild>
+                                <button
+                                    className="flex items-center gap-2 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all bg-primary/10 text-primary border border-primary/20 hover:bg-primary hover:text-primary-foreground hover:scale-105 cursor-pointer"
+                                >
+                                    <Play className="w-3 h-3 fill-current" />
+                                    <span>Request Demo</span>
+                                </button>
+                            </DialogTrigger>
+                            <DialogContent className="bg-transparent border-none shadow-none p-0 max-w-xl sm:rounded-[2rem] data-[state=open]:zoom-in-50 data-[state=open]:duration-300">
+                                <DialogTitle className="sr-only">Request Demo</DialogTitle>
+                                <DialogDescription className="sr-only">Join the waitlist to get early access.</DialogDescription>
+                                <WaitlistForm className="bg-background/95 backdrop-blur-2xl border border-border shadow-2xl" />
+                            </DialogContent>
+                        </Dialog>
 
                         <div className="flex items-center gap-2 pl-2 border-l border-border/30">
                             <span className="relative flex h-2 w-2">
-                                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${status === 'Active' || status === 'Monitoring' || status === 'Enforcing' || status === 'Recording' ? 'bg-green-400' : 'bg-gray-400'}`}></span>
-                                <span className={`relative inline-flex rounded-full h-2 w-2 ${status === 'Active' || status === 'Monitoring' || status === 'Enforcing' || status === 'Recording' ? 'bg-green-500' : 'bg-gray-500'}`}></span>
+                                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${status === 'Active' || status === 'Monitoring' || status === 'Enforcing' || status === 'Recording' || status === 'Validating' || status === 'Scanning' ? 'bg-green-400' : 'bg-gray-400'}`}></span>
+                                <span className={`relative inline-flex rounded-full h-2 w-2 ${status === 'Active' || status === 'Monitoring' || status === 'Enforcing' || status === 'Recording' || status === 'Validating' || status === 'Scanning' ? 'bg-green-500' : 'bg-gray-500'}`}></span>
                             </span>
                             <span className="text-[10px] font-medium text-muted-foreground hidden sm:inline-block">{status}</span>
                         </div>
@@ -412,6 +374,159 @@ export function SalonVisual() {
                 <div className="flex items-center justify-center gap-2 pt-2">
                     <Wifi className="w-3 h-3 text-muted-foreground" />
                     <div className="text-[10px] text-muted-foreground">Payment link sent via SMS</div>
+                </div>
+            </div>
+        </LiveCard>
+    )
+}
+
+// Visual 5: Energy & Utilities - Efficiency Graph
+export function EnergyVisual() {
+    return (
+        <LiveCard title="Energy Audit" status="Scanning">
+            <div className="space-y-4">
+                <div className="flex items-center justify-between bg-yellow-500/5 p-3 rounded-lg border border-yellow-500/10">
+                    <div className="flex items-center gap-2">
+                        <Zap className="w-4 h-4 text-yellow-500" />
+                        <span className="text-xs font-bold text-yellow-500 uppercase tracking-wide">VEU Rebate Check</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-muted-foreground">Eligible</span>
+                </div>
+
+                <div className="relative h-24 bg-muted/20 rounded-lg border border-border/50 overflow-hidden flex items-end px-1 gap-1">
+                    {[...Array(20)].map((_, i) => (
+                        <motion.div
+                            key={i}
+                            initial={{ height: "20%" }}
+                            animate={{ height: ["20%", `${30 + Math.random() * 60}%`, "20%"] }}
+                            transition={{ duration: 2, repeat: Infinity, delay: i * 0.1, ease: "easeInOut" }}
+                            className="flex-1 bg-gradient-to-t from-yellow-500/40 to-yellow-500/10 rounded-t-sm"
+                        />
+                    ))}
+                </div>
+
+                <div className="flex items-center gap-3 bg-green-500/5 p-3 rounded-xl border border-green-500/10">
+                    <div className="bg-green-500/10 p-2 rounded-full">
+                        <Leaf className="w-4 h-4 text-green-600" />
+                    </div>
+                    <div>
+                        <div className="text-xs font-medium text-foreground">Solar Installation Compliance</div>
+                        <div className="text-[10px] text-muted-foreground">Certificate of Electrical Safety verified.</div>
+                    </div>
+                </div>
+            </div>
+        </LiveCard>
+    )
+}
+
+// Visual 6: Real Estate - Inspection Checklist
+export function RealEstateVisual() {
+    return (
+        <LiveCard title="Tenancy Valid." status="Validating">
+            <div className="space-y-3">
+                <div className="flex items-center gap-3 p-3 bg-blue-500/5 rounded-xl border border-blue-500/10">
+                    <div className="relative">
+                        <Home className="w-5 h-5 text-blue-500" />
+                        <motion.span
+                            animate={{ opacity: [0, 1, 0] }}
+                            transition={{ repeat: Infinity, duration: 2 }}
+                            className="absolute -top-1 -right-1 w-2 h-2 bg-blue-500 rounded-full"
+                        />
+                    </div>
+                    <div>
+                        <div className="text-xs font-bold text-foreground">394 Collins St</div>
+                        <div className="text-[10px] text-muted-foreground">Rental Application #4921</div>
+                    </div>
+                </div>
+
+                <div className="space-y-2 pl-2">
+                    <CheckItem label="Identity Verification" delay={0.5} />
+                    <CheckItem label="Rental History Check" delay={1.2} />
+                    <CheckItem label="Income Proof (Payslips)" delay={2.0} />
+                </div>
+
+                <motion.div
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 3 }}
+                    className="mt-2 bg-green-500 text-white text-xs font-bold py-2 px-3 rounded-lg text-center shadow-lg shadow-green-500/20"
+                >
+                    APPLICATION APPROVED
+                </motion.div>
+            </div>
+        </LiveCard>
+    )
+}
+
+function CheckItem({ label, delay }: { label: string, delay: number }) {
+    return (
+        <div className="flex items-center gap-3 text-sm">
+            <div className="relative w-4 h-4 flex items-center justify-center">
+                <motion.div
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={{ delay }}
+                    className="bg-green-500 rounded-full w-4 h-4 flex items-center justify-center"
+                >
+                    <Check className="w-2.5 h-2.5 text-white" />
+                </motion.div>
+                <div className="absolute inset-0 border border-muted-foreground/30 rounded-full -z-10" />
+            </div>
+            <motion.span
+                initial={{ opacity: 0.5 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay }}
+            >
+                {label}
+            </motion.span>
+        </div>
+    )
+}
+
+// Visual 7: Legal - Compliance Shield
+export function LegalVisual() {
+    return (
+        <LiveCard title="Client Onboarding" status="Enforcing">
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <div className="bg-foreground text-background p-1.5 rounded">
+                            <Scale className="w-4 h-4" />
+                        </div>
+                        <span className="font-serif text-sm">Legal Intake</span>
+                    </div>
+                    <div className="text-[10px] px-2 py-0.5 border border-border rounded-full text-muted-foreground uppercase tracking-wider">
+                        Confidential
+                    </div>
+                </div>
+
+                <div className="bg-card border border-border/50 rounded-xl p-4 shadow-sm space-y-3">
+                    <div className="flex items-start gap-3">
+                        <FileText className="w-4 h-4 text-muted-foreground mt-0.5" />
+                        <div className="space-y-1 w-full">
+                            <div className="h-2 w-3/4 bg-border/50 rounded-full" />
+                            <div className="h-2 w-1/2 bg-border/30 rounded-full" />
+                        </div>
+                    </div>
+
+                    <div className="h-px bg-border/30 w-full" />
+
+                    <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">Conflict Check</span>
+                        <motion.div
+                            initial={{ width: 0 }}
+                            animate={{ width: "100%" }}
+                            transition={{ duration: 2, ease: "circOut" }}
+                            className="w-16 h-1.5 bg-green-500/20 rounded-full overflow-hidden"
+                        >
+                            <div className="w-full h-full bg-green-500" />
+                        </motion.div>
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-2 bg-blue-500/5 text-blue-600 dark:text-blue-400 p-2.5 rounded-lg border border-blue-500/10">
+                    <ClipboardCheck className="w-4 h-4" />
+                    <span className="text-xs font-medium">Compliance verified automatically.</span>
                 </div>
             </div>
         </LiveCard>

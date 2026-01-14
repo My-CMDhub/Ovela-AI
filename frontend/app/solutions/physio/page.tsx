@@ -15,6 +15,7 @@ export default function PhysioPage() {
                     <span className="italic text-muted-foreground">Patient Care.</span>
                 </>
             }
+            heroFocusSentence="{Hands-on|Clinical|Expert} {Therapy|Recovery|Care}"
             heroSubtitle="Your hands should be on the patient, not the phone. Automate rescheduling, intake forms, and FAQs without hiring a full-time receptionist."
             painPoints={[
                 {

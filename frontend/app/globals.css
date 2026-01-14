@@ -470,3 +470,13 @@
     box-shadow: var(--glass-shadow);
   }
 }
+
+/* Custom Shine Animation */
+@keyframes shine {
+  0% { left: -100%; }
+  100% { left: 200%; }
+}
+
+.animate-shine {
+  animation: shine 3s ease-in-out infinite;
+}

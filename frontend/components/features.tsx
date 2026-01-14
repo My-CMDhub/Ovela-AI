@@ -2,8 +2,9 @@
 
 import { motion } from "framer-motion"
 import { Phone, RefreshCw, Database, Clock, Brain, Settings, BarChart3 } from "lucide-react"
+import { FeaturesFolderAnimation, type FeatureCardData } from "./features-folder-animation"
 
-const features = [
+const features: FeatureCardData[] = [
   {
     icon: Phone,
     title: "AI Voice Answering",
@@ -43,7 +44,7 @@ const features = [
 
 export function Features() {
   return (
-    <section id="features" className="py-32 px-6">
+    <section id="features" className="px-6 pt-32 pb-32">
       <div className="max-w-6xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -57,31 +58,10 @@ export function Features() {
             A complete AI receptionist that works while you focus on your craft.
           </p>
         </motion.div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {features.map((feature, index) => (
-            <motion.div
-              key={index}
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.6, ease: "easeOut", delay: index * 0.1 }}
-              whileHover={{ y: -4 }}
-              className="group p-8 bg-card rounded-2xl border border-border/50 hover:border-border hover:shadow-lg hover:shadow-muted/50 transition-all duration-300"
-            >
-              <motion.div
-                whileHover={{ scale: 1.05 }}
-                transition={{ duration: 0.2 }}
-                className="w-12 h-12 rounded-xl bg-muted flex items-center justify-center mb-6 group-hover:bg-accent/30 transition-colors"
-              >
-                <feature.icon className="w-5 h-5 text-foreground" />
-              </motion.div>
-              <h3 className="text-lg font-medium mb-2">{feature.title}</h3>
-              <p className="text-sm text-muted-foreground leading-relaxed">{feature.description}</p>
-            </motion.div>
-          ))}
-        </div>
       </div>
+
+      {/* Folder Animation Container */}
+      <FeaturesFolderAnimation features={features} folderColor="#D8B4FE" />
     </section>
   )
 }
