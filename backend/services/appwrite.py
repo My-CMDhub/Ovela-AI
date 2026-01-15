@@ -799,36 +799,72 @@ class AppwriteService:
             List of transcript documents
         """
         try:
-            result = self._make_request(
-                "GET",
-                f"/databases/{self.db_id}/collections/demo_transcripts/documents"
-            )
-            transcripts = result.get("documents", []) if result else []
+            path = f"/databases/{self.db_id}/collections/demo_transcripts/documents"
             
-            # Filter by phone if provided
-            if phone:
-                # Normalize phone for matching (handle +61 vs 04 etc)
-                normalized_phone = phone.replace(" ", "").replace("-", "")
-                transcripts = [
-                    t for t in transcripts 
-                    if normalized_phone in t.get("phone", "").replace(" ", "").replace("-", "")
-                ]
+            # Use query params for filtering
+            queries = [
+                'orderDesc("created_at")',
+                f'limit({limit})'
+            ]
             
-            # Filter by date range if provided
             if start_date:
-                transcripts = [t for t in transcripts if t.get("created_at", "") >= start_date]
+                queries.append(f'greaterThanEqual("created_at", "{start_date}")')
             if end_date:
-                # Add end of day to include full day
-                end_date_full = end_date + "T23:59:59" if "T" not in end_date else end_date
-                transcripts = [t for t in transcripts if t.get("created_at", "") <= end_date_full]
+                queries.append(f'lessThanEqual("created_at", "{end_date}")')
+            if phone:
+                queries.append(f'equal("phone", "{phone}")')
+                
+            params = {'queries': queries}
             
-            # Sort by created_at descending (newest first)
-            transcripts.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-            
-            return transcripts[:limit]
+            result = self._make_request("GET", path, params=params)
+            return result.get("documents", []) if result else []
         except Exception as e:
-            logger.error(f"Error fetching call transcripts: {e}")
+            logger.error(f"Error fetching transcripts: {e}")
             return []
+
+    # ==================== SYSTEM ALERTS & HEALTH ====================
+
+    def create_system_alert(self, 
+                          title: str,
+                          message: str,
+                          severity: str = "warning", # info, warning, error, critical
+                          component: str = "voice_agent",
+                          tenant_id: str = "default",
+                          metadata: dict = None) -> dict:
+        """
+        Create a system alert for the staff notification center.
+        Used for visible error tracking (Ghosting, API failures).
+        """
+        from appwrite.id import ID
+        try:
+            doc_id = ID.unique()
+            now = datetime.now(MELBOURNE_TZ).isoformat()
+            
+            data = {
+                "title": title,
+                "message": message,
+                "severity": severity,
+                "component": component,
+                "tenant_id": tenant_id,
+                "status": "new",  # new, acknowledged, resolved
+                "metadata_json": json.dumps(metadata) if metadata else "{}",
+                "created_at": now
+            }
+            
+            # Note: Ensure 'system_alerts' collection exists in Appwrite
+            result = self._make_request(
+                "POST",
+                f"/databases/{self.db_id}/collections/system_alerts/documents",
+                data={"documentId": doc_id, "data": data}
+            )
+            logger.info(f"🚨 System Alert Created: {title}")
+            return result
+        except Exception as e:
+            # Fallback log if alert creation fails (don't crash app)
+            logger.error(f"Failed to create system alert: {e}")
+            return None
+
+
 
     # ==================== STAFF NOTIFICATIONS (Human-in-Loop) ====================
     

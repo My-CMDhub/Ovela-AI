@@ -620,15 +620,52 @@ class FunctionDispatcher:
     
     async def execute(self, function_name: str, args: dict) -> dict:
         """
-        Execute a function by name with given arguments.
-        
-        Args:
-            function_name: Name of function to call
-            args: Arguments to pass to function
-            
-        Returns:
-            Function result dict
+        Execute a function with retry logic (max 2 attempts) and watchdog timeout (15s).
         """
+        import asyncio
+        
+        MAX_RETRIES = 2
+        WATCHDOG_TIMEOUT = 15.0 # Seconds before considering it "ghosted"
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                # Watchdog: Wrap execution in timeout
+                # We call the internal dispatch logic here
+                result = await asyncio.wait_for(
+                    self._dispatch_logic(function_name, args),
+                    timeout=WATCHDOG_TIMEOUT
+                )
+                return result
+                
+            except asyncio.TimeoutError:
+                logger.error(f"⏳ Function {function_name} GHOSTED (>15s) - Attempt {attempt+1}/{MAX_RETRIES}")
+                if attempt < MAX_RETRIES - 1:
+                    logger.info("🔄 Retrying function execution...")
+                    continue
+                else:
+                    # Final Fail: Return polite placeholder (TODO: Switch to transfer)
+                    return {
+                        "success": False,
+                        "message": "I apologize, I'm having trouble connecting to the system securely. I've noted your request, and I'll have a staff member call you back shortly to assist.",
+                        "outcome_override": "system_failure",
+                        "error_details": f"Ghosting Timeout: {function_name} > {WATCHDOG_TIMEOUT}s"
+                        # "action": "transfer", # TODO: Uncomment to enable auto-transfer logic
+                        # "transfer_to": settings.STAFF_PHONE_NUMBER
+                    }
+                    
+            except Exception as e:
+                logger.error(f"❌ Function error {function_name}: {e} - Attempt {attempt+1}/{MAX_RETRIES}")
+                if attempt < MAX_RETRIES - 1:
+                    continue
+                return {
+                    "error": str(e), 
+                    "message": "I'm having a brief technical hiccup. Please hold on a moment.",
+                    "outcome_override": "system_error",
+                    "error_details": f"Function Error: {function_name} - {str(e)}"
+                }
+        
+    async def _dispatch_logic(self, function_name: str, args: dict) -> dict:
+        """Internal dispatch logic matching function names to handlers."""
         try:
             # Availability & Booking
             if function_name == "check_availability":
@@ -695,8 +732,8 @@ class FunctionDispatcher:
                 return {"error": f"Unknown function: {function_name}"}
                 
         except Exception as e:
-            logger.error(f"Function execution error ({function_name}): {e}")
-            return {"error": str(e)}
+            # Re-raise for the watchdog loop to catch and log properly
+            raise e
 
 async def handle_request_human_callback(args: dict) -> dict:
     """

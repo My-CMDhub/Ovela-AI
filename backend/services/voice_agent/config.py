@@ -31,6 +31,15 @@ SILENCE_PROMPTS = [
     "Hello? Are you still with me?",
 ]
 
+FILLER_PROMPTS = [
+    "Just a moment while I check that for you...",
+    "Let me look that up real quick...",
+    "Sure thing, checking on that now...",
+    "Bear with me a sec, I'm checking the details...",
+    "One moment please, let me verify that...",
+    "Okay, let me see what I can find...",
+]
+
 # =============================================================================
 # SILENCE DETECTION THRESHOLDS (seconds)
 # =============================================================================
@@ -140,3 +149,8 @@ def get_random_soft_warning(tenant_id: str = "lydoun") -> str:
         f"I'm here to help with {short_name} enquiries. What dates were you thinking of staying?",
     ]
     return random.choice(warnings)
+
+
+def get_random_filler_prompt() -> str:
+    """Returns a random filler prompt for long operations."""
+    return random.choice(FILLER_PROMPTS)
