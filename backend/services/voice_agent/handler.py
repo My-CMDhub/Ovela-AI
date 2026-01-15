@@ -781,9 +781,8 @@ class VoiceAgentHandler:
                                 "function": function_name
                             }
                         )
-            
-            finally:
-                self._is_processing_function = False
+        finally:
+            self._is_processing_function = False
         
         # Check for transfer signal
         if result.get("action") == "transfer":
