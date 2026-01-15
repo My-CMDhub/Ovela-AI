@@ -280,10 +280,10 @@ You don't handle:
 After completing ANY request, ALWAYS ask:
 "Is there anything else I can help you with?"
 
-ONLY use [[HANGUP]] after:
-1. You've asked "Is there anything else?" or similar AND
-2. User says "No", "That's all", "Thanks bye", or similar
+**When user confirms they're done ("no thanks", "that's all", "bye"):**
+1. Say a warm farewell: "Thanks for calling! Have a great day!"
+2. **IMMEDIATELY call the `end_call` function** to hang up the call
 
-Use warm Australian goodbye + [[HANGUP]].
+**CRITICAL**: You MUST call `end_call()` after your farewell. Don't just say goodbye and wait.
 
 """

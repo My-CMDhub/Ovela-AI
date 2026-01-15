@@ -588,6 +588,18 @@ async def handle_transfer_to_staff() -> dict:
     }
 
 
+async def handle_end_call() -> dict:
+    """
+    End the call gracefully.
+    Returns an action signal that the handler will use to schedule hangup.
+    """
+    return {
+        "action": "end_call",
+        "success": True,
+        "message": ""  # AI should have already said farewell
+    }
+
+
 # =============================================================================
 # FUNCTION DISPATCHER
 # =============================================================================
@@ -722,6 +734,10 @@ class FunctionDispatcher:
             # Call Transfer
             elif function_name == "transfer_to_staff":
                 return await handle_transfer_to_staff()
+            
+            # Call Termination
+            elif function_name == "end_call":
+                return await handle_end_call()
             
             # Abuse Protection
             elif function_name == "flag_off_topic":

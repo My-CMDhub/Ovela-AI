@@ -605,9 +605,20 @@ class VoiceAgentHandler:
             
             # Semantic termination detection (Backup for explicit function calls)
             # If AI says goodbye, we should ensure the call actually ends
-            termination_phrases = ["goodbye", "have a great day", "have a wonderful day", "take care", "bye now"]
+            termination_phrases = [
+                # Explicit farewells
+                "goodbye", "bye now", "bye bye", "bye!",
+                # Time-based farewells (day/night/evening)
+                "have a great day", "have a wonderful day", "have a lovely day",
+                "have a great night", "have a wonderful night", "have a lovely night",  
+                "have a great evening", "have a wonderful evening", "have a lovely evening",
+                # Casual farewells
+                "take care", "see you", "cheers", "catch you later",
+                # Australian-style
+                "have a good one", "all the best",
+            ]
             lower_content = clean_content.lower()
-            if any(phrase in lower_content for phrase in termination_phrases) and len(lower_content) < 50:
+            if any(phrase in lower_content for phrase in termination_phrases) and len(lower_content) < 80:
                 logger.info(f"👋 AI indicated farewell ('{clean_content}') - scheduling hangup")
                 # Mark as hanging up so duration monitor doesn't inject warnings
                 self._is_hanging_up = True
@@ -797,6 +808,14 @@ class VoiceAgentHandler:
             # (No need to inject via Deepgram - that causes race conditions)
             await self._execute_twilio_transfer(transfer_to)
             return  # Don't send function response, call is being transferred
+        
+        # Check for end_call signal (LLM explicitly requested call termination)
+        if result.get("action") == "end_call":
+            logger.info("👋 end_call function called - scheduling graceful hangup")
+            self._is_hanging_up = True
+            # Short delay to let any pending TTS complete
+            asyncio.create_task(self._scheduled_hangup(3))
+            return  # Don't send function response, call is ending
         
         # Check for hangup signal from flag_off_topic
         if result.get("should_hangup"):
