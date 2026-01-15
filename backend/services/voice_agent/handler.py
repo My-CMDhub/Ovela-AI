@@ -39,6 +39,7 @@ from .config import (
     get_random_greeting,
     get_random_farewell,
     get_random_silence_prompt,
+    get_random_filler_prompt,
 )
 from .prompts import get_system_prompt
 from .demo_prompts import get_demo_prompt, get_demo_greeting, is_demo_mode
@@ -99,7 +100,11 @@ class VoiceAgentHandler:
         self.call_start_time = None
         self.call_sid = None
         self.exchange_count = 0
+
         self.booking_completed = False
+        
+        # Function tracking
+        self._is_processing_function = False
         
         # Transfer state tracking
         self._transfer_pending = False
@@ -186,10 +191,9 @@ class VoiceAgentHandler:
             "agent": {
                 "language": "en",
                 "listen": {
-                    "provider": {
-                        "type": "deepgram",
-                        "model": "flux-general-en"
-                    }
+                    "model": "nova-3",
+                    "endpointing": 500,
+                    "smart_format": True
                 },
                 "think": {
                     "provider": {
@@ -595,6 +599,18 @@ class VoiceAgentHandler:
             if "[[HANGUP]]" in signals:
                 logger.info("📞 AI initiated hangup (Signal detected)")
                 await self._hangup_call()
+            
+            # Semantic termination detection (Backup for explicit function calls)
+            # If AI says goodbye, we should ensure the call actually ends
+            termination_phrases = ["goodbye", "have a great day", "have a wonderful day", "take care", "bye now"]
+            lower_content = clean_content.lower()
+            if any(phrase in lower_content for phrase in termination_phrases) and len(lower_content) < 50:
+                logger.info(f"👋 AI indicated farewell ('{clean_content}') - scheduling hangup")
+                # Mark as hanging up so duration monitor doesn't inject warnings
+                self._is_hanging_up = True
+                # Schedule hangup after estimated TTS duration
+                wait_seconds = max(3, len(clean_content) / 12) + 2
+                asyncio.create_task(self._scheduled_hangup(wait_seconds))
     
     async def _handle_user_started_speaking(self):
         """Handle VAD detection of user speech."""
@@ -606,6 +622,17 @@ class VoiceAgentHandler:
         # User spoke - exit any silence escalation cycle
         self._in_silence_escalation = False
         
+        # ─────────────────────────────────────────────────────────────────
+        # ABORT HANGUP FIX: If we're hanging up due to silence, cancel it!
+        # The user spoke just as the farewell started - resume conversation.
+        # ─────────────────────────────────────────────────────────────────
+        if getattr(self, '_is_hanging_up', False):
+            logger.info("🛑 ABORT HANGUP: User spoke during farewell - cancelling hangup")
+            self._is_hanging_up = False
+            self._hangup_triggered = False  # Reset so hangup can be triggered again later
+            # Inject acknowledgment so user knows we heard them
+            asyncio.create_task(self._inject_message("Oh, I'm still here! What can I help you with?"))
+        
         # Notify silence monitor
         self.silence_monitor.on_user_speech()
         
@@ -615,6 +642,11 @@ class VoiceAgentHandler:
             "streamSid": self.stream_sid
         }
         await self.twilio_ws.send_json(clear_message)
+
+        # CRITICAL: Force AI speaking state to False immediately
+        # Deepgram might skip AgentAudioDone if interrupted, causing state lock
+        self._ai_is_speaking = False
+        self.silence_monitor.on_ai_finished_speaking() # Reset silence monitor state too
     
     async def _handle_agent_started_speaking(self):
         """
@@ -703,17 +735,55 @@ class VoiceAgentHandler:
         logger.info(f"🔧 Function call: {function_name}({function_args})")
         
         # Inject acknowledgment for slow/database tools to avoid silence
+        # Inject acknowledgment for slow/database tools to avoid silence
         SLOW_TOOLS = [
             "report_missing_booking", 
             "create_booking", 
             "request_human_callback",
-            "lookup_booking"
+            "lookup_booking",
+            "check_availability"
         ]
-        if function_name in SLOW_TOOLS:
-            await self._inject_message("Got it, just one moment...")
         
-        # Execute via dispatcher
-        result = await self.function_dispatcher.execute(function_name, function_args)
+        # Track function processing state
+        self._is_processing_function = True
+        
+        try:
+            if function_name in SLOW_TOOLS:
+                await self._inject_message(get_random_filler_prompt())
+            
+            # Execute via dispatcher
+            result = await self.function_dispatcher.execute(function_name, function_args)
+            
+            # Capture system errors/outcome overrides
+            if result.get("outcome_override"):
+                self.call_outcome = result["outcome_override"]
+                
+                # Log error to transcript (visible in CRM)
+                if result.get("error_details"):
+                    self.transcript.append({
+                        "role": "assistant",
+                        "content": f"⚠️ [SYSTEM ERROR] {result['error_details']}",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    logger.error(f"🚨 System Error logged to transcript: {result['error_details']}")
+                    
+                    # Create visible System Alert (Notification Center)
+                    if result["outcome_override"] == "system_failure":
+                        db_service.create_system_alert(
+                            title=f"Voice Agent Error: {function_name}",
+                            message=result['error_details'],
+                            severity="error",
+                            component="voice_agent",
+                            tenant_id=self.tenant_id,
+                            metadata={
+                                "call_sid": self.call_sid or "unknown",
+                                "phone": self.user_phone,
+                                "function": function_name
+                            }
+                        )
+            
+            finally:
+                self._is_processing_function = False
         
         # Check for transfer signal
         if result.get("action") == "transfer":
@@ -893,10 +963,23 @@ class VoiceAgentHandler:
             action = duration_result.get("action")
             
             if action == "soft_warning":
+                # Don't inject warning if we're already hanging up or call is completed
+                if getattr(self, '_is_hanging_up', False) or self.call_outcome != "completed":
+                    logger.debug("⏱️ Soft time warning skipped - call ending")
+                    continue
+                    
                 logger.info(f"⏱️ Soft time warning [{call_type}]")
                 await self._inject_message(duration_result.get("message", "We've been chatting for a while..."))
                 
             elif action == "hard_cap":
+                # Smart Wait: Let AI finish speaking or working
+                wait_count = 0
+                while (getattr(self, '_ai_is_speaking', False) or self._is_processing_function) and wait_count < 15:
+                    if wait_count % 3 == 0:
+                        logger.info(f"⏱️ Hard cap reached, waiting for AI to finish (busy={self._is_processing_function}, speaking={getattr(self, '_ai_is_speaking', False)})")
+                    await asyncio.sleep(1)
+                    wait_count += 1
+                
                 self.call_outcome = duration_result.get("outcome", "timeout_duration")
                 
                 # Check if we should transfer instead of hanging up
@@ -905,9 +988,10 @@ class VoiceAgentHandler:
                 
                 if should_transfer:
                     logger.info(f"🚨 Duration cap reached - transferring to staff [{call_type}]")
+                    # Clearer message about time limit
                     transfer_message = (
-                        "I've been helping you for a while now. "
-                        "Let me connect you with our team who can assist you further."
+                        "We've reached the maximum duration for this automated call. "
+                        "I'm going to transfer you to a staff member who can pick up right where we left off."
                     )
                     await self._inject_message(transfer_message)
                     
@@ -943,8 +1027,22 @@ class VoiceAgentHandler:
         except Exception as e:
             logger.warning(f"Failed to inject message: {e}")
     
+    async def _scheduled_hangup(self, delay: float):
+        """Wait for a delay (TTS to finish) then hangup."""
+        try:
+            logger.info(f"⏳ Scheduled hangup in {delay:.1f}s")
+            await asyncio.sleep(delay)
+            await self._hangup_call()
+        except Exception as e:
+            logger.error(f"Scheduled hangup failed: {e}")
+
     async def _hangup_call(self):
         """Terminate the Twilio call gracefully."""
+        # Prevent duplicate hangups
+        if getattr(self, '_hangup_triggered', False):
+            return
+        self._hangup_triggered = True
+
         if not self.call_sid:
             logger.warning("Cannot hangup: No Call SID")
             return
@@ -983,6 +1081,14 @@ class VoiceAgentHandler:
         except Exception as e:
             logger.warning(f"Failed to inject farewell: {e}")
         
+        # ─────────────────────────────────────────────────────────────────
+        # ABORT HANGUP CHECK: If user spoke during farewell, don't hang up!
+        # _handle_user_started_speaking resets _is_hanging_up when user speaks.
+        # ─────────────────────────────────────────────────────────────────
+        if not getattr(self, '_is_hanging_up', True):
+            logger.info("🛑 ABORT HANGUP: User spoke during farewell - resuming conversation")
+            return  # User interrupted, don't hang up
+        
         await self._hangup_call()
     
     async def _hangup_with_farewell(self, farewell_message: str):
@@ -1003,6 +1109,13 @@ class VoiceAgentHandler:
             await asyncio.sleep(estimated_tts_time)
         except Exception as e:
             logger.warning(f"Failed to send farewell: {e}")
+        
+        # ─────────────────────────────────────────────────────────────────
+        # ABORT HANGUP CHECK: If user spoke during farewell, don't hang up!
+        # ─────────────────────────────────────────────────────────────────
+        if not getattr(self, '_is_hanging_up', True):
+            logger.info("🛑 ABORT HANGUP: User spoke during farewell - resuming conversation")
+            return  # User interrupted, don't hang up
         
         await self._hangup_call()
     
