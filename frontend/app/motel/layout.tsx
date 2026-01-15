@@ -18,6 +18,7 @@ import {
     MessageSquare,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import SystemAlerts from "@/components/ui/system-alerts";
 
 const navigation = [
     { name: "Dashboard", href: "/motel", icon: LayoutDashboard },
@@ -197,6 +198,9 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                             <Phone className="w-4 h-4" />
                             <span>(03) 5726 1788</span>
                         </div>
+
+                        {/* System Health Alerts */}
+                        <SystemAlerts />
 
                         {/* Status indicator */}
                         <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 text-green-700 rounded-full text-sm">
