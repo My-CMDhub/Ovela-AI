@@ -191,9 +191,12 @@ class VoiceAgentHandler:
             "agent": {
                 "language": "en",
                 "listen": {
-                    "model": "nova-3",
-                    "endpointing": 500,
-                    "smart_format": True
+                    "provider": {
+                        "type": "deepgram",
+                        "model": "nova-3",
+                        "endpointing": 500,
+                        "smart_format": True
+                    }
                 },
                 "think": {
                     "provider": {
