@@ -13,7 +13,7 @@ const features: FeatureCardData[] = [
   {
     icon: Database,
     title: "Works With Your Systems",
-    description: "Integrates with your existing booking and management tools. No forced migration. No disruption.",
+    description: "Integrates with your existing booking and management tools. No forced migration.",
   },
   {
     icon: Clock,

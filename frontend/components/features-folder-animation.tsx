@@ -47,10 +47,10 @@ export const FeaturesFolderAnimation: React.FC<FeaturesFolderAnimationProps> = (
     const containerRef = useRef<HTMLDivElement>(null);
     const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
 
-    const progress = useMotionValue(0);
-    const smoothProgress = useSpring(progress, { damping: 15, stiffness: 80 }); // Physics smoothing
+    const progress = useMotionValue<number>(0);
+    const smoothProgress = useSpring(progress, { damping: 25, stiffness: 100 }); // More stable physics
     const progressVelocity = useVelocity(smoothProgress);
-    const folderTilt = useTransform(progressVelocity, [-0.5, 0.5], [5, -5]); // Aerodynamic tilt
+    const folderTilt = useSpring(useTransform(progressVelocity, [-0.5, 0.5], [5, -5]), { damping: 40, stiffness: 150 }); // Smoothed tilt
 
     const folderBackColor = darkenColor(folderColor, 0.08);
     const totalCards = features.length;
@@ -150,17 +150,8 @@ export const FeaturesFolderAnimation: React.FC<FeaturesFolderAnimationProps> = (
                     newProgress = 1;
                 }
 
-                const isScrollingDown = newProgress > lastProgress;
                 lastProgress = newProgress;
-
-                animate(progress, newProgress, {
-                    type: isScrollingDown ? "spring" : "tween",
-                    stiffness: isScrollingDown ? 80 : undefined,
-                    damping: isScrollingDown ? 25 : undefined,
-                    duration: isScrollingDown ? undefined : 0.4,
-                    ease: isScrollingDown ? undefined : "easeOut",
-                });
-
+                progress.set(newProgress);
                 animationFrame = null;
             });
         };
@@ -190,10 +181,10 @@ export const FeaturesFolderAnimation: React.FC<FeaturesFolderAnimationProps> = (
 
     const folderScale = useTransform(smoothProgress, [0.3, 0.4], [1, 1.12]);
 
-    // Ring opacity
-    const ringOpacity = useTransform(smoothProgress, [0.7, 0.8, 0.95, 1.0], [0, 0.25, 0.25, 0]);
-
-
+    // Ring opacity - Increased visibility for "vibrant" look
+    // Visible while cards are flying in (0.7 -> 1.0)
+    // Extended hold (up to 0.98) to let spark effect shine before potential fade
+    const ringOpacity = useTransform(smoothProgress, [0.6, 0.8, 0.98, 1.0], [0, 0.8, 0.8, 0]);
 
     // Card transforms - SEAMLESS from folder → fan → grid
     const cardTransforms = features.map((_, index) => {
@@ -201,64 +192,77 @@ export const FeaturesFolderAnimation: React.FC<FeaturesFolderAnimationProps> = (
         const gridPos = getGridPosition(index);
 
         // Phase timing - Shifted for slide phase
-        const dealDelay = index * 0.015;
+        // Increased deal delay for more distinct "pop-pop-pop" effect
+        const dealDelay = index * 0.025;
         const emergeStart = 0.35 + dealDelay; // Starts after folder opens
-        const emergeEnd = emergeStart + 0.16;
-        const floatEnd = 0.65;
+        const emergeEnd = emergeStart + 0.20; // Faster individual pop
         const gridStart = 0.65;
         const gridEnd = 1.0;
 
-        // Emergence from folder center
-        const emergeProgress = useTransform(progress, [emergeStart, emergeEnd], [0, 1]);
+        // Combined transforms using only smoothProgress to ensure synchronization
+        const x = useTransform(smoothProgress, (p) => {
+            // Phase 1: Shoot Up (Inside Folder) - NO SPREAD yet
+            if (p < emergeStart + 0.04) return 0;
 
-        const emergeX = useTransform(emergeProgress,
-            [0, 0.25, 0.55, 0.85, 1],
-            [0, fanPos.x * 0.08, fanPos.x * 0.35, fanPos.x * 0.75, fanPos.x]
-        );
-        const emergeY = useTransform(emergeProgress,
-            [0, 0.2, 0.45, 0.75, 1],
-            [240, 140, -60, fanPos.y * 0.5 - 30, fanPos.y]
-        );
-
-        // Start VERY small
-        const emergeScale = useTransform(emergeProgress,
-            [0, 0.15, 0.35, 0.6, 0.85, 1],
-            [0.05, 0.15, 0.35, 0.6, 0.85, 1]
-        );
-
-        const emergeOpacity = useTransform(emergeProgress, [0, 0.08, 0.25], [0, 0.5, 1]);
-        const emergeRotation = useTransform(emergeProgress, [0, 0.5, 1], [0, fanPos.rotation * 0.6, fanPos.rotation * 0.35]);
-
-        // Grid fly phase
-        const gridProgress = useTransform(smoothProgress, [gridStart, gridEnd], [0, 1]);
-
-        const easeInOutQuart = (t: number) => t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
-
-        // Combined transforms
-        const x = useTransform(progress, (p) => {
-            if (p < emergeEnd) return emergeX.get();
-            if (p < gridStart) {
-                const wobble = Math.sin(((p - emergeEnd) / (gridStart - emergeEnd)) * Math.PI * 3 + index) * 4;
-                return fanPos.x + wobble;
+            // Phase 2: Spread Out (After clearing folder moves)
+            if (p < emergeEnd) {
+                // Calculate progress of the spread phase specifically
+                const spreadStart = emergeStart + 0.04;
+                const spreadProgress = (p - spreadStart) / (emergeEnd - spreadStart);
+                const easeSpread = spreadProgress * spreadProgress; // Quadratic ease out
+                return fanPos.x * easeSpread;
             }
-            const gp = easeInOutQuart(gridProgress.get());
-            return fanPos.x + (gridPos.x - fanPos.x) * gp;
+
+            // Phase 3: Fan/Floating state
+            if (p < gridStart) {
+                const fp = (p - emergeEnd) / (gridStart - emergeEnd);
+                const focusWobble = Math.sin(fp * Math.PI * 3 + index) * 4;
+                return fanPos.x + focusWobble;
+            }
+
+            // Phase 4: Settle into Grid
+            const gp = (p - gridStart) / (gridEnd - gridStart);
+            const easeGp = gp < 0.5 ? 8 * gp * gp * gp * gp : 1 - Math.pow(-2 * gp + 2, 4) / 2; // easeInOutQuart
+            return fanPos.x + (gridPos.x - fanPos.x) * easeGp;
         });
 
-        const y = useTransform(progress, (p) => {
-            if (p < emergeEnd) return emergeY.get();
+        const y = useTransform(smoothProgress, (p) => {
+            // Phase 1 & 2: Shoot Up & Spread
+            if (p < emergeEnd) {
+                const ep = Math.max(0, (p - emergeStart) / (emergeEnd - emergeStart));
+
+                // Pure vertical shoot first
+                const startY = 240; // Bottom of folder
+
+                // Interpolate from deep in folder (240) to fan position
+                // Use easeOutBack-ish logic for a "pop" effect
+                const c1 = 1.70158;
+                const c3 = c1 + 1;
+                const easedEp = 1 + c3 * Math.pow(ep - 1, 3) + c1 * Math.pow(ep - 1, 2);
+
+                return startY + (fanPos.y - startY) * easedEp;
+            }
+
             if (p < gridStart) {
-                const bob = Math.sin(((p - emergeEnd) / (gridStart - emergeEnd)) * Math.PI * 2 + index * 0.7) * 6;
+                const fp = (p - emergeEnd) / (gridStart - emergeEnd);
+                const bob = Math.sin(fp * Math.PI * 2 + index * 0.7) * 6;
                 return fanPos.y + bob;
             }
-            const gp = easeInOutQuart(gridProgress.get());
-            return fanPos.y + (gridPos.y - fanPos.y) * gp;
+
+            const gp = (p - gridStart) / (gridEnd - gridStart);
+            const easeGp = gp < 0.5 ? 8 * gp * gp * gp * gp : 1 - Math.pow(-2 * gp + 2, 4) / 2;
+            return fanPos.y + (gridPos.y - fanPos.y) * easeGp;
         });
 
-        const scale = useTransform(progress, (p) => {
-            if (p < emergeEnd) return emergeScale.get();
+        const scale = useTransform(smoothProgress, (p) => {
+            if (p < emergeStart) return 0.2; // Start slightly larger so we can see it shoot
+            if (p < emergeEnd) {
+                const ep = (p - emergeStart) / (emergeEnd - emergeStart);
+                return 0.2 + (1 - 0.2) * ep;
+            }
             if (p < gridStart) return 1;
-            const gp = gridProgress.get();
+
+            const gp = (p - gridStart) / (gridEnd - gridStart);
             if (gp > 0.9) {
                 const bounce = Math.sin((gp - 0.9) / 0.1 * Math.PI) * 0.015;
                 return 1 + bounce;
@@ -266,17 +270,28 @@ export const FeaturesFolderAnimation: React.FC<FeaturesFolderAnimationProps> = (
             return 1;
         });
 
-        const opacity = useTransform(progress, (p) => {
+        const opacity = useTransform(smoothProgress, (p) => {
             if (p < emergeStart) return 0;
-            if (p < emergeEnd) return emergeOpacity.get();
+            if (p < emergeStart + 0.05) {
+                return (p - emergeStart) / 0.05;
+            }
             return 1;
         });
 
-        const rotation = useTransform(progress, (p) => {
-            if (p < emergeEnd) return emergeRotation.get();
+        const rotation = useTransform(smoothProgress, (p) => {
+            // Don't rotate while inside folder (shooting up)
+            if (p < emergeStart + 0.04) return 0;
+
+            if (p < emergeEnd) {
+                const spreadStart = emergeStart + 0.04;
+                const spreadProgress = (p - spreadStart) / (emergeEnd - spreadStart);
+                return fanPos.rotation * 0.35 * spreadProgress;
+            }
             if (p < gridStart) return fanPos.rotation * 0.35;
-            const gp = easeInOutQuart(gridProgress.get());
-            return fanPos.rotation * 0.35 * (1 - gp);
+
+            const gp = (p - gridStart) / (gridEnd - gridStart);
+            const easeGp = gp < 0.5 ? 8 * gp * gp * gp * gp : 1 - Math.pow(-2 * gp + 2, 4) / 2;
+            return fanPos.rotation * 0.35 * (1 - easeGp);
         });
 
         return { x, y, scale, opacity, rotation, cardWidth: gridPos.cardWidth };
@@ -336,24 +351,45 @@ export const FeaturesFolderAnimation: React.FC<FeaturesFolderAnimationProps> = (
 
                     {/* Offset content down to match folder position */}
                     <div className="absolute inset-0 flex items-center justify-center">
-                        {/* Ring containers */}
+                        {/* Ring containers - Show where cards will land */}
                         {features.map((_, index) => {
                             const gridPos = getGridPosition(index);
+
+                            // "Just slightly bigger" -> +8px padding (4px per side)
+                            const padding = 8;
+
                             return (
                                 <motion.div
                                     key={`ring-${index}`}
-                                    className="absolute pointer-events-none"
+                                    className="absolute pointer-events-none flex items-center justify-center"
                                     style={{
-                                        width: `${gridPos.cardWidth + 12}px`,
-                                        height: "192px",
-                                        border: "2px dashed",
-                                        borderColor: "var(--border)",
-                                        borderRadius: "18px",
-                                        opacity: ringOpacity,
+                                        width: `${gridPos.cardWidth + padding}px`,
+                                        height: `${228 + padding}px`,
+                                        opacity: ringOpacity, // Controlled global fade
                                         x: gridPos.x,
                                         y: gridPos.y,
                                     }}
-                                />
+                                >
+                                    {/* Breathing Base Layer - "Waiting" state */}
+                                    <motion.div
+                                        className="w-full h-full rounded-[20px]"
+                                        style={{
+                                            border: "2px dashed",
+                                            borderColor: folderColor,
+                                            backgroundColor: `${folderColor}05`, // Very subtle tint
+                                        }}
+                                        animate={{
+                                            opacity: [0.3, 0.7, 0.3], // Softer breathing
+                                            scale: [0.98, 1.0, 0.98],
+                                        }}
+                                        transition={{
+                                            duration: 4, // Slower breathing
+                                            repeat: Infinity,
+                                            ease: "easeInOut",
+                                            delay: index * 0.15
+                                        }}
+                                    />
+                                </motion.div>
                             );
                         })}
 

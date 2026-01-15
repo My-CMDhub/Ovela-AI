@@ -172,7 +172,7 @@ export function IndustryTemplate({
                 </section>
 
                 {/* Footer CTA with Ambient Background */}
-                <section className="relative py-20 md:py-32 border-t border-border overflow-hidden">
+                <section className="relative py-10 md:py-20 border-t border-border overflow-hidden">
                     <AmbientBackground />
                     <div className="relative z-10 max-w-4xl mx-auto px-6 text-center">
                         <motion.h2
