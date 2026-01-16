@@ -664,6 +664,10 @@ class AppwriteService:
             )
             return result
         except Exception as e:
+            # Handle 404 gracefully (document already deleted or not found)
+            if "404" in str(e):
+                logger.warning(f"Demo lead not found for update: {lead_id or phone}")
+                return None
             logger.error(f"Error updating demo lead: {e}")
             return None
     

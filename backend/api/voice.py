@@ -299,7 +299,8 @@ def _trigger_demo_call(name: str, business_name: str, phone: str, tenant_id: str
         to=phone,
         from_=settings.TWILIO_PHONE_NUMBER,
         url=twiml_url,
-        record=True
+        record=True,
+        machine_detection="Enable"
     )
     
     logger.info(f"Triggered demo call to {phone} (tenant={tenant_id}), SID: {call.sid}")
@@ -320,7 +321,18 @@ async def get_twiml(request: Request):
     tenant_id = params.get("tenant_id", "ovela_demo")
     demo_type = params.get("demo_type", "")
     
+    answered_by = params.get("AnsweredBy", "")
+    
     response = VoiceResponse()
+    
+    # Handle Answering Machines (AMD)
+    if "machine" in answered_by.lower():
+        logger.info(f"AMD detected machine ({answered_by}) for {user_phone} - leaving message")
+        response.say("Hi, this is Ovela. I missed you, but I've sent you an email with the demo details. Chat soon!")
+        response.hangup()
+        return HTMLResponse(content=str(response), media_type="application/xml")
+    
+    # Human or Unknown -> Connect to AI Stream
     connect = Connect()
     
     # Use Media Stream to bridge to Deepgram Voice Agent API

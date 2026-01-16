@@ -4,6 +4,8 @@ Voice Agent Prompts Module.
 Contains system prompts, message templates, and conversation guidance.
 """
 
+from services.voice_agent.prompts_paddlesteamer import get_paddlesteamer_prompt
+from services.knowledge_base.lydoun import LYDOUN_DATA
 
 def get_system_prompt(current_date: str = None, current_time: str = None, tenant_id: str = "lydoun") -> str:
     """
@@ -19,10 +21,16 @@ def get_system_prompt(current_date: str = None, current_time: str = None, tenant
     """
     # Use dedicated prompt for Paddle Steamer
     if tenant_id == "paddlesteamer":
-        from services.voice_agent.prompts_paddlesteamer import get_paddlesteamer_prompt
         return get_paddlesteamer_prompt(current_date, current_time)
     
-    # Otherwise use Lydoun prompt (default)
+    # Default to Lydoun Motel
+    return _get_lydoun_prompt(current_date, current_time)
+
+
+def _get_lydoun_prompt(current_date: str, current_time: str) -> str:
+    """
+    Returns the system prompt specifically for The Lydoun Motel.
+    """
     # Build context header with current date/time
     if current_date and current_time:
         context_header = f"""
@@ -39,43 +47,25 @@ def get_system_prompt(current_date: str = None, current_time: str = None, tenant
     else:
         context_header = ""
 
-    # Get property-specific details based on tenant
-    if tenant_id == "paddlesteamer":
-        property_name = "Albury Paddlesteamer Motel"
-        location = "324 Wodonga Place, Albury NSW 2640"
-        phone = "(02) 6042 0500"
-        greeting_examples = [
-            '"Good morning, Albury Paddlesteamer Motel, how can I help you?"',
-            '"Afternoon, Paddlesteamer Motel speaking, what can I do for you?"',
-            '"Evening, Albury Paddlesteamer Motel, how can I help?"'
-        ]
-    else:  # Default to lydoun
-        property_name = "The Lydoun Motel"
-        location = "7 Main Street, Chiltern VIC 3683"
-        phone = "(03) 5726 1788"
-        greeting_examples = [
-            '"Good morning, The Lydoun Motel, how can I help you?"',
-            '"Afternoon, Lydoun Motel speaking, what can I do for you?"',
-            '"Evening, The Lydoun Motel, how can I help?"'
-        ]
-    # Get tenant-specific data from knowledge base
-    from services.knowledge_base.lydoun import LYDOUN_DATA
-    from services.knowledge_base.paddlesteamer import PADDLESTEAMER_DATA
+    # Lydoun Specific Details
+    property_name = "The Lydoun Motel"
+    location = "7 Main Street, Chiltern VIC 3683"
+    phone = "(03) 5726 1788"
     
-    # Select data based on tenant
-    if tenant_id == "paddlesteamer":
-        data = PADDLESTEAMER_DATA
-    else:
-        data = LYDOUN_DATA
+    greeting_examples = [
+        '"Good morning, The Lydoun Motel, how can I help you?"',
+        '"Afternoon, Lydoun Motel speaking, what can I do for you?"',
+        '"Evening, The Lydoun Motel, how can I help?"'
+    ]
     
-    # Build room types section dynamically
+    # Build room types section dynamically from Lydoun Data
     room_types_text = ""
-    for idx, (key, room) in enumerate(data["rooms"].items(), 1):
+    for idx, (key, room) in enumerate(LYDOUN_DATA["rooms"].items(), 1):
         room_types_text += f"{idx}. {room['name']} - From ${room['price']}/night\n"
         room_types_text += f"   - {room['bedding']}, {room['best_for']}\n   \n"
     
     # Build amenities list (first 10 most important)
-    amenities_text = "\n".join(f"- {amenity}" for amenity in data["amenities"][:10])
+    amenities_text = "\n".join(f"- {amenity}" for amenity in LYDOUN_DATA["amenities"][:10])
     
     return f"""{context_header}You are the AI receptionist named Ovela for {property_name}.
 
@@ -88,9 +78,9 @@ You're helpful, professional, and know the property well.
 Location: {location}
 Phone: {phone}
 
-**Reception Hours:** {data['info'].get('reception_hours', '7:30am - 9:00pm')}
-**Check-in:** {data['info']['check_in']}
-**Check-out:** {data['info']['check_out']}
+**Reception Hours:** {LYDOUN_DATA['info'].get('reception_hours', '7:30am - 9:00pm')}
+**Check-in:** {LYDOUN_DATA['info']['check_in']}
+**Check-out:** {LYDOUN_DATA['info']['check_out']}
 
 **Room Types & Pricing:**
 {room_types_text}
@@ -100,8 +90,8 @@ Phone: {phone}
 **Booking System:** Online via website
 
 **Location Context:**
-- {data['location']['description']}
-- Region: {data['location']['region']}
+- {LYDOUN_DATA['location']['description']}
+- Region: {LYDOUN_DATA['location']['region']}
 
 === YOUR ROLE ===
 

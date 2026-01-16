@@ -103,6 +103,10 @@ class VoiceAgentHandler:
 
         self.booking_completed = False
         
+        # Smart Greeting State
+        self.has_user_spoken = False
+        self.smart_greeting_task = None
+        
         # Function tracking
         self._is_processing_function = False
         
@@ -209,7 +213,7 @@ class VoiceAgentHandler:
                     "functions": get_booking_functions()
                 },
                 "speak": self._get_tts_config(),
-                "greeting": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else self._get_active_greeting()
+                "greeting": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else (None if self.is_demo_call else self._get_active_greeting())
             }
         }
     
@@ -356,6 +360,10 @@ class VoiceAgentHandler:
             self.MAX_DEMO_DURATION_SECONDS = 300  # 5 minutes
             logger.info("🕒 Extended duration for Brand Rep demo (5 mins)")
             
+        # START SENTINEL: Smart Greeting (only for demo calls)
+        if self.is_demo_call:
+             self.smart_greeting_task = asyncio.create_task(self._smart_greeting_logic())
+            
         call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
         
         # Multi-tenant: Resolve tenant_id
@@ -426,6 +434,34 @@ class VoiceAgentHandler:
         except Exception as e:
             logger.error(f"Failed to connect to Deepgram Agent: {e}")
             raise
+    
+        except Exception as e:
+            logger.error(f"Failed to connect to Deepgram Agent: {e}")
+            raise
+
+    async def _smart_greeting_logic(self):
+        """
+        Smart Wait for outbound calls:
+        Wait for user to speak first (e.g., "Hello?").
+        If silence for timeout (2.5s), assume user is waiting and break silence.
+        """
+        logger.info("⏳ Smart Wait: Waiting for user to speak first...")
+        try:
+            # Wait for 2.5 seconds
+            await asyncio.sleep(2.5)
+            
+            # If user hasn't spoken yet, break the silence
+            if not self.has_user_spoken:
+                logger.info("⏰ Smart Wait timeout: User silent, injecting greeting")
+                greeting = self._get_active_greeting()
+                await self._inject_message(greeting)
+            else:
+                logger.info("🗣️ User spoke before timeout, letting conversation flow naturally")
+                
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Error in smart greeting logic: {e}")
     
     async def _handle_twilio_media(self, data: dict):
         """Forward Twilio audio to Deepgram Agent."""
@@ -641,6 +677,9 @@ class VoiceAgentHandler:
         
         # Track timing
         self.user_speech_start_time = time.time()
+        
+        # Mark that user has spoken (for smart greeting logic)
+        self.has_user_spoken = True
         
         # User spoke - exit any silence escalation cycle
         self._in_silence_escalation = False
