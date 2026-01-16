@@ -588,15 +588,16 @@ async def handle_transfer_to_staff() -> dict:
     }
 
 
-async def handle_end_call() -> dict:
+async def handle_end_call(args: dict = None) -> dict:
     """
     End the call gracefully.
     Returns an action signal that the handler will use to schedule hangup.
     """
+    args = args or {}
     return {
         "action": "end_call",
         "success": True,
-        "message": ""  # AI should have already said farewell
+        "message": args.get("message", "")  # Optional message to speak before hanging up
     }
 
 

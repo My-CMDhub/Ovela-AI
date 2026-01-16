@@ -312,10 +312,15 @@ def get_booking_functions() -> list:
         },
         {
             "name": "end_call",
-            "description": "End the call gracefully. Call this AFTER saying your farewell message (e.g., 'Have a great day!'). Use when: (1) Customer confirms they're done - 'that's all', 'no thanks', 'bye', (2) After completing a request and customer has no more questions, (3) Natural end of conversation. CRITICAL: Always call this after your farewell - don't just say goodbye and wait.",
+            "description": "End the call gracefully. optionally provide a 'message' to speak before hanging up. Use when: (1) Leaving a voicemail (provide the message!), (2) Customer confirms they're done, (3) Conversation ends.",
             "parameters": {
                 "type": "object",
-                "properties": {}
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Optional message to speak before hanging up. critically useful for leaving voicemails. If provided, the agent will speak this text then hang up."
+                    }
+                }
             }
         }
     ]

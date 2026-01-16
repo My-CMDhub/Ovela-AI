@@ -861,8 +861,21 @@ class VoiceAgentHandler:
         if result.get("action") == "end_call":
             logger.info("👋 end_call function called - scheduling graceful hangup")
             self._is_hanging_up = True
-            # Short delay to let any pending TTS complete
-            asyncio.create_task(self._scheduled_hangup(3))
+            
+            # If function provided a message (e.g. voicemail), speak it before hanging up
+            message = result.get("message")
+            delay = 3.5  # default farewell delay
+            
+            if message:
+                await self._inject_message(message)
+                # Estimate duration: ~15 chars/sec + buffer. Min 4s.
+                # "Hi, this is Ovela..." is ~150 chars -> ~10s
+                estimated_tts = max(4.0, len(message) / 12) 
+                delay = estimated_tts
+                logger.info(f"🗣️ Speaking end_call message ({len(message)} chars), delay={delay:.1f}s")
+
+            # Delay to let any pending TTS complete
+            asyncio.create_task(self._scheduled_hangup(delay))
             return  # Don't send function response, call is ending
         
         # Check for hangup signal from flag_off_topic
