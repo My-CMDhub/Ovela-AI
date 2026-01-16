@@ -133,6 +133,7 @@ class VoiceAgentHandler:
         # Multi-tenant support
         # Demo calls → "ovela_demo", Production calls → resolved from phone or default "lydoun"
         self.tenant_id = "ovela_demo"  # Default to demo, updated in _handle_twilio_start
+        self.demo_type = None
     
     # =========================================================================
     # DEEPGRAM SETTINGS
@@ -216,7 +217,8 @@ class VoiceAgentHandler:
         """Get the active prompt - demo prompt if configured, otherwise motel."""
         demo_prompt = get_demo_prompt(
             current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
-            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p")
+            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p"),
+            demo_type=self.demo_type
         )
         if demo_prompt:
             logger.info(f"Using DEMO prompt mode")
@@ -347,6 +349,13 @@ class VoiceAgentHandler:
         
         # Multi-tenant detection
         self.is_demo_call = custom_params.get("is_demo", "false").lower() == "true"
+        self.demo_type = custom_params.get("demo_type", "")
+        
+        # Adjust duration for Brand Rep mode
+        if self.demo_type == "brand_rep":
+            self.MAX_DEMO_DURATION_SECONDS = 300  # 5 minutes
+            logger.info("🕒 Extended duration for Brand Rep demo (5 mins)")
+            
         call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
         
         # Multi-tenant: Resolve tenant_id
@@ -1078,6 +1087,22 @@ class VoiceAgentHandler:
         except Exception as e:
             logger.error(f"Failed to hangup call: {e}")
     
+    async def _scheduled_hangup(self, delay: float):
+        """Wait for delay then hangup."""
+        logger.info(f"⏳ Scheduled hangup in {delay}s")
+        # Set flag immediately so we don't process more speech as interruption
+        # unless it's a clear "No wait!" (handled by _handle_user_started_speaking)
+        self._is_hanging_up = True
+        
+        await asyncio.sleep(delay)
+        
+        # Check if aborted
+        if not getattr(self, '_is_hanging_up', True):
+            logger.info("🛑 ABORT HANGUP: User spoke during scheduled hangup")
+            return
+
+        await self._hangup_call()
+
     async def _inject_farewell_and_hangup(self):
         """Inject farewell message before hanging up due to silence."""
         # Set flag to stop silence detection during hangup
@@ -1097,7 +1122,7 @@ class VoiceAgentHandler:
             await self._inject_message(farewell)
             
             # Wait for farewell to be spoken
-            await asyncio.sleep(5)
+            await asyncio.sleep(3.5)
             
         except Exception as e:
             logger.warning(f"Failed to inject farewell: {e}")
@@ -1125,7 +1150,7 @@ class VoiceAgentHandler:
             await self._inject_message(farewell_message)
             # Wait for TTS to complete - estimate based on message length
             # ~12 chars/sec for TTS, plus latency buffer
-            estimated_tts_time = max(6, len(farewell_message) // 10)
+            estimated_tts_time = max(3.5, len(farewell_message) // 10)
             logger.info(f"⏳ Waiting {estimated_tts_time}s for farewell TTS")
             await asyncio.sleep(estimated_tts_time)
         except Exception as e:

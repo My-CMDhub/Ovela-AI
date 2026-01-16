@@ -174,7 +174,7 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
     # Trigger the call
     try:
         # Defaults to ovela_demo for approved website leads
-        call = _trigger_demo_call(name, business, phone, tenant_id="ovela_demo")
+        call = _trigger_demo_call(name, business, phone, tenant_id="ovela_demo", demo_type="brand_rep")
         
         # Update lead status
         db_service.update_demo_lead(lead_id=lead_id, data={
@@ -280,7 +280,7 @@ async def reject_demo(token: str):
         )
 
 
-def _trigger_demo_call(name: str, business_name: str, phone: str, tenant_id: str = "ovela_demo"):
+def _trigger_demo_call(name: str, business_name: str, phone: str, tenant_id: str = "ovela_demo", demo_type: str = "brand_rep"):
     """
     Helper function to trigger a Twilio demo call.
     Returns the call object.
@@ -290,9 +290,10 @@ def _trigger_demo_call(name: str, business_name: str, phone: str, tenant_id: str
     encoded_business = quote(business_name)
     encoded_phone = quote(phone)
     encoded_tenant = quote(tenant_id)
+    encoded_demo_type = quote(demo_type)
     
     # Construct the TwiML URL
-    twiml_url = f"{settings.BACKEND_URL}/api/voice/twiml?name={encoded_name}&business={encoded_business}&phone={encoded_phone}&tenant_id={encoded_tenant}"
+    twiml_url = f"{settings.BACKEND_URL}/api/voice/twiml?name={encoded_name}&business={encoded_business}&phone={encoded_phone}&tenant_id={encoded_tenant}&demo_type={encoded_demo_type}"
     
     call = twilio_client.calls.create(
         to=phone,
@@ -317,6 +318,7 @@ async def get_twiml(request: Request):
     user_phone = params.get("phone", "unknown")
     transfer_failed = params.get("transfer_failed", "false")
     tenant_id = params.get("tenant_id", "ovela_demo")
+    demo_type = params.get("demo_type", "")
     
     response = VoiceResponse()
     connect = Connect()
@@ -333,6 +335,7 @@ async def get_twiml(request: Request):
     stream.parameter(name="user_phone", value=user_phone)
     stream.parameter(name="transfer_failed", value=transfer_failed)
     stream.parameter(name="tenant_id", value=tenant_id)
+    stream.parameter(name="demo_type", value=demo_type)
     
     response.append(connect)
     response.say("Sorry, I lost the connection. Please try again later.")
