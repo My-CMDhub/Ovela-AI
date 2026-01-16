@@ -235,7 +235,7 @@ class VoiceAgentHandler:
     
     def _get_active_greeting(self) -> str:
         """Get the active greeting - demo greeting if configured, otherwise motel."""
-        if is_demo_mode():
+        if is_demo_mode() or self.is_demo_call:
             return get_demo_greeting()
         return get_random_greeting(self.tenant_id)  # Pass tenant_id for property-specific greeting
     

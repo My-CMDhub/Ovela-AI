@@ -26,10 +26,13 @@ DEMO_BUSINESS_PHONE = os.getenv("DEMO_BUSINESS_PHONE", "(03) 1234 5678")
 
 def get_demo_prompt(current_date: str = None, current_time: str = None, demo_type: str = None) -> str:
     """
-    Returns a demo prompt based on DEMO_PROMPT_TYPE environment variable.
-    Returns None if no demo prompt is configured (falls back to motel).
+    Returns a demo prompt based on demo_type argument OR DEMO_PROMPT_TYPE environment variable.
     """
-    if not DEMO_PROMPT_TYPE or DEMO_PROMPT_TYPE == "motel":
+    # 1. Determine active type
+    active_type = demo_type if demo_type else DEMO_PROMPT_TYPE
+    
+    # 2. Check validity
+    if not active_type or active_type == "motel":
         return None  # Use default motel prompt
     
     prompt_builders = {
@@ -40,12 +43,6 @@ def get_demo_prompt(current_date: str = None, current_time: str = None, demo_typ
         "brand_rep": _brand_rep_prompt,
         "generic": _generic_prompt,
     }
-    
-    # Priority:
-    # 1. demo_type passed argument (from TwiML/VoiceAgentHandler)
-    # 2. DEMO_PROMPT_TYPE env var (from .env)
-    
-    active_type = demo_type if demo_type else DEMO_PROMPT_TYPE
     
     builder = prompt_builders.get(active_type, _generic_prompt)
     return builder(current_date, current_time)

@@ -173,14 +173,29 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
     
     # Trigger the call
     try:
+        # Optimistic locking: Update status FIRST to prevent race conditions
+        # If this fails (e.g. 404 or already updated), we catch it and don't trigger call
+        updated_lead = db_service.update_demo_lead(lead_id=lead_id, data={
+            "status": "approved", # Temporary status or check
+            "approved_at": datetime.now().isoformat()
+        })
+        
+        if not updated_lead:
+            # Update failed (likely already processed)
+            logger.info(f"Failed to update lead {lead_id} (already processed?) - skipping call")
+            return HTMLResponse(
+                content=f"""<html><body style="font-family: system-ui; padding: 40px; text-align: center;">
+                <h1>ℹ️ Already Processed</h1><p>Request handled.</p></body></html>"""
+            )
+
         # Defaults to ovela_demo for approved website leads
+        # If call fails, we should probably revert status, but typically 'approved' is fine
         call = _trigger_demo_call(name, business, phone, tenant_id="ovela_demo", demo_type="brand_rep")
         
-        # Update lead status
+        # Update with call SID
         db_service.update_demo_lead(lead_id=lead_id, data={
             "status": "called",
-            "call_sid": call.sid,
-            "approved_at": datetime.now().isoformat()
+            "call_sid": call.sid
         })
         
         logger.info(f"Demo approved and call triggered for {phone}")
@@ -293,7 +308,7 @@ def _trigger_demo_call(name: str, business_name: str, phone: str, tenant_id: str
     encoded_demo_type = quote(demo_type)
     
     # Construct the TwiML URL
-    twiml_url = f"{settings.BACKEND_URL}/api/voice/twiml?name={encoded_name}&business={encoded_business}&phone={encoded_phone}&tenant_id={encoded_tenant}&demo_type={encoded_demo_type}"
+    twiml_url = f"{settings.BACKEND_URL}/api/voice/twiml?name={encoded_name}&business={encoded_business}&phone={encoded_phone}&tenant_id={encoded_tenant}&demo_type={encoded_demo_type}&is_demo=true"
     
     call = twilio_client.calls.create(
         to=phone,
@@ -320,6 +335,7 @@ async def get_twiml(request: Request):
     transfer_failed = params.get("transfer_failed", "false")
     tenant_id = params.get("tenant_id", "ovela_demo")
     demo_type = params.get("demo_type", "")
+    is_demo = params.get("is_demo", "false")
     
     answered_by = params.get("AnsweredBy", "")
     
@@ -348,6 +364,7 @@ async def get_twiml(request: Request):
     stream.parameter(name="transfer_failed", value=transfer_failed)
     stream.parameter(name="tenant_id", value=tenant_id)
     stream.parameter(name="demo_type", value=demo_type)
+    stream.parameter(name="is_demo", value=is_demo)
     
     response.append(connect)
     response.say("Sorry, I lost the connection. Please try again later.")
