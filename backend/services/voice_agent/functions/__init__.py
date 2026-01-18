@@ -8,8 +8,10 @@ Function definitions are here, implementations are in handlers.py.
 """
 
 from .handlers import FunctionDispatcher
+from .saranda_handlers import SarandaFunctionDispatcher
+from .saranda_definitions import get_saranda_functions
 
-__all__ = ['get_booking_functions', 'FunctionDispatcher']
+__all__ = ['get_booking_functions', 'FunctionDispatcher', 'SarandaFunctionDispatcher', 'get_saranda_functions']
 
 
 def get_booking_functions() -> list:

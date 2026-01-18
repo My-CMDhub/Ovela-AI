@@ -106,6 +106,16 @@ MIN_SUBSTANTIVE_LENGTH = 3
 # =============================================================================
 def get_random_greeting(tenant_id: str = "lydoun") -> str:
     """Returns a random Australian-tone greeting for the specified tenant."""
+    # Saranda Restaurant
+    if tenant_id == "saranda":
+        greetings = [
+            "G'day! Saranda Cafe, Ovela speaking. Looking to order or book a table?",
+            "Hello! Saranda Pizzeria, this is Ovela. Can I help you with an order?",
+            "Hi there! You've reached Saranda. Pickup order or reservation?",
+            "Saranda Cafe speaking, Ovela here. What can I get for you today?",
+        ]
+        return random.choice(greetings)
+    
     if tenant_id == "paddlesteamer":
         property_name = "Albury Paddlesteamer Motel"
         short_name = "Paddlesteamer Motel"

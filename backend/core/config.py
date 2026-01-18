@@ -36,16 +36,20 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_PHONE_NUMBER: str = "+61348236219"  # Your purchased Twilio number
+    TWILIO_WHATSAPP_NUMBER: str = "+14155238886"  # Twilio WhatsApp Sandbox number
+    
+    # Saranda Restaurant Staff WhatsApp
+    SARANDA_STAFF_WHATSAPP: str = "+61475677771"  # Test: your number | Prod: +61452557167
 
     # Deepgram
-    DEEPGRAM_API_KEY: str = ""
+    DEEPGRAM_API_KEY: str
     
-    # Call Transfer Settings
-    STAFF_PHONE_NUMBER: str = "+61493291626"  # Reception for call transfers
+    # Staff Phone (for transfers)
+    STAFF_PHONE_NUMBER: str = "+61493291626"
+    
+    # Demo Settings
+    TENANT_ID: str = "lydoun"  # Default tenant (lydoun, paddlesteamer, saranda)
     TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
-    
-    # Validation/Demo Settings
-    TENANT_ID: str = "lydoun" # lydoun, paddlesteamer
 
     class Config:
         case_sensitive = True

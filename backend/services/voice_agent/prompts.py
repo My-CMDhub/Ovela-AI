@@ -5,6 +5,7 @@ Contains system prompts, message templates, and conversation guidance.
 """
 
 from services.voice_agent.prompts_paddlesteamer import get_paddlesteamer_prompt
+from services.voice_agent.prompts_saranda import get_saranda_prompt
 from services.knowledge_base.lydoun import LYDOUN_DATA
 
 def get_system_prompt(current_date: str = None, current_time: str = None, tenant_id: str = "lydoun") -> str:
@@ -17,9 +18,13 @@ def get_system_prompt(current_date: str = None, current_time: str = None, tenant
     Args:
         current_date: Current date string
         current_time: Current time string
-        tenant_id: Tenant identifier (lydoun, paddlesteamer)
+        tenant_id: Tenant identifier (lydoun, paddlesteamer, saranda)
     """
-    # Use dedicated prompt for Paddle Steamer
+    # Saranda Restaurant (pickup orders, WhatsApp HITL)
+    if tenant_id == "saranda":
+        return get_saranda_prompt(current_date, current_time)
+    
+    # Paddle Steamer Motel
     if tenant_id == "paddlesteamer":
         return get_paddlesteamer_prompt(current_date, current_time)
     

@@ -45,7 +45,7 @@ from .prompts import get_system_prompt
 from .demo_prompts import get_demo_prompt, get_demo_greeting, is_demo_mode
 from .abuse_protection import AbuseProtection
 from .silence_detection import SilenceMonitor
-from .functions import get_booking_functions
+from .functions import get_booking_functions, get_saranda_functions, SarandaFunctionDispatcher
 from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
 from .text_utils import prepare_for_tts, clean_tts_output
 from services.motel_knowledge_base import set_tenant_context
@@ -210,7 +210,7 @@ class VoiceAgentHandler:
                         "temperature": 0.85
                     },
                     "prompt": self._get_active_prompt() + ("\n\n[CONTEXT: " + system_context + "]" if system_context else ""),
-                    "functions": get_booking_functions()
+                    "functions": self._get_active_functions()
                 },
                 "speak": self._get_tts_config(),
                 "greeting": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else (None if self.is_demo_call else self._get_active_greeting())
@@ -232,6 +232,12 @@ class VoiceAgentHandler:
             current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p"),
             tenant_id=self.tenant_id  # Pass tenant_id for property-specific prompt
         )
+    
+    def _get_active_functions(self) -> list:
+        """Get the correct function definitions based on tenant."""
+        if self.tenant_id == "saranda":
+            return get_saranda_functions()
+        return get_booking_functions()
     
     def _get_active_greeting(self) -> str:
         """Get the active greeting - demo greeting if configured, otherwise motel."""
@@ -394,13 +400,21 @@ class VoiceAgentHandler:
         self.abuse_protection.set_call_start_time(self.call_start_time)
         
         # Initialize function dispatcher with user context
-        self.function_dispatcher = FunctionDispatcher(
-            db_service=db_service,
-            user_phone=self.user_phone,
-            save_reservation_fn=self._save_motel_reservation,
-            abuse_protection=self.abuse_protection,
-            tenant_id=self.tenant_id  # Pass tenant_id to function dispatcher
-        )
+        # Use SarandaFunctionDispatcher for restaurant tenant
+        if self.tenant_id == "saranda":
+            self.function_dispatcher = SarandaFunctionDispatcher(
+                user_phone=self.user_phone,
+                abuse_protection=self.abuse_protection
+            )
+            logger.info("Using Saranda restaurant function dispatcher")
+        else:
+            self.function_dispatcher = FunctionDispatcher(
+                db_service=db_service,
+                user_phone=self.user_phone,
+                save_reservation_fn=self._save_motel_reservation,
+                abuse_protection=self.abuse_protection,
+                tenant_id=self.tenant_id
+            )
         
         # Connect to Deepgram Voice Agent API
         try:

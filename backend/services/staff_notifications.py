@@ -128,4 +128,133 @@ class StaffNotificationService:
             logger.error(f"Error in notify_new_booking_request: {e}")
             return False
 
+    # =========================================================================
+    # SARANDA RESTAURANT - WhatsApp HITL Notifications
+    # =========================================================================
+    
+    async def send_whatsapp_order_approval(
+        self,
+        request_id: str,
+        request_type: str,  # "order", "change", "cancel", "reservation"
+        customer_name: str,
+        order_summary: str,
+        pickup_time: str,
+        total_amount: float = 0,
+    ) -> bool:
+        """
+        Send structured approval request to staff WhatsApp for Saranda.
+        Staff replies with: YES, NO, or LATE
+        
+        Uses Twilio WhatsApp API (outbound from your Twilio number).
+        """
+        import os
+        from twilio.rest import Client
+        
+        try:
+            # Get staff WhatsApp from settings (test vs production)
+            staff_whatsapp = settings.SARANDA_STAFF_WHATSAPP
+            
+            # Ensure proper format
+            if not staff_whatsapp.startswith("+"):
+                staff_whatsapp = f"+61{staff_whatsapp.lstrip('0')}"
+            
+            # Choose emoji based on request type
+            emoji_map = {
+                "order": "🧾",
+                "change": "🔄",
+                "cancel": "❌",
+                "reservation": "📅",
+            }
+            emoji = emoji_map.get(request_type, "🧾")
+            
+            # Build message
+            if request_type == "reservation":
+                message = f"""{emoji} RESERVATION #{request_id}
+Name: {customer_name}
+{order_summary}
+
+Reply:
+YES ✅
+NO ❌"""
+            else:
+                amount_line = f"\nTotal: ${total_amount:.2f}" if total_amount > 0 else ""
+                message = f"""{emoji} {request_type.upper()} #{request_id}
+Customer: {customer_name}
+Items: {order_summary}{amount_line}
+Pickup: {pickup_time}
+
+Reply:
+YES ✅
+NO ❌
+LATE ⏳"""
+
+            # Send via Twilio WhatsApp
+            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            
+            # Twilio WhatsApp format: whatsapp:+1415...
+            # Use TWILIO_WHATSAPP_NUMBER (sandbox) instead of TWILIO_PHONE_NUMBER (voice)
+            from_whatsapp = f"whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}"
+            to_whatsapp = f"whatsapp:{staff_whatsapp}"
+            
+            msg = client.messages.create(
+                body=message,
+                from_=from_whatsapp,
+                to=to_whatsapp
+            )
+            
+            logger.info(f"WhatsApp sent to {staff_whatsapp} for {request_type} #{request_id} (SID: {msg.sid})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"WhatsApp send failed for {request_id}: {e}")
+            return False
+    
+    async def send_whatsapp_customer_confirmation(
+        self,
+        customer_phone: str,
+        order_id: str,
+        status: str,  # "approved", "rejected", "too_late"
+        pickup_time: str = None,
+        message_override: str = None,
+    ) -> bool:
+        """
+        Send confirmation/rejection to customer via SMS after staff responds.
+        
+        Note: Customer gets SMS, not WhatsApp (they called via voice).
+        """
+        import os
+        from twilio.rest import Client
+        
+        try:
+            # Build message based on status
+            if message_override:
+                message = message_override
+            elif status == "approved":
+                message = f"✅ Your Saranda order #{order_id} is confirmed! Ready for pickup in {pickup_time or '15-20 mins'}. Pay when you collect. See you soon!"
+            elif status == "too_late":
+                message = f"⏳ Sorry, the kitchen has already started your original order, so we couldn't make changes. Your order #{order_id} is still on track!"
+            else:  # rejected
+                message = f"Sorry, we couldn't process your order #{order_id} right now. Please call us or order via Uber Eats/DoorDash. Apologies for the inconvenience!"
+            
+            # Ensure proper phone format
+            phone = customer_phone
+            if not phone.startswith("+"):
+                phone = f"+61{phone.lstrip('0')}"
+            
+            # Send SMS via Twilio
+            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            
+            msg = client.messages.create(
+                body=message,
+                from_=settings.TWILIO_PHONE_NUMBER,
+                to=phone
+            )
+            
+            logger.info(f"Customer SMS sent to {phone} for order #{order_id} ({status})")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Customer SMS failed for {order_id}: {e}")
+            return False
+
 staff_notification_service = StaffNotificationService()
