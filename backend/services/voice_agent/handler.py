@@ -221,21 +221,19 @@ class VoiceAgentHandler:
             dict: LLM provider configuration
         """
         use_gemini = os.getenv("USE_GEMINI", "false").lower() == "true"
-        use_fireworks = os.getenv("USE_FIREWORKS", "false").lower() == "true"
-        use_groq = os.getenv("USE_GROQ", "false").lower() == "true"
         
-        # 1. Google Gemini Flash (Priority 1: Speed + Intelligence)
+        # Google Gemini Flash (Primary LLM for voice agent)
         if use_gemini:
             google_key = os.getenv("GOOGLE_API_KEY", "")
             if not google_key:
-                logger.error("❌ GOOGLE_API_KEY not set - falling back")
+                logger.error("❌ GOOGLE_API_KEY not set - falling back to GPT-4o-mini")
             else:
-                logger.info("🧠 Using Google Gemini 1.5 Flash (via OpenAI Compat)")
+                logger.info("🧠 Using Google Gemini 2.5 Flash (via OpenAI Compat)")
                 return {
                     "provider": {
                         "type": "open_ai",
                         "model": "gemini-2.5-flash",
-                        "temperature": 0.7
+                        "temperature": 0.3  # Lower temp for more deterministic tool calling
                     },
                     "endpoint": {
                         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
@@ -243,85 +241,7 @@ class VoiceAgentHandler:
                             "authorization": f"Bearer {google_key}"
                         }
                     },
-                    "prompt": self._get_active_prompt(), # Gemini handles instructions effectively
-                    "functions": self._get_active_functions()
-                }
-
-        # 2. Fireworks AI (Priority 2)
-        if use_fireworks:
-            fireworks_key = os.getenv("FIREWORKS_API_KEY", "")
-            if not fireworks_key:
-                logger.error("❌ FIREWORKS_API_KEY not set - falling back")
-            else:
-                logger.info("🧠 Using Fireworks AI (model: firefunction-v2)")
-                
-                # Speech constraint prompt
-                base_prompt = self._get_active_prompt()
-                
-                # Fireworks often prefers "accounts/fireworks/models/firefunction-v2"
-                # If that failed, double check the key or model availability text.
-                return {
-                    "provider": {
-                        "type": "open_ai",
-                        "model": "accounts/fireworks/models/firefunction-v2",
-                        "temperature": 0.6
-                    },
-                    "endpoint": {
-                        "url": "https://api.fireworks.ai/inference/v1/chat/completions",
-                        "headers": {
-                            "authorization": f"Bearer {fireworks_key}"
-                        }
-                    },
-                    "prompt": """[SPEECH STYLE - CRITICAL]
-- Speak naturally like a friendly phone conversation
-- NEVER say "1.", "2.", "3." or any numbered lists - just talk
-- NEVER use bullet points or checkmarks in speech
-- Flow conversationally
-- Be warm and welcoming
-
-""" + base_prompt,
-                    "functions": self._get_active_functions()
-                }
-
-        # 2. Groq LPU (Priority 2)
-        if use_groq:
-            groq_api_key = os.getenv("GROQ_API_KEY", "")
-            if not groq_api_key:
-                logger.error("❌ GROQ_API_KEY not set - falling back to GPT-4o-mini")
-                use_groq = False
-            else:
-                # Use llama-3.1-70b-versatile for more stable tool calling
-                # llama-3.3 has XML wrapping issues with Deepgram
-                logger.info("🧠 Using Groq LPU (model: llama-3.1-70b-versatile)")
-                
-                # CRITICAL: Add function calling fix to prompt
-                base_prompt = self._get_active_prompt()
-                groq_prompt = """[TECHNICAL RULES FOR GROQ MODEL]
-- Function parameters must match their exact type (party_size: integer, not string)
-- Numeric fields are JSON integers (e.g., 4), not quoted strings (e.g., "4")
-
-[SPEECH STYLE - CRITICAL]
-- Speak naturally like a friendly phone conversation
-- NEVER say "1.", "2.", "3." or any numbered lists - just talk
-- NEVER use bullet points or checkmarks in speech
-- Flow conversationally: "first... then... and also..." NOT "one, two, three"
-- Be warm and welcoming, not rushed or robotic
-
-""" + base_prompt
-                
-                return {
-                    "provider": {
-                        "type": "groq",
-                        "model": "openai/gpt-oss-120b", 
-                        "temperature": 0.85
-                    },
-                    "endpoint": {
-                        "url": "https://api.groq.com/openai/v1/chat/completions",
-                        "headers": {
-                            "authorization": f"Bearer {groq_api_key}"
-                        }
-                    },
-                    "prompt": groq_prompt,
+                    "prompt": self._get_active_prompt(),
                     "functions": self._get_active_functions()
                 }
         
@@ -331,7 +251,7 @@ class VoiceAgentHandler:
             "provider": {
                 "type": "open_ai",
                 "model": "gpt-4o-mini",
-                "temperature": 0.85
+                "temperature": 0.3  # Lower temp for tool calling
             },
             "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()
