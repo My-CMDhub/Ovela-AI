@@ -234,13 +234,11 @@ class VoiceAgentHandler:
                 
                 # CRITICAL: Add function calling fix to prompt
                 base_prompt = self._get_active_prompt()
-                groq_prompt = """CRITICAL FUNCTION CALLING RULES:
-1. Do NOT wrap tool calls in <function> tags or Markdown code blocks
-2. Output ONLY the raw tool call structure when calling functions
-3. Do NOT narrate your action before or after calling a tool
-4. Function parameters MUST match their type exactly:
-   - 'party_size' must be a JSON Integer (e.g., 4), NEVER a String (e.g., "4")
-   - All numeric fields must be integers, not strings
+                groq_prompt = """[TECHNICAL CONSTRAINTS FOR GROQ]
+When calling functions, ensure:
+- Function parameters match their exact type (party_size: integer not string)
+- No XML tags or markdown wrapping around function calls
+- Numeric fields are JSON integers, not quoted strings
 
 """ + base_prompt
                 
