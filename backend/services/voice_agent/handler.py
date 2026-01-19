@@ -234,11 +234,16 @@ class VoiceAgentHandler:
                 
                 # CRITICAL: Add function calling fix to prompt
                 base_prompt = self._get_active_prompt()
-                groq_prompt = """[TECHNICAL CONSTRAINTS FOR GROQ]
-When calling functions, ensure:
-- Function parameters match their exact type (party_size: integer not string)
-- No XML tags or markdown wrapping around function calls
-- Numeric fields are JSON integers, not quoted strings
+                groq_prompt = """[TECHNICAL RULES FOR GROQ MODEL]
+- Function parameters must match their exact type (party_size: integer, not string)
+- Numeric fields are JSON integers (e.g., 4), not quoted strings (e.g., "4")
+
+[SPEECH STYLE - CRITICAL]
+- Speak naturally like a friendly phone conversation
+- NEVER say "1.", "2.", "3." or any numbered lists - just talk
+- NEVER use bullet points or checkmarks in speech
+- Flow conversationally: "first... then... and also..." NOT "one, two, three"
+- Be warm and welcoming, not rushed or robotic
 
 """ + base_prompt
                 
