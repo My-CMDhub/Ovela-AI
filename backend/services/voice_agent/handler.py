@@ -220,8 +220,45 @@ class VoiceAgentHandler:
         Returns:
             dict: LLM provider configuration
         """
+        use_fireworks = os.getenv("USE_FIREWORKS", "false").lower() == "true"
         use_groq = os.getenv("USE_GROQ", "false").lower() == "true"
         
+        # 1. Fireworks AI (Priority 1 for Latency + Function Calling)
+        if use_fireworks:
+            fireworks_key = os.getenv("FIREWORKS_API_KEY", "")
+            if not fireworks_key:
+                logger.error("❌ FIREWORKS_API_KEY not set - falling back to next provider")
+            else:
+                logger.info("🧠 Using Fireworks AI (model: firefunction-v2)")
+                
+                # Combine prompt with speech constraints
+                base_prompt = self._get_active_prompt()
+                fireworks_prompt = """[SPEECH STYLE - CRITICAL]
+- Speak naturally like a friendly phone conversation
+- NEVER say "1.", "2.", "3." or any numbered lists - just talk
+- NEVER use bullet points or checkmarks in speech
+- Flow conversationally: "first... then... and also..." NOT "one, two, three"
+- Be warm and welcoming, not rushed or robotic
+
+""" + base_prompt
+
+                return {
+                    "provider": {
+                        "type": "open_ai",
+                        "model": "accounts/fireworks/models/firefunction-v2",
+                        "temperature": 0.6  # Slightly lower for reliable function calling
+                    },
+                    "endpoint": {
+                        "url": "https://api.fireworks.ai/inference/v1/chat/completions",
+                        "headers": {
+                            "authorization": f"Bearer {fireworks_key}"
+                        }
+                    },
+                    "prompt": fireworks_prompt,
+                    "functions": self._get_active_functions()
+                }
+
+        # 2. Groq LPU (Priority 2)
         if use_groq:
             groq_api_key = os.getenv("GROQ_API_KEY", "")
             if not groq_api_key:
