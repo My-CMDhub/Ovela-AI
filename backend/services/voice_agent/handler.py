@@ -220,33 +220,51 @@ class VoiceAgentHandler:
         Returns:
             dict: LLM provider configuration
         """
+        use_gemini = os.getenv("USE_GEMINI", "false").lower() == "true"
         use_fireworks = os.getenv("USE_FIREWORKS", "false").lower() == "true"
         use_groq = os.getenv("USE_GROQ", "false").lower() == "true"
         
-        # 1. Fireworks AI (Priority 1 for Latency + Function Calling)
+        # 1. Google Gemini Flash (Priority 1: Speed + Intelligence)
+        if use_gemini:
+            google_key = os.getenv("GOOGLE_API_KEY", "")
+            if not google_key:
+                logger.error("❌ GOOGLE_API_KEY not set - falling back")
+            else:
+                logger.info("🧠 Using Google Gemini 1.5 Flash (via OpenAI Compat)")
+                return {
+                    "provider": {
+                        "type": "open_ai",
+                        "model": "gemini-1.5-flash",
+                        "temperature": 0.7
+                    },
+                    "endpoint": {
+                        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+                        "headers": {
+                            "authorization": f"Bearer {google_key}"
+                        }
+                    },
+                    "prompt": self._get_active_prompt(), # Gemini handles instructions effectively
+                    "functions": self._get_active_functions()
+                }
+
+        # 2. Fireworks AI (Priority 2)
         if use_fireworks:
             fireworks_key = os.getenv("FIREWORKS_API_KEY", "")
             if not fireworks_key:
-                logger.error("❌ FIREWORKS_API_KEY not set - falling back to next provider")
+                logger.error("❌ FIREWORKS_API_KEY not set - falling back")
             else:
                 logger.info("🧠 Using Fireworks AI (model: firefunction-v2)")
                 
-                # Combine prompt with speech constraints
+                # Speech constraint prompt
                 base_prompt = self._get_active_prompt()
-                fireworks_prompt = """[SPEECH STYLE - CRITICAL]
-- Speak naturally like a friendly phone conversation
-- NEVER say "1.", "2.", "3." or any numbered lists - just talk
-- NEVER use bullet points or checkmarks in speech
-- Flow conversationally: "first... then... and also..." NOT "one, two, three"
-- Be warm and welcoming, not rushed or robotic
-
-""" + base_prompt
-
+                
+                # Fireworks often prefers "accounts/fireworks/models/firefunction-v2"
+                # If that failed, double check the key or model availability text.
                 return {
                     "provider": {
                         "type": "open_ai",
                         "model": "accounts/fireworks/models/firefunction-v2",
-                        "temperature": 0.6  # Slightly lower for reliable function calling
+                        "temperature": 0.6
                     },
                     "endpoint": {
                         "url": "https://api.fireworks.ai/inference/v1/chat/completions",
@@ -254,7 +272,14 @@ class VoiceAgentHandler:
                             "authorization": f"Bearer {fireworks_key}"
                         }
                     },
-                    "prompt": fireworks_prompt,
+                    "prompt": """[SPEECH STYLE - CRITICAL]
+- Speak naturally like a friendly phone conversation
+- NEVER say "1.", "2.", "3." or any numbered lists - just talk
+- NEVER use bullet points or checkmarks in speech
+- Flow conversationally
+- Be warm and welcoming
+
+""" + base_prompt,
                     "functions": self._get_active_functions()
                 }
 
