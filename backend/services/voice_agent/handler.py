@@ -228,11 +228,26 @@ class VoiceAgentHandler:
                 logger.error("❌ GROQ_API_KEY not set - falling back to GPT-4o-mini")
                 use_groq = False
             else:
-                logger.info("🧠 Using Groq LPU (model: llama-3.3-70b-versatile)")
+                # Use llama-3.1-70b-versatile for more stable tool calling
+                # llama-3.3 has XML wrapping issues with Deepgram
+                logger.info("🧠 Using Groq LPU (model: llama-3.1-70b-versatile)")
+                
+                # CRITICAL: Add function calling fix to prompt
+                base_prompt = self._get_active_prompt()
+                groq_prompt = """CRITICAL FUNCTION CALLING RULES:
+1. Do NOT wrap tool calls in <function> tags or Markdown code blocks
+2. Output ONLY the raw tool call structure when calling functions
+3. Do NOT narrate your action before or after calling a tool
+4. Function parameters MUST match their type exactly:
+   - 'party_size' must be a JSON Integer (e.g., 4), NEVER a String (e.g., "4")
+   - All numeric fields must be integers, not strings
+
+""" + base_prompt
+                
                 return {
                     "provider": {
                         "type": "groq",
-                        "model": "llama-3.3-70b-versatile",
+                        "model": "llama-3.1-70b-versatile", 
                         "temperature": 0.85
                     },
                     "endpoint": {
@@ -241,7 +256,7 @@ class VoiceAgentHandler:
                             "authorization": f"Bearer {groq_api_key}"
                         }
                     },
-                    "prompt": self._get_active_prompt(),
+                    "prompt": groq_prompt,
                     "functions": self._get_active_functions()
                 }
         
