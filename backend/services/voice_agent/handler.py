@@ -245,7 +245,7 @@ When calling functions, ensure:
                 return {
                     "provider": {
                         "type": "groq",
-                        "model": "llama-3.3-70b-versatile", 
+                        "model": "openai/gpt-oss-120b", 
                         "temperature": 0.85
                     },
                     "endpoint": {
