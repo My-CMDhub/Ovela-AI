@@ -8,6 +8,7 @@ Source: Official Saranda Menu (January 2026)
 """
 
 from typing import TypedDict, List, Dict, Any, Optional
+from datetime import datetime
 
 # Type definitions for restaurant data
 class MenuItem(TypedDict, total=False):
@@ -536,6 +537,180 @@ def is_restaurant_open(day: str, time_str: str = None) -> bool:
     day_lower = day.lower()
     hours = SARANDA_DATA["info"]["hours"].get(day_lower, "CLOSED")
     return hours != "CLOSED"
+
+
+def is_within_operating_hours(day: str, time_str: str) -> tuple[bool, str]:
+    """
+    Full check: is restaurant open at this exact day+time?
+    
+    Args:
+        day: Day of week (e.g., "Monday", "Tuesday")
+        time_str: Time string (e.g., "7:30 PM", "19:30")
+    
+    Returns:
+        (is_open, reason) - tuple with boolean and reason string
+    """
+    from datetime import datetime
+    
+    day_lower = day.lower()
+    hours_str = SARANDA_DATA["info"]["hours"].get(day_lower, "CLOSED")
+    
+    # Monday = always closed
+    if hours_str == "CLOSED":
+        return False, f"Sorry, we're closed on {day}s. We're open Tuesday through Sunday."
+    
+    if not time_str:
+        return True, ""  # Day is open, no time check needed
+    
+    # Parse the time
+    try:
+        # Handle various time formats
+        time_str_clean = time_str.upper().replace(".", "").strip()
+        if "AM" in time_str_clean or "PM" in time_str_clean:
+            try:
+                current_time = datetime.strptime(time_str_clean, "%I:%M %p").time()
+            except ValueError:
+                current_time = datetime.strptime(time_str_clean, "%I %p").time()
+        else:
+            current_time = datetime.strptime(time_str_clean, "%H:%M").time()
+    except ValueError:
+        return True, ""  # Can't parse time, assume open
+    
+    # Parse hours string (e.g., "4:30 PM - 9:00 PM" or "11:30 AM - 2:00 PM, 4:30 PM - 9:00 PM")
+    def parse_hours_range(hours_part: str) -> tuple:
+        """Parse a single hours range like '4:30 PM - 9:00 PM'."""
+        parts = hours_part.split(" - ")
+        if len(parts) != 2:
+            return None, None
+        
+        start_str = parts[0].strip().upper()
+        end_str = parts[1].strip().upper()
+        
+        try:
+            try:
+                start = datetime.strptime(start_str, "%I:%M %p").time()
+            except ValueError:
+                start = datetime.strptime(start_str, "%I %p").time()
+                
+            try:
+                end = datetime.strptime(end_str, "%I:%M %p").time()
+            except ValueError:
+                end = datetime.strptime(end_str, "%I %p").time()
+            
+            return start, end
+        except ValueError:
+            return None, None
+    
+    # Check each hours range (Saturday/Sunday have two ranges)
+    is_open = False
+    for hours_part in hours_str.split(","):
+        start, end = parse_hours_range(hours_part.strip())
+        if start and end:
+            if start <= current_time <= end:
+                is_open = True
+                break
+    
+    if not is_open:
+        return False, f"Sorry, we're not open right now. Our hours today are {hours_str}."
+    
+    return True, ""
+
+
+def minutes_until_close(current_time_str: str, day: str) -> int:
+    """
+    Calculate minutes until kitchen cutoff (closing - 5 min).
+    
+    Returns -1 if restaurant is closed or time can't be parsed.
+    """
+    from datetime import datetime
+    
+    day_lower = day.lower()
+    hours_str = SARANDA_DATA["info"]["hours"].get(day_lower, "CLOSED")
+    
+    if hours_str == "CLOSED":
+        return -1
+    
+    # Parse current time
+    try:
+        time_str_clean = current_time_str.upper().replace(".", "").strip()
+        if "AM" in time_str_clean or "PM" in time_str_clean:
+            try:
+                current = datetime.strptime(time_str_clean, "%I:%M %p")
+            except ValueError:
+                current = datetime.strptime(time_str_clean, "%I %p")
+        else:
+            current = datetime.strptime(time_str_clean, "%H:%M")
+    except ValueError:
+        return -1
+    
+    # Get closing time (last range for days with lunch+dinner)
+    last_range = hours_str.split(",")[-1].strip()
+    parts = last_range.split(" - ")
+    if len(parts) != 2:
+        return -1
+    
+    end_str = parts[1].strip().upper()
+    try:
+        try:
+            closing = datetime.strptime(end_str, "%I:%M %p")
+        except ValueError:
+            closing = datetime.strptime(end_str, "%I %p")
+    except ValueError:
+        return -1
+    
+    # Kitchen cutoff is 5 minutes before close
+    # Note: timedelta on time doesn't work directly, so we use datetime
+    from datetime import timedelta
+    cutoff = closing - timedelta(minutes=5)
+    
+    minutes_remaining = int((cutoff - current).total_seconds() / 60)
+    return max(-1, minutes_remaining)
+
+
+def get_next_opening_datetime() -> Optional[datetime]:
+    """
+    Calculate the next time restaurant opens (for delayed notifications).
+    
+    Returns datetime of next opening, None if can't determine.
+    Used for queueing off-hours reservation notifications.
+    """
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    
+    tz = ZoneInfo("Australia/Perth")  # Saranda is in WA
+    now = datetime.now(tz)
+    
+    day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    current_day_idx = now.weekday()  # 0=Monday, 6=Sunday
+    
+    # Check up to 7 days ahead
+    for days_ahead in range(1, 8):
+        check_idx = (current_day_idx + days_ahead) % 7
+        day_name = day_names[check_idx]
+        hours_str = SARANDA_DATA["info"]["hours"].get(day_name, "CLOSED")
+        
+        if hours_str != "CLOSED":
+            # Get first opening time
+            first_range = hours_str.split(",")[0].strip()
+            parts = first_range.split(" - ")
+            if parts:
+                start_str = parts[0].strip().upper()
+                try:
+                    try:
+                        opening_time = datetime.strptime(start_str, "%I:%M %p").time()
+                    except ValueError:
+                        opening_time = datetime.strptime(start_str, "%I %p").time()
+                    
+                    # Calculate the actual datetime
+                    opening_date = now.date() + timedelta(days=days_ahead)
+                    opening_dt = datetime.combine(opening_date, opening_time)
+                    opening_dt = opening_dt.replace(tzinfo=tz)
+                    
+                    return opening_dt
+                except ValueError:
+                    continue
+    
+    return None
 
 
 def get_delivery_partners() -> List[str]:

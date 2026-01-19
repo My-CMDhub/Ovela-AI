@@ -18,12 +18,12 @@ from datetime import datetime
 from services.saranda_flows import (
     OrderRequest, OrderItem, ReservationRequest,
     RequestStatus, RequestType,
-    generate_request_id, saranda_queue
+    generate_request_id, saranda_queue, delayed_notification_queue
 )
 from services.staff_notifications import staff_notification_service
 from services.knowledge_base.saranda import (
     get_menu_item_by_name, get_prep_time_estimate, format_order_summary,
-    SARANDA_DATA
+    SARANDA_DATA, is_within_operating_hours, minutes_until_close
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,36 @@ async def handle_submit_order(args: dict, user_phone: str) -> dict:
         }
         user_phone: Customer phone from caller ID
     """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
+    # Get current time in Perth timezone
+    tz = ZoneInfo("Australia/Perth")
+    now = datetime.now(tz)
+    current_day = now.strftime("%A")  # e.g., "Monday"
+    current_time = now.strftime("%I:%M %p")  # e.g., "7:30 PM"
+    
+    # === VALIDATION: Check if we can accept orders ===
+    
+    # Check if restaurant is open
+    is_open, rejection_reason = is_within_operating_hours(current_day, current_time)
+    if not is_open:
+        return {
+            "success": False,
+            "rejected_closed": True,
+            "message": rejection_reason
+        }
+    
+    # Check kitchen cutoff (5 minutes before close)
+    mins_to_close = minutes_until_close(current_time, current_day)
+    if mins_to_close >= 0 and mins_to_close < 5:
+        return {
+            "success": False,
+            "rejected_cutoff": True,
+            "message": "Sorry, the kitchen is about to close. Could you try us tomorrow? We open at 4:30 PM Tuesday through Friday, or 11:30 AM on weekends."
+        }
+    
+    # === Original validation ===
     items_raw = args.get("items", [])
     customer_name = args.get("customer_name", "")
     pickup_time = args.get("pickup_time", "")
@@ -309,13 +339,26 @@ async def handle_request_reservation(args: dict, user_phone: str) -> dict:
             notes?: str
         }
     """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
     customer_name = args.get("customer_name", "")
     party_size = args.get("party_size", 2)
     date = args.get("date", "")
     time = args.get("time", "")
     notes = args.get("notes", "")
     
-    # Validation
+    # === VALIDATION: Check for Monday ===
+    # Extract day name from date if provided (e.g., "Monday, 20th Jan" or just "Monday")
+    date_lower = date.lower() if date else ""
+    if "monday" in date_lower:
+        return {
+            "success": False,
+            "rejected_monday": True,
+            "message": "Sorry, we're closed on Mondays. Would you like to book for another day? We're open Tuesday through Sunday."
+        }
+    
+    # Standard validation
     if not customer_name:
         return {
             "success": False,
@@ -362,6 +405,28 @@ async def handle_request_reservation(args: dict, user_phone: str) -> dict:
         notes=notes
     )
     
+    # === CHECK: Are we currently open? ===
+    # If closed (off-hours), queue for delayed notification instead of immediate
+    tz = ZoneInfo("Australia/Perth")
+    now = datetime.now(tz)
+    current_day = now.strftime("%A")  # e.g., "Monday"
+    current_time = now.strftime("%I:%M %p")  # e.g., "7:30 PM"
+    
+    is_open, _ = is_within_operating_hours(current_day, current_time)
+    
+    if not is_open:
+        # Off-hours: Queue for delayed notification
+        delayed_notification_queue.add(reservation)
+        
+        return {
+            "success": True,
+            "request_id": request_id,
+            "status": "queued_for_review",
+            "delayed_notification": True,
+            "message": f"I've noted that reservation request. Since we're closed right now, the team will see it when they open next and they'll text you to confirm. That's a table for {party_size} on {date} at {time} under {customer_name}.{deposit_note}"
+        }
+    
+    # We're open - proceed with immediate notification
     saranda_queue.add(reservation)
     
     # Build summary for WhatsApp

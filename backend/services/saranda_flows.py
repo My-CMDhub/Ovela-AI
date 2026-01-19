@@ -370,3 +370,69 @@ class RequestQueue:
 # Global queue instance for Saranda tenant
 # In production, this would be per-tenant and Redis-backed
 saranda_queue = RequestQueue()
+
+
+# =============================================================================
+# DELAYED NOTIFICATION QUEUE (Off-Hours Reservations)
+# =============================================================================
+
+class DelayedNotificationQueue:
+    """
+    Holds off-hours reservation requests until next business opening.
+    
+    When a customer requests a reservation outside of business hours,
+    we log it immediately but delay the WhatsApp notification to staff
+    until 5 minutes before the next opening time.
+    
+    This ensures:
+    1. Customer gets immediate acknowledgment ("We'll pass this to the team")
+    2. Staff aren't pinged at midnight
+    3. Nothing gets lost
+    """
+    
+    def __init__(self):
+        self._pending: List[ReservationRequest] = []
+        self._processed: Dict[str, ReservationRequest] = {}
+    
+    def add(self, request: ReservationRequest) -> None:
+        """Queue a reservation for delayed notification."""
+        self._pending.append(request)
+        logger.info(f"📋 Queued off-hours reservation {request.id} for delayed notification")
+    
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+    
+    def get_pending(self) -> List[ReservationRequest]:
+        """Get all pending requests (for processing)."""
+        return self._pending.copy()
+    
+    def mark_processed(self, request_id: str) -> bool:
+        """Mark a request as processed (notification sent)."""
+        for i, req in enumerate(self._pending):
+            if req.id == request_id:
+                processed = self._pending.pop(i)
+                self._processed[request_id] = processed
+                logger.info(f"✅ Delayed notification sent for {request_id}")
+                return True
+        return False
+    
+    def get_next_notification_time(self) -> Optional[datetime]:
+        """
+        Get the datetime when pending notifications should be sent.
+        
+        Returns 5 minutes before next opening time.
+        """
+        from services.knowledge_base.saranda import get_next_opening_datetime
+        
+        next_opening = get_next_opening_datetime()
+        if next_opening:
+            # Send notification 5 minutes before opening
+            from datetime import timedelta
+            return next_opening - timedelta(minutes=5)
+        return None
+
+
+# Global delayed notification queue
+delayed_notification_queue = DelayedNotificationQueue()
+

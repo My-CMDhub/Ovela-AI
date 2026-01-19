@@ -234,7 +234,7 @@ class VoiceAgentHandler:
                 return {
                     "provider": {
                         "type": "open_ai",
-                        "model": "gemini-2.5-flash",
+                        "model": "gemini-1.5-flash",
                         "temperature": 0.7
                     },
                     "endpoint": {
@@ -341,16 +341,16 @@ class VoiceAgentHandler:
     def _get_active_prompt(self) -> str:
         """Get the active prompt - demo prompt if configured, otherwise motel."""
         demo_prompt = get_demo_prompt(
-            current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
-            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p"),
+            current_date=datetime.now(ZoneInfo("Australia/Perth")).strftime("%A, %d %B %Y"),
+            current_time=datetime.now(ZoneInfo("Australia/Perth")).strftime("%I:%M %p"),
             demo_type=self.demo_type
         )
         if demo_prompt:
             logger.info(f"Using DEMO prompt mode")
             return demo_prompt
         return get_system_prompt(
-            current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
-            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p"),
+            current_date=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%A, %d %B %Y"),
+            current_time=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%I:%M %p"),
             tenant_id=self.tenant_id  # Pass tenant_id for property-specific prompt
         )
     
