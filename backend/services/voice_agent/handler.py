@@ -247,7 +247,7 @@ class VoiceAgentHandler:
                 return {
                     "provider": {
                         "type": "groq",
-                        "model": "llama-3.1-70b-versatile", 
+                        "model": "llama-3.3-70b-versatile", 
                         "temperature": 0.85
                     },
                     "endpoint": {
