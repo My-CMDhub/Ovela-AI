@@ -203,19 +203,50 @@ class VoiceAgentHandler:
                         "smart_format": True
                     }
                 },
-                "think": {
-                    "provider": {
-                        "type": "open_ai",
-                        "model": "gpt-4o-mini",
-                        "temperature": 0.85
-                    },
-                    "prompt": self._get_active_prompt() + ("\n\n[CONTEXT: " + system_context + "]" if system_context else ""),
-                    "functions": self._get_active_functions()
-                },
+                "think": self._get_llm_config(),
                 "speak": self._get_tts_config(),
                 "greeting": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else (None if self.is_demo_call else self._get_active_greeting())
             }
         }
+    
+    def _get_llm_config(self) -> dict:
+        """
+        Get LLM configuration with Groq support for ultra-low latency.
+        
+        Set USE_GROQ=true in .env to use Groq's LPU (10-50x faster than GPT-4o-mini).
+        
+        Performance comparison:
+        - GPT-4o-mini: 3-18 seconds (current)
+        - Groq Llama 3.3 70B: 300-800ms (recommended)
+        
+        Returns:
+            dict: LLM provider configuration
+        """
+        use_groq = os.getenv("USE_GROQ", "false").lower() == "true"
+        
+        if use_groq:
+            logger.info("🧠 Using Groq LPU (model: llama-3.3-70b-versatile)")
+            return {
+                "provider": {
+                    "type": "groq",
+                    "model": "llama-3.3-70b-versatile",
+                    "temperature": 0.85
+                },
+                "prompt": self._get_active_prompt(),
+                "functions": self._get_active_functions()
+            }
+        else:
+            logger.info("🧠 Using OpenAI GPT-4o-mini")
+            return {
+                "provider": {
+                    "type": "open_ai",
+                    "model": "gpt-4o-mini",
+                    "temperature": 0.85
+                },
+                "prompt": self._get_active_prompt(),
+                "functions": self._get_active_functions()
+            }
+    
     
     def _get_active_prompt(self) -> str:
         """Get the active prompt - demo prompt if configured, otherwise motel."""
@@ -283,7 +314,7 @@ class VoiceAgentHandler:
                     "model_id": "sonic-3",
                     "voice": {
                         "mode": "id",
-                        "id": "8985388c-1332-4ce7-8d55-789628aa3df4"  # Australian Narrator Lady (Alternative)
+                        "id": "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"  # Australian Narrator Lady (Alternative)
                     }
                 }
             }

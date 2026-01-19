@@ -205,29 +205,52 @@ def generate_request_id() -> str:
 
 def parse_staff_reply(message: str) -> tuple[str | None, str | None]:
     """
-    Parse a staff WhatsApp reply message.
+    Parse a staff WhatsApp reply message with flexible matching.
+    
+    Case-insensitive, handles common variations.
+    Priority: NO (explicit rejection) > LATE > YES
     
     Returns:
         (command, reason) where command is YES/NO/LATE or None if invalid
     """
-    # Normalize: uppercase, strip whitespace
-    text = message.strip().upper()
+    import re
     
-    # Check for valid commands (anywhere in message for flexibility)
-    if "YES" in text or "✅" in text:
-        return "YES", None
-    if "LATE" in text or "⏳" in text or "TOO LATE" in text:
-        return "LATE", None
-    if "NO" in text or "❌" in text:
+    # Normalize: lowercase, strip whitespace
+    text = message.strip().lower()
+    original = message.strip()  # Keep original for emoji checks
+    
+    # Helper: check if any word appears as a whole word (not substring)
+    def has_word(text: str, words: list) -> bool:
+        for word in words:
+            # Match word boundaries or start/end of string
+            if re.search(rf'\b{re.escape(word)}\b', text):
+                return True
+        return False
+    
+    # NO variations (check first - explicit rejection takes priority)
+    no_words = ["no", "nope", "reject", "rejected", "deny", "denied", 
+                "can't", "cannot", "cant", "decline", "declined", "refuse"]
+    if has_word(text, no_words) or "❌" in original:
         # Check for reason codes
         reason = None
-        if "1" in text:
+        if "1" in text or "kitchen" in text or "started" in text:
             reason = "Kitchen already started"
-        elif "2" in text:
+        elif "2" in text or "busy" in text:
             reason = "Too busy right now"
-        elif "3" in text:
+        elif "3" in text or "unavailable" in text or "ingredient" in text or "out of" in text:
             reason = "Ingredient unavailable"
         return "NO", reason
+    
+    # LATE variations (before YES since "already started" shouldn't be approval)
+    late_words = ["late", "already", "started", "cooking", "begun", "in progress"]
+    if has_word(text, late_words) or "⏳" in original:
+        return "LATE", None
+    
+    # YES variations (case-insensitive)
+    yes_words = ["yes", "yep", "yeah", "yea", "confirm", "approve", "approved", 
+                 "ok", "okay", "sure", "go ahead", "accepted", "accept"]
+    if has_word(text, yes_words) or "✅" in original:
+        return "YES", None
     
     # Invalid/unrecognized - ignore per design
     return None, None

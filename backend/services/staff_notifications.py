@@ -7,7 +7,6 @@ from services.email import email_service
 from services.appwrite import db_service
 from core.config import settings
 import httpx
-import os
 from twilio.rest import Client
 
 logger = logging.getLogger(__name__)
