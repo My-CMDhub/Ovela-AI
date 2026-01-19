@@ -223,27 +223,39 @@ class VoiceAgentHandler:
         use_groq = os.getenv("USE_GROQ", "false").lower() == "true"
         
         if use_groq:
-            logger.info("🧠 Using Groq LPU (model: llama-3.3-70b-versatile)")
-            return {
-                "provider": {
-                    "type": "groq",
-                    "model": "llama-3.3-70b-versatile",
-                    "temperature": 0.85
-                },
-                "prompt": self._get_active_prompt(),
-                "functions": self._get_active_functions()
-            }
-        else:
-            logger.info("🧠 Using OpenAI GPT-4o-mini")
-            return {
-                "provider": {
-                    "type": "open_ai",
-                    "model": "gpt-4o-mini",
-                    "temperature": 0.85
-                },
-                "prompt": self._get_active_prompt(),
-                "functions": self._get_active_functions()
-            }
+            groq_api_key = os.getenv("GROQ_API_KEY", "")
+            if not groq_api_key:
+                logger.error("❌ GROQ_API_KEY not set - falling back to GPT-4o-mini")
+                use_groq = False
+            else:
+                logger.info("🧠 Using Groq LPU (model: llama-3.3-70b-versatile)")
+                return {
+                    "provider": {
+                        "type": "groq",
+                        "model": "llama-3.3-70b-versatile",
+                        "temperature": 0.85
+                    },
+                    "endpoint": {
+                        "url": "https://api.groq.com/openai/v1/chat/completions",
+                        "headers": {
+                            "authorization": f"Bearer {groq_api_key}"
+                        }
+                    },
+                    "prompt": self._get_active_prompt(),
+                    "functions": self._get_active_functions()
+                }
+        
+        # Fallback to OpenAI GPT-4o-mini
+        logger.info("🧠 Using OpenAI GPT-4o-mini")
+        return {
+            "provider": {
+                "type": "open_ai",
+                "model": "gpt-4o-mini",
+                "temperature": 0.85
+            },
+            "prompt": self._get_active_prompt(),
+            "functions": self._get_active_functions()
+        }
     
     
     def _get_active_prompt(self) -> str:
