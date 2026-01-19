@@ -6,6 +6,9 @@ import logging
 from services.email import email_service
 from services.appwrite import db_service
 from core.config import settings
+import httpx
+import os
+from twilio.rest import Client
 
 logger = logging.getLogger(__name__)
 
@@ -147,66 +150,91 @@ class StaffNotificationService:
         
         Uses Twilio WhatsApp API (outbound from your Twilio number).
         """
-        import os
-        from twilio.rest import Client
         
+        # 1. ATTEMPT META GRAPH API (Templates with Buttons)
         try:
-            # Get staff WhatsApp from settings (test vs production)
+            token = settings.META_ACCESS_TOKEN
+            phone_number_id = settings.META_PHONE_NUMBER_ID
             staff_whatsapp = settings.SARANDA_STAFF_WHATSAPP
+            clean_recipient = staff_whatsapp.lstrip("+")
             
-            # Ensure proper format
+            url = f"https://graph.facebook.com/v22.0/{phone_number_id}/messages"
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            
+            payload = {
+                "messaging_product": "whatsapp",
+                "to": clean_recipient,
+                "type": "template",
+                "template": {
+                    "name": settings.WHATSAPP_TEMPLATE_NAME,
+                    "language": {"code": "en_US"},
+                    "components": [
+                        {
+                            "type": "body",
+                            "parameters": [
+                                {"type": "text", "text": str(request_id)},
+                                {"type": "text", "text": str(customer_name)},
+                                {"type": "text", "text": str(order_summary)},
+                                {"type": "text", "text": f"{total_amount:.2f}"},
+                                {"type": "text", "text": str(pickup_time)}
+                            ]
+                        }
+                    ]
+                }
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, headers=headers, json=payload)
+                
+            if response.status_code == 200:
+                logger.info(f"✅ Meta WhatsApp Template sent to {staff_whatsapp} for {request_id}")
+                return True
+            else:
+                logger.error(f"⚠️ Meta API Error ({response.status_code}): {response.text}")
+                # Don't return False yet, fall through to Twilio fallback
+        except Exception as e:
+            logger.error(f"⚠️ Meta WhatsApp send failed for {request_id}: {e}")
+            # Fall through
+
+        # 2. FALLBACK TO TWILIO (Standard Text via Sandbox)
+        try:
+            logger.info(f"🔄 Attempting Twilio Fallback for {request_id}...")
+            
+            staff_whatsapp = settings.SARANDA_STAFF_WHATSAPP
+            # Ensure number starts with + for Twilio
             if not staff_whatsapp.startswith("+"):
                 staff_whatsapp = f"+61{staff_whatsapp.lstrip('0')}"
             
-            # Choose emoji based on request type
-            emoji_map = {
-                "order": "🧾",
-                "change": "🔄",
-                "cancel": "❌",
-                "reservation": "📅",
-            }
+            # Choose emoji for request type
+            emoji_map = {"order": "🧾", "change": "🔄", "cancel": "❌", "reservation": "📅"}
             emoji = emoji_map.get(request_type, "🧾")
             
-            # Build message
-            if request_type == "reservation":
-                message = f"""{emoji} RESERVATION #{request_id}
-Name: {customer_name}
-{order_summary}
-
-Reply:
-YES ✅
-NO ❌"""
-            else:
-                amount_line = f"\nTotal: ${total_amount:.2f}" if total_amount > 0 else ""
-                message = f"""{emoji} {request_type.upper()} #{request_id}
+            amount_line = f"\nTotal: ${total_amount:.2f}" if total_amount > 0 else ""
+            message = f"""{emoji} {request_type.upper()} #{request_id}
+━━━━━━━━━━━━━━━━
 Customer: {customer_name}
 Items: {order_summary}{amount_line}
 Pickup: {pickup_time}
 
-Reply:
-YES ✅
-NO ❌
-LATE ⏳"""
+━━━━━━━━━━━━━━━━
+Reply with:
+✅ YES
+❌ NO
+⏳ LATE"""
 
-            # Send via Twilio WhatsApp
             client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            
-            # Twilio WhatsApp format: whatsapp:+1415...
-            # Use TWILIO_WHATSAPP_NUMBER (sandbox) instead of TWILIO_PHONE_NUMBER (voice)
             from_whatsapp = f"whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}"
             to_whatsapp = f"whatsapp:{staff_whatsapp}"
             
-            msg = client.messages.create(
-                body=message,
-                from_=from_whatsapp,
-                to=to_whatsapp
-            )
+            msg = client.messages.create(body=message, from_=from_whatsapp, to=to_whatsapp)
             
-            logger.info(f"WhatsApp sent to {staff_whatsapp} for {request_type} #{request_id} (SID: {msg.sid})")
+            logger.info(f"✅ Twilio Fallback sent to {staff_whatsapp} (SID: {msg.sid})")
             return True
-            
         except Exception as e:
-            logger.error(f"WhatsApp send failed for {request_id}: {e}")
+            logger.error(f"❌ Critical: All WhatsApp delivery methods failed for {request_id}: {e}")
             return False
     
     async def send_whatsapp_customer_confirmation(
@@ -222,8 +250,6 @@ LATE ⏳"""
         
         Note: Customer gets SMS, not WhatsApp (they called via voice).
         """
-        import os
-        from twilio.rest import Client
         
         try:
             # Build message based on status

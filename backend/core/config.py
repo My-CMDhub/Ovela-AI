@@ -7,11 +7,11 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Ovela AI Backend"
     BACKEND_URL: str = "https://ovela-12c561a30285.herokuapp.com"  # Production URL
 
-    # Meta (WhatsApp)
-    META_APP_ID: str = "" # App ID
-    META_ACCESS_TOKEN: str
-    META_PHONE_NUMBER_ID: str
-    META_VERIFY_TOKEN: str
+    # Meta (WhatsApp Cloud API)
+    META_ACCESS_TOKEN: str = ""
+    META_PHONE_NUMBER_ID: str = ""
+    META_VERIFY_TOKEN: str = ""  # For incoming webhooks
+    WHATSAPP_TEMPLATE_NAME: str = "saranda_approval_v1"
 
     # OpenAI
     OPENAI_API_KEY: str
@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     
     # Saranda Restaurant Staff WhatsApp
     SARANDA_STAFF_WHATSAPP: str = "+61475677771"  # Test: your number | Prod: +61452557167
+    
+    # WhatsApp Button Support (hybrid approach)
+    USE_WHATSAPP_BUTTONS: bool = True  # True = buttons (testing), False = text (production)
 
     # Deepgram
     DEEPGRAM_API_KEY: str
