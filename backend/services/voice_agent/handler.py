@@ -50,9 +50,7 @@ from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
 from .text_utils import prepare_for_tts, clean_tts_output
 from services.motel_knowledge_base import set_tenant_context
 
-# TTS Provider config - set USE_ELEVENLABS=true in .env to test ElevenLabs
-USE_ELEVENLABS = os.getenv("USE_ELEVENLABS", "false").lower() == "true"
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "cgSgspJ2msm6clMCkdW9")  # Jessica voice
+CARTESIA_VOICE_ID = "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"
 
 logger = logging.getLogger(__name__)
 
@@ -279,54 +277,19 @@ class VoiceAgentHandler:
     def _get_tts_config(self) -> dict:
         """
         Get TTS configuration.
-        Set USE_ELEVENLABS=true in .env to test ElevenLabs.
-        
-        Priorities:
-        1. ElevenLabs (if configured)
-        2. Cartesia Sonic (Preferred speed model)
-        3. Deepgram Aura (Fallback)
+        Uses Cartesia Sonic-3 for ultra-low latency (~200ms).
         """
-        # Flag to enable Cartesia (can be moved to config/env later)
-        USE_CARTESIA = True
-        
-        if USE_ELEVENLABS:
-            elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY", "")
-            logger.info(f"🎤 Using ElevenLabs TTS (voice: {ELEVENLABS_VOICE_ID})")
-            return {
-                "provider": {
-                    "type": "eleven_labs",
-                    "model_id": "eleven_turbo_v2_5",
-                    "language_code": "en-US"
-                },
-                "endpoint": {
-                    "url": f"wss://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}/stream-input",
-                    "headers": {
-                        "xi-api-key": elevenlabs_api_key
-                    }
+        logger.info("🎤 Using Cartesia Sonic-3 TTS")
+        return {
+            "provider": {
+                "type": "cartesia",
+                "model_id": "sonic-3",
+                "voice": {
+                    "mode": "id",
+                    "id": CARTESIA_VOICE_ID
                 }
             }
-        
-        elif USE_CARTESIA:
-            logger.info("🎤 Using Cartesia Sonic-3 TTS (Deepgram-Managed)")
-            return {
-                "provider": {
-                    "type": "cartesia",
-                    "model_id": "sonic-3",
-                    "voice": {
-                        "mode": "id",
-                        "id": "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"  # Australian Narrator Lady (Alternative)
-                    }
-                }
-            }
-            
-        else:
-            logger.info(f"🎤 Using Deepgram TTS (model: aura-2-thalia-en)")
-            return {
-                "provider": {
-                    "type": "deepgram",
-                    "model": "aura-2-thalia-en"
-                }
-            }
+        }
     
     # =========================================================================
     # MAIN LOOP
