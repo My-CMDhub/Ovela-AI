@@ -567,7 +567,8 @@ class VoiceAgentHandler:
         # DEBUG: Log ALL events to understand what Deepgram sends
         # This helps diagnose silence detection issues
         ai_speaking = getattr(self, '_ai_is_speaking', False)
-        logger.info(f"📨 DG_EVENT: {event_type} | ai_speaking={ai_speaking} | full={event}")
+        # OPTIMIZATION: Use debug instead of info to reduce I/O latency
+        logger.debug(f"📨 DG_EVENT: {event_type} | ai_speaking={ai_speaking} | full={event}")
         
         if event_type == "Welcome":
             logger.info(f"🤝 Deepgram Agent welcome: {event}")
@@ -612,6 +613,37 @@ class VoiceAgentHandler:
                 logger.info(f"[User]: {content} (STT latency: {latency_ms}ms)")
             else:
                 logger.info(f"[User]: {content}")
+            
+            # ─────────────────────────────────────────────────────────────────
+            # SMART HANGUP LOGIC:
+            # If we are in the process of hanging up, check what the user said.
+            # - If they said "bye", "thanks", etc. -> IGNORE IT (let hangup proceed)
+            # - If they said "wait", "add X", etc. -> CANCEL HANGUP (resume chat)
+            # ─────────────────────────────────────────────────────────────────
+            if getattr(self, '_is_hanging_up', False):
+                content_lower = content.lower().strip()
+                # Phrases that mean "I'm done too" - we should IGNORE these and let hangup finish
+                reciprocal_farewells = [
+                    "bye", "goodbye", "cya", "see ya", "see you", 
+                    "thanks", "thank you", "thanks bye", "okay bye", "ok bye",
+                    "have a good one", "cheers", "no thanks", "no that's all",
+                    "no that's it", "that's it", "nope", "nah", "you too"
+                ]
+                
+                # Check if it's a simple farewell (short & matches list)
+                is_farewell = False
+                if len(content_lower) < 20: 
+                    if any(phrase in content_lower for phrase in reciprocal_farewells):
+                        is_farewell = True
+                
+                if is_farewell:
+                    logger.info(f"👋 User said farewell ('{content}') - ignoring to allow graceful hangup")
+                    return # EXIT EARLY - do not process this text, do not reset hangup
+                else:
+                    logger.info(f"🛑 ABORT HANGUP: User said meaningful request ('{content}') - resuming conversation")
+                    self._is_hanging_up = False
+                    self._hangup_triggered = False
+                    # Don't inject "I'm still here" - just reply naturally to their text
             
             # Track exchange
             self.exchange_count += 1
@@ -705,15 +737,10 @@ class VoiceAgentHandler:
         self._in_silence_escalation = False
         
         # ─────────────────────────────────────────────────────────────────
-        # ABORT HANGUP FIX: If we're hanging up due to silence, cancel it!
-        # The user spoke just as the farewell started - resume conversation.
+        # Note: We do NOT cancel hangup here anymore.
+        # We wait for _handle_conversation_text to see what they said.
+        # If they just said "bye", we want to let the hangup happen!
         # ─────────────────────────────────────────────────────────────────
-        if getattr(self, '_is_hanging_up', False):
-            logger.info("🛑 ABORT HANGUP: User spoke during farewell - cancelling hangup")
-            self._is_hanging_up = False
-            self._hangup_triggered = False  # Reset so hangup can be triggered again later
-            # Inject acknowledgment so user knows we heard them
-            asyncio.create_task(self._inject_message("Oh, I'm still here! What can I help you with?"))
         
         # Notify silence monitor
         self.silence_monitor.on_user_speech()
