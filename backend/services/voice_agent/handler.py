@@ -250,8 +250,8 @@ class VoiceAgentHandler:
         return {
             "provider": {
                 "type": "open_ai",
-                "model": "gpt-4o-mini",
-                "temperature": 0.3  # Lower temp for tool calling
+                "model": "gpt-4.1-mini",
+                "temperature": 0.45
             },
             "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()

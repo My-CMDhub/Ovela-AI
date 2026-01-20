@@ -62,10 +62,18 @@ async def handle_submit_order(args: dict, user_phone: str) -> dict:
     # Check if restaurant is open
     is_open, rejection_reason = is_within_operating_hours(current_day, current_time)
     if not is_open:
+        # Get next opening time for helpful response
+        next_open = get_next_opening_datetime()
+        next_open_str = next_open.strftime("%A at %I:%M %p") if next_open else "tomorrow"
+        
         return {
             "success": False,
             "rejected_closed": True,
-            "message": rejection_reason
+            "message": rejection_reason,
+            "ai_instruction": f"""IMPORTANT: The order was NOT submitted because we are currently CLOSED.
+DO NOT promise to send the order later or queue it - the team is not working right now.
+Tell the customer: "Unfortunately I can't take pre-orders while we're closed because the team isn't here to confirm it. Could you please call us back {next_open_str} when we're open? We'd love to help you then!"
+Do NOT say you've sent anything to the team or that they'll get a text."""
         }
     
     # Check kitchen cutoff (5 minutes before close)
@@ -74,7 +82,8 @@ async def handle_submit_order(args: dict, user_phone: str) -> dict:
         return {
             "success": False,
             "rejected_cutoff": True,
-            "message": "Sorry, the kitchen is about to close. Could you try us tomorrow? We open at 4:30 PM Tuesday through Friday, or 11:30 AM on weekends."
+            "message": "Sorry, the kitchen is about to close. Could you try us tomorrow? We open at 4:30 PM Tuesday through Friday, or 11:30 AM on weekends.",
+            "ai_instruction": "The kitchen is closing in less than 5 minutes. Politely tell them to call back tomorrow and offer the opening hours."
         }
     
     # === Original validation ===
