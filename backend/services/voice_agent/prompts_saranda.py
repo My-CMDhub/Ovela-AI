@@ -19,12 +19,33 @@ def _build_menu_cache():
     pastas = [f"{item['name']} (${item['price']:.0f})" for item in menu.get("pasta", {}).values()]
     mains = [f"{item['name']} (${item['price']:.0f})" for item in menu.get("mains", {}).values()]
     appetizers = [f"{item['name']} (${item['price']:.0f})" for item in menu.get("appetizers", {}).values()]
-    
+    desserts = [f"{item['name']} (${item['price']:.0f})" for item in menu.get("desserts", {}).values()]
+    salads = [f"{item['name']} (${item['price']:.0f})" for item in menu.get("salads", {}).values()]
+    kids = [f"{item['name']} (${item['price']:.0f})" for item in menu.get("kids", {}).values()]
+
+    # Drinks with details (e.g. "Soft Drinks: Coke, Zero...")
+    drinks = []
+    for item in menu.get("drinks", {}).values():
+        desc = f": {item['description']}" if "description" in item else ""
+        drinks.append(f"{item['name']} (${item['price']:.0f}){desc}")
+
+    # Modifiers
+    modifiers = []
+    for mod, price in SARANDA_DATA["modifiers"].items():
+        name = mod.replace("_", " ").title()
+        price_str = f"+${price:.0f}" if price > 0 else "Free"
+        modifiers.append(f"{name} ({price_str})")
+
     return {
         "pizzas": ", ".join(pizzas),
         "pastas": ", ".join(pastas),
         "mains": ", ".join(mains),
         "appetizers": ", ".join(appetizers),
+        "desserts": ", ".join(desserts) if desserts else "Saranda's Milk Cake ($10), Tiramisu Di Casa ($12), Ice Cream Sundae ($10)",
+        "salads": ", ".join(salads) if salads else "Caprese, Greek, Rucola",
+        "kids": ", ".join(kids) if kids else "Chicken Chipees, Fish & Chips, Alfredo, Napolitana",
+        "drinks": ", ".join(drinks) if drinks else "Coke/Fanta/Solo, Spring Water, Sparkling, Coffee",
+        "modifiers": ", ".join(modifiers),
         "popular": ", ".join(SARANDA_DATA["popular_items"])
     }
 
@@ -74,6 +95,16 @@ Peak: 5:30-7:30PM (longer waits) | Prep: 15-20min, up to 30min when busy
 **Pasta (GF pasta +$3):** {_MENU_CACHE['pastas']}
 
 **Mains:** {_MENU_CACHE['mains']}
+
+**Salads:** {_MENU_CACHE['salads']}
+
+**Desserts:** {_MENU_CACHE['desserts']}
+
+**Kids Meals:** {_MENU_CACHE['kids']}
+
+**Drinks:** {_MENU_CACHE['drinks']}
+
+**Add-ons / Extras:** {_MENU_CACHE['modifiers']}
 
 **Menu Rules:** Only recommend items from the menu above. If customer asks for something not listed, say "I don't think we have that - did you mean [closest match]?" List 3-4 options when asked "what do you have?"
 

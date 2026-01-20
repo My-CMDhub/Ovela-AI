@@ -23,7 +23,8 @@ from services.saranda_flows import (
 from services.staff_notifications import staff_notification_service
 from services.knowledge_base.saranda import (
     get_menu_item_by_name, get_prep_time_estimate, format_order_summary,
-    SARANDA_DATA, is_within_operating_hours, minutes_until_close
+    SARANDA_DATA, is_within_operating_hours, minutes_until_close,
+    get_next_opening_datetime
 )
 
 logger = logging.getLogger(__name__)

@@ -235,7 +235,7 @@ SARANDA_DATA: RestaurantData = {
             "sexy_truffle": {
                 "name": "Sexy Truffle",
                 "price": 27.00,
-                "description": "Chef's special porcini mushroom cream sauce, traditional mozzarella, truffle infused endive, grated pecorino, fresh burrata",
+                "description": "Chef's special porcini mushroom cream sauce, traditional mozzarella, truffle infused olive, grated pecorino, fresh burrata",
                 "dietary": ["vg"],
                 "recommended": "add pancetta"
             },
@@ -333,18 +333,18 @@ SARANDA_DATA: RestaurantData = {
         "salads": {
             "caprese": {
                 "name": "Caprese",
-                "price": 13.00,
+                "price": 18.00,
                 "description": "Fresh buffalo mozzarella, tomatoes, sweet basil, seasoned with salt, EVOO, balsamic glaze"
             },
             "greek": {
                 "name": "Greek",
-                "price": 12.00,
+                "price": 18.00,
                 "description": "Cherry tomatoes, cucumber, capsicum, red onion, feta, olives, greek salad dressing"
             },
             "rucola": {
                 "name": "Rucola",
-                "price": 12.00,
-                "description": "Rocket, pecorino romano, shaved pear, cherry tomato, honey"
+                "price": 18.00,
+                "description": "Rocket, pecorino romana, shaved pear, cherry tomato, honey"
             },
         },
         
@@ -373,7 +373,7 @@ SARANDA_DATA: RestaurantData = {
                 "description": "Crumbed butterfly chicken breast, rich marinara sauce & traditional mozzarella, grana padano, served with chips and salad"
             },
             "pollo_al_fungi": {
-                "name": "Pollo al Fungi",
+                "name": "Pollo al Funghi",
                 "price": 27.00,
                 "description": "Grilled marinated butterfly chicken breast fillet slow cooked in creamy mushroom sauce, served with rosemary roasted chat potato and boiled broccolini",
                 "dietary": ["GF"]
