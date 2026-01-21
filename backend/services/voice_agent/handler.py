@@ -144,6 +144,10 @@ class VoiceAgentHandler:
             "order_summary": None,
             "pickup_time": None
         }
+        
+        # Backchannel state tracking (prevents false positives)
+        self._last_backchannel_time = 0.0
+        self._backchannel_cooldown_seconds = 5.0  # Min 5s between backchannels
     
     # =========================================================================
     # DEEPGRAM SETTINGS
@@ -678,26 +682,35 @@ class VoiceAgentHandler:
         
 
         
-        # SMART BACKCHANNEL (Zero-Latency)
-        # --------------------------------
-        # Inject micro-audio filler if user spoke for a long time (>2s)
-        # and didn't just give a short command.
+        # SMART BACKCHANNEL (Zero-Latency with State Guards)
+        # ---------------------------------------------------
+        # Inject micro-audio filler if user spoke for a long time (>2.5s)
+        # Uses industry-standard VAD turn-taking guards.
         if self.user_speech_start_time:
             duration = time.time() - self.user_speech_start_time
             if self._should_trigger_backchannel(content, duration):
-                # Determine type based on content (question vs statement)
-                bc_type = "thinking" if "?" in content else "ack"
-                if duration > 5.0: bc_type = "neutral" # Long monologue -> "Mm-hmm"
+                # Grace Period: Wait 150ms to see if AI response is incoming
+                await asyncio.sleep(0.15)
                 
-                b64_audio = get_backchannel_audio(bc_type)
-                if b64_audio:
-                    logger.info(f"⚡ Zero-Latency Backchannel: '{bc_type}' (User spoke {duration:.1f}s)")
-                    try:
-                        audio_bytes = base64.b64decode(b64_audio)
-                        await self._send_audio_to_twilio(audio_bytes)
-                        self._is_backchanneling = True # Track state for barge-in
-                    except Exception as e:
-                        logger.error(f"Failed to play backchannel: {e}")
+                # Re-check state after grace period (AI may have started speaking)
+                if getattr(self, '_ai_is_speaking', False):
+                    logger.debug("⏹️ Backchannel cancelled: AI started speaking during grace period")
+                else:
+                    # Determine type based on content (question vs statement)
+                    bc_type = "thinking" if "?" in content else "ack"
+                    if duration > 5.0:
+                        bc_type = "neutral"  # Long monologue -> "Mm-hmm"
+                    
+                    b64_audio = get_backchannel_audio(bc_type)
+                    if b64_audio:
+                        logger.info(f"⚡ Backchannel: '{bc_type}' (User spoke {duration:.1f}s)")
+                        try:
+                            audio_bytes = base64.b64decode(b64_audio)
+                            await self._send_audio_to_twilio(audio_bytes)
+                            self._is_backchanneling = True  # Track state for barge-in
+                            self._last_backchannel_time = time.time()  # Update cooldown
+                        except Exception as e:
+                            logger.error(f"Failed to play backchannel: {e}")
                     
         elif role == "assistant":
             # Extract control signals and clean content for logging/transcript
@@ -1431,18 +1444,50 @@ class VoiceAgentHandler:
     def _should_trigger_backchannel(self, text: str, duration: float) -> bool:
         """
         Decide if we should play a zero-latency backchannel.
+        Uses industry-standard VAD/turn-taking guards to prevent false positives.
         """
-        # 1. Duration Gate (2.0s)
-        if duration < 2.0: return False
+        # ═══════════════════════════════════════════════════════════════
+        # STATE GUARDS (Critical for preventing false positives)
+        # ═══════════════════════════════════════════════════════════════
         
-        # 2. Context Gate (Farewells/Short commands)
-        text_lower = text.lower().strip()
-        if any(w in text_lower for w in ["bye", "thanks", "thank you", "no thanks", "that's it"]):
+        # Guard 1: Never trigger if AI is already speaking
+        if getattr(self, '_ai_is_speaking', False):
+            logger.debug("⏹️ Backchannel skipped: AI is speaking")
             return False
-            
-        # 3. Word count gate (approx)
-        if len(text.split()) < 4: return False
-            
+        
+        # Guard 2: Never trigger during function processing (LLM is thinking)
+        if getattr(self, '_is_processing_function', False):
+            logger.debug("⏹️ Backchannel skipped: Function processing")
+            return False
+        
+        # Guard 3: Cooldown - prevent rapid-fire backchannels
+        time_since_last = time.time() - getattr(self, '_last_backchannel_time', 0)
+        cooldown = getattr(self, '_backchannel_cooldown_seconds', 5.0)
+        if time_since_last < cooldown:
+            logger.debug(f"⏹️ Backchannel skipped: Cooldown ({time_since_last:.1f}s < {cooldown}s)")
+            return False
+        
+        # ═══════════════════════════════════════════════════════════════
+        # CONTENT GATES (Semantic filtering)
+        # ═══════════════════════════════════════════════════════════════
+        
+        # Gate 1: Duration threshold (only for extended speech >2.5s)
+        if duration < 2.5:
+            return False
+        
+        # Gate 2: Farewell/terminal phrases - never backchannel these
+        text_lower = text.lower().strip()
+        terminal_phrases = [
+            "bye", "goodbye", "thanks", "thank you", "no thanks",
+            "that's it", "that's all", "okay bye", "see you", "cheers"
+        ]
+        if any(phrase in text_lower for phrase in terminal_phrases):
+            return False
+        
+        # Gate 3: Word count (at least 5 words for meaningful speech)
+        if len(text.split()) < 5:
+            return False
+        
         return True
 
     async def _cleanup(self):
