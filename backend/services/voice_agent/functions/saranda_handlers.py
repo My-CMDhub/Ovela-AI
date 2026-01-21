@@ -71,10 +71,9 @@ async def handle_submit_order(args: dict, user_phone: str) -> dict:
             "success": False,
             "rejected_closed": True,
             "message": rejection_reason,
-            "ai_instruction": f"""IMPORTANT: The order was NOT submitted because we are currently CLOSED.
-DO NOT promise to send the order later or queue it - the team is not working right now.
-Tell the customer: "Unfortunately I can't take pre-orders while we're closed because the team isn't here to confirm it. Could you please call us back {next_open_str} when we're open? We'd love to help you then!"
-Do NOT say you've sent anything to the team or that they'll get a text."""
+            "ai_instruction": f"""REJECT: We are CLOSED.
+Tell customer: "I can't take orders now as we're closed. Please call back {next_open_str}. Thanks!"
+DO NOT promise later delivery."""
         }
     
     # Check kitchen cutoff (5 minutes before close)
@@ -172,7 +171,7 @@ Do NOT say you've sent anything to the team or that they'll get a text."""
         logger.info(f"Order {request_id} queued at position {queue_position + 1}")
     
     # Add to queue (this may activate immediately or queue it)
-    saranda_queue.add(order)
+    await saranda_queue.add(order)
     
     # If this order is now active, send WhatsApp
     if saranda_queue.get_active() and saranda_queue.get_active().id == request_id:
@@ -255,7 +254,7 @@ async def handle_request_change(args: dict, user_phone: str) -> dict:
     )
     
     # Add to queue
-    saranda_queue.add(change_order)
+    await saranda_queue.add(change_order)
     
     # Send WhatsApp if active
     if saranda_queue.get_active() and saranda_queue.get_active().id == request_id:
@@ -308,7 +307,7 @@ async def handle_request_cancellation(args: dict, user_phone: str) -> dict:
         change_details=reason
     )
     
-    saranda_queue.add(cancel_request)
+    await saranda_queue.add(cancel_request)
     
     # Send WhatsApp
     if saranda_queue.get_active() and saranda_queue.get_active().id == request_id:
@@ -437,7 +436,7 @@ async def handle_request_reservation(args: dict, user_phone: str) -> dict:
         }
     
     # We're open - proceed with immediate notification
-    saranda_queue.add(reservation)
+    await saranda_queue.add(reservation)
     
     # Build summary for WhatsApp
     summary = f"Party: {party_size} people\nDate: {date}\nTime: {time}"

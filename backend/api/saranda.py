@@ -78,7 +78,22 @@ async def handle_whatsapp_reply(
     if active_request.is_expired:
         logger.warning(f"⚠️ Request {request_id} has expired - ignoring late reply")
         # Expire it and move to next
-        saranda_queue.expire_stale()
+        # Expire it and move to next
+        expired_list = saranda_queue.expire_stale()
+        
+        # Notify ghosts (Anti-Ghosting here too)
+        for exp_req in expired_list:
+            try:
+                await staff_notification_service.send_whatsapp_customer_confirmation(
+                    customer_phone=exp_req.customer_phone,
+                    order_id=exp_req.id,
+                    status="expired",
+                    message_override=f"Sorry, we missed your request ({exp_req.id}). Our team is very busy! Please call us directly. Apologies! - Saranda Team"
+                )
+                logger.info(f"👻 Anti-Ghosting SMS sent via webhook to {exp_req.customer_name}")
+            except Exception as e:
+                logger.error(f"Failed to send Anti-Ghosting SMS: {e}")
+                
         return Response(content="", media_type="text/plain")
     
     # Resolve the request

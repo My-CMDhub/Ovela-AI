@@ -40,6 +40,7 @@ from .config import (
     get_random_farewell,
     get_random_silence_prompt,
     get_random_filler_prompt,
+    get_backchannel_audio,
 )
 from .prompts import get_system_prompt
 from .demo_prompts import get_demo_prompt, get_demo_greeting, is_demo_mode
@@ -136,6 +137,13 @@ class VoiceAgentHandler:
         # Demo calls → "ovela_demo", Production calls → resolved from phone or default "lydoun"
         self.tenant_id = "ovela_demo"  # Default to demo, updated in _handle_twilio_start
         self.demo_type = None
+        
+        # Smart Memory (for latency optimization & amnesia fix)
+        self.memory = {
+            "name": None,
+            "order_summary": None,
+            "pickup_time": None
+        }
     
     # =========================================================================
     # DEEPGRAM SETTINGS
@@ -148,7 +156,7 @@ class VoiceAgentHandler:
         This configures:
         - Audio encoding (mulaw for Twilio)
         - STT model (flux-general-en)
-        - LLM (OpenAI gpt-4o-mini)
+        - LLM (OpenAI gpt-4.1-mini)
         - TTS (Deepgram aura-2-thalia-en)
         - System prompt and functions
         """
@@ -209,44 +217,30 @@ class VoiceAgentHandler:
     
     def _get_llm_config(self) -> dict:
         """
-        Get LLM configuration with Groq support for ultra-low latency.
-        
-        Set USE_GROQ=true in .env to use Groq's LPU (10-50x faster than GPT-4o-mini).
-        
-        Performance comparison:
-        - GPT-4o-mini: 3-18 seconds (current)
-        - Groq Llama 3.3 70B: 300-800ms (recommended)
-        
-        Returns:
-            dict: LLM provider configuration
+        Get LLM configuration.
+        Defaults to GPT-4.1-mini (User Request).
+        Optional: Claude 3 Haiku via USE_CLAUDE env var.
         """
-        use_gemini = os.getenv("USE_GEMINI", "false").lower() == "true"
+        use_claude = os.getenv("USE_CLAUDE", "false").lower() == "true"
         
-        # Google Gemini Flash (Primary LLM for voice agent)
-        if use_gemini:
-            google_key = os.getenv("GOOGLE_API_KEY", "")
-            if not google_key:
-                logger.error("❌ GOOGLE_API_KEY not set - falling back to GPT-4o-mini")
-            else:
-                logger.info("🧠 Using Google Gemini 2.5 Flash (via OpenAI Compat)")
+        # Claude 3 Haiku (Optional - High Speed)
+        if use_claude:
+            anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+            if anthropic_key:
+                logger.info("🧠 Using Anthropic Claude 3 Haiku")
                 return {
                     "provider": {
-                        "type": "open_ai",
-                        "model": "gemini-2.5-flash",
-                        "temperature": 0.3  # Lower temp for more deterministic tool calling
-                    },
-                    "endpoint": {
-                        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-                        "headers": {
-                            "authorization": f"Bearer {google_key}"
-                        }
+                        "type": "anthropic",
+                        "model": "claude-3-haiku-20240307",
                     },
                     "prompt": self._get_active_prompt(),
                     "functions": self._get_active_functions()
                 }
+            else:
+                logger.error("❌ ANTHROPIC_API_KEY not set - falling back to GPT-4.1-mini")
         
-        # Fallback to OpenAI GPT-4o-mini
-        logger.info("🧠 Using OpenAI GPT-4o-mini")
+        # Fallback/Default to OpenAI gpt-4.1-mini (aliased as 4.1 in user comments)
+        logger.info("🧠 Using OpenAI gpt-4.1-mini (Primary)")
         return {
             "provider": {
                 "type": "open_ai",
@@ -265,14 +259,30 @@ class VoiceAgentHandler:
             current_time=datetime.now(ZoneInfo("Australia/Perth")).strftime("%I:%M %p"),
             demo_type=self.demo_type
         )
+        base_prompt = ""
         if demo_prompt:
             logger.info(f"Using DEMO prompt mode")
-            return demo_prompt
-        return get_system_prompt(
-            current_date=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%A, %d %B %Y"),
-            current_time=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%I:%M %p"),
-            tenant_id=self.tenant_id  # Pass tenant_id for property-specific prompt
-        )
+            base_prompt = demo_prompt
+        else:
+            base_prompt = get_system_prompt(
+                current_date=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%A, %d %B %Y"),
+                current_time=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%I:%M %p"),
+                tenant_id=self.tenant_id
+            )
+        
+        # Smart Memory Injection
+        memory_context = ""
+        if self.memory["name"] or self.memory["order_summary"]:
+            memory_context = f"\n\n=== CURRENT MEMORY (DO NOT FORGET) ===\n"
+            if self.memory["name"]:
+                memory_context += f"• Customer Name: {self.memory['name']}\n"
+            if self.memory["order_summary"]:
+                memory_context += f"• Current Order: {self.memory['order_summary']}\n"
+            if self.memory["pickup_time"]:
+                memory_context += f"• Desired Pickup: {self.memory['pickup_time']}\n"
+            memory_context += "========================================\n"
+        
+        return base_prompt + memory_context
     
     def _get_active_functions(self) -> list:
         """Get the correct function definitions based on tenant."""
@@ -665,6 +675,29 @@ class VoiceAgentHandler:
                     return
                 elif spam_result.get("warning"):
                     await self._inject_message(spam_result["warning"])
+        
+
+        
+        # SMART BACKCHANNEL (Zero-Latency)
+        # --------------------------------
+        # Inject micro-audio filler if user spoke for a long time (>2s)
+        # and didn't just give a short command.
+        if self.user_speech_start_time:
+            duration = time.time() - self.user_speech_start_time
+            if self._should_trigger_backchannel(content, duration):
+                # Determine type based on content (question vs statement)
+                bc_type = "thinking" if "?" in content else "ack"
+                if duration > 5.0: bc_type = "neutral" # Long monologue -> "Mm-hmm"
+                
+                b64_audio = get_backchannel_audio(bc_type)
+                if b64_audio:
+                    logger.info(f"⚡ Zero-Latency Backchannel: '{bc_type}' (User spoke {duration:.1f}s)")
+                    try:
+                        audio_bytes = base64.b64decode(b64_audio)
+                        await self._send_audio_to_twilio(audio_bytes)
+                        self._is_backchanneling = True # Track state for barge-in
+                    except Exception as e:
+                        logger.error(f"Failed to play backchannel: {e}")
                     
         elif role == "assistant":
             # Extract control signals and clean content for logging/transcript
@@ -726,6 +759,20 @@ class VoiceAgentHandler:
     async def _handle_user_started_speaking(self):
         """Handle VAD detection of user speech."""
         logger.info("🎤 User started speaking (VAD)")
+        
+        # BARGE-IN: Clear any playing audio (especially backchannels)
+        if getattr(self, '_is_backchanneling', False):
+             logger.info("🛑 Barge-In: Creating clear event for backchannel")
+             # Send clear event to Twilio
+             msg = {
+                 "event": "clear",
+                 "streamSid": self.stream_sid,
+             }
+             try:
+                 await self.twilio_ws.send_json(msg)
+                 self._is_backchanneling = False
+             except Exception as e:
+                 logger.error(f"Failed to send clear event: {e}")
         
         # Track timing
         self.user_speech_start_time = time.time()
@@ -842,6 +889,31 @@ class VoiceAgentHandler:
             return
         
         logger.info(f"🔧 Function call: {function_name}({function_args})")
+
+        # SMART MEMORY UPDATE
+        # Capture details from function args to persist in prompt
+        if "customer_name" in function_args and function_args["customer_name"]:
+            self.memory["name"] = function_args["customer_name"]
+            logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
+        
+        if "items" in function_args:
+             # Summarize items
+            try:
+                items = function_args["items"]
+                summary_parts = []
+                for item in items:
+                    qty = item.get("quantity", 1)
+                    name = item.get("name", "Item")
+                    mods = item.get("modifiers", [])
+                    mod_str = f" ({', '.join(mods)})" if mods else ""
+                    summary_parts.append(f"{qty}x {name}{mod_str}")
+                self.memory["order_summary"] = ", ".join(summary_parts)
+                logger.info(f"🧠 Memory Updated: Order = {self.memory['order_summary']}")
+            except Exception as e:
+                logger.warning(f"Failed to parse memory items: {e}")
+
+        if "pickup_time" in function_args:
+            self.memory["pickup_time"] = function_args["pickup_time"]
         
         # Inject acknowledgment for slow/database tools to avoid silence
         # Inject acknowledgment for slow/database tools to avoid silence
@@ -850,7 +922,9 @@ class VoiceAgentHandler:
             "create_booking", 
             "request_human_callback",
             "lookup_booking",
-            "check_availability"
+            "check_availability",
+            "submit_order",     # Added for immediate feedback
+            "get_menu_info"     # Added for immediate feedback
         ]
         
         # Track function processing state
@@ -1354,6 +1428,23 @@ class VoiceAgentHandler:
             logger.error(f"Error saving reservation: {e}")
             return None
     
+    def _should_trigger_backchannel(self, text: str, duration: float) -> bool:
+        """
+        Decide if we should play a zero-latency backchannel.
+        """
+        # 1. Duration Gate (2.0s)
+        if duration < 2.0: return False
+        
+        # 2. Context Gate (Farewells/Short commands)
+        text_lower = text.lower().strip()
+        if any(w in text_lower for w in ["bye", "thanks", "thank you", "no thanks", "that's it"]):
+            return False
+            
+        # 3. Word count gate (approx)
+        if len(text.split()) < 4: return False
+            
+        return True
+
     async def _cleanup(self):
         """Clean up connections and save transcript."""
         logger.info("🧹 Cleaning up VoiceAgentHandler")

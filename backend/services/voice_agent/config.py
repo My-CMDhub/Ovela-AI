@@ -6,6 +6,8 @@ Easy to switch between demo and production environments.
 """
 
 import random
+from .audio_assets import BACKCHANNEL_AUDIO
+
 
 # =============================================================================
 # DEEPGRAM API
@@ -163,6 +165,23 @@ def get_random_soft_warning(tenant_id: str = "lydoun") -> str:
     return random.choice(warnings)
 
 
-def get_random_filler_prompt() -> str:
-    """Returns a random filler prompt for long operations."""
     return random.choice(FILLER_PROMPTS)
+
+
+# =============================================================================
+# SMART BACKCHANNEL AUDIO (Zero-Latency)
+# =============================================================================
+# Imported from audio_assets.py to keep config clean
+
+
+def get_backchannel_audio(type: str = "neutral") -> str:
+    """
+    Get a random pre-cached backchannel audio chunk.
+    Returns Base64 string or None if empty.
+    """
+    options = BACKCHANNEL_AUDIO.get(type, [])
+    # Filter out empty placeholders
+    valid = [opt for opt in options if opt]
+    if not valid:
+        return None
+    return random.choice(valid)

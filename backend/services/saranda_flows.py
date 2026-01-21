@@ -13,9 +13,12 @@ Key Principles:
 import logging
 from enum import Enum
 from dataclasses import dataclass, field
+import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 import uuid
+
+from services.staff_notifications import staff_notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +85,7 @@ class OrderRequest:
     created_at: datetime = field(default_factory=datetime.now)
     submitted_at: Optional[datetime] = None
     responded_at: Optional[datetime] = None
-    ttl_minutes: int = 5  # Auto-expire after 5 minutes
+    ttl_minutes: int = 3  # Auto-expire after 3 minutes (User Requested)
     
     # Staff response
     staff_response: Optional[str] = None  # YES, NO, LATE
@@ -269,8 +272,25 @@ class RequestQueue:
         self._active: Optional[OrderRequest | ReservationRequest] = None
         self._completed: Dict[str, OrderRequest | ReservationRequest] = {}
     
-    def add(self, request: OrderRequest | ReservationRequest) -> None:
+    async def add(self, request: OrderRequest | ReservationRequest) -> None:
         """Add a new request to the queue."""
+        # Clean up any stale requests blocking the queue (Anti-Ghosting)
+        expired_list = self.expire_stale()
+        
+        # Notify ghosts (people whose requests expired)
+        for exp_req in expired_list:
+            try:
+                # Send polite apology SMS
+                await staff_notification_service.send_whatsapp_customer_confirmation(
+                    customer_phone=exp_req.customer_phone,
+                    order_id=exp_req.id,
+                    status="expired",
+                    message_override=f"Sorry, we missed your request ({exp_req.id}). Our team is super busy right now! Please call us directly to place your order. Apologies! - Saranda Team"
+                )
+                logger.info(f"👻 Anti-Ghosting SMS sent to {exp_req.customer_name} ({exp_req.id})")
+            except Exception as e:
+                logger.warning(f"Failed to send Anti-Ghosting SMS for {exp_req.id}: {e}")
+        
         if self._active is None:
             self._active = request
             request.status = RequestStatus.PENDING_STAFF
@@ -320,18 +340,18 @@ class RequestQueue:
         
         return True
     
-    def expire_stale(self) -> List[str]:
+    def expire_stale(self) -> List[OrderRequest | ReservationRequest]:
         """
         Check and expire requests that have exceeded TTL.
         
-        Returns list of expired request IDs.
+        Returns list of expired Request objects (so we can notify them).
         """
         expired = []
         
         if self._active and self._active.is_expired:
             self._active.status = RequestStatus.EXPIRED
             self._completed[self._active.id] = self._active
-            expired.append(self._active.id)
+            expired.append(self._active)
             logger.info(f"Request {self._active.id} expired (no response)")
             
             # Activate next
