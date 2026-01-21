@@ -177,14 +177,14 @@ def get_random_filler_prompt() -> str:
 # Imported from audio_assets.py to keep config clean
 
 
-def get_backchannel_audio(type: str = "neutral") -> str:
-    """
-    Get a random pre-cached backchannel audio chunk.
-    Returns Base64 string or None if empty.
-    """
-    options = BACKCHANNEL_AUDIO.get(type, [])
-    # Filter out empty placeholders
-    valid = [opt for opt in options if opt]
-    if not valid:
-        return None
-    return random.choice(valid)
+# def get_backchannel_audio(type: str = "neutral") -> str:
+#     """
+#     Get a random pre-cached backchannel audio chunk.
+#     Returns Base64 string or None if empty.
+#     """
+#     options = BACKCHANNEL_AUDIO.get(type, [])
+#     # Filter out empty placeholders
+#     valid = [opt for opt in options if opt]
+#     if not valid:
+#         return None
+#     return random.choice(valid)
