@@ -165,6 +165,9 @@ def get_random_soft_warning(tenant_id: str = "lydoun") -> str:
     return random.choice(warnings)
 
 
+
+def get_random_filler_prompt() -> str:
+    """Returns a random filler prompt to hold the floor."""
     return random.choice(FILLER_PROMPTS)
 
 

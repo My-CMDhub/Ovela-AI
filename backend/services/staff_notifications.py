@@ -169,7 +169,7 @@ class StaffNotificationService:
                 "type": "template",
                 "template": {
                     "name": settings.WHATSAPP_TEMPLATE_NAME,
-                    "language": {"code": "en_US"},
+                    "language": {"code": "en"},
                     "components": [
                         {
                             "type": "body",
@@ -180,6 +180,24 @@ class StaffNotificationService:
                                 {"type": "text", "text": f"{total_amount:.2f}"},
                                 {"type": "text", "text": str(pickup_time)}
                             ]
+                        },
+                        {
+                            "type": "button",
+                            "sub_type": "quick_reply",
+                            "index": 0,
+                            "parameters": [{"type": "payload", "payload": f"APPROVE_{request_id}"}]
+                        },
+                        {
+                            "type": "button",
+                            "sub_type": "quick_reply",
+                            "index": 1,
+                            "parameters": [{"type": "payload", "payload": f"REJECT_{request_id}"}]
+                        },
+                        {
+                            "type": "button",
+                            "sub_type": "quick_reply",
+                            "index": 2,
+                            "parameters": [{"type": "payload", "payload": f"LATE_{request_id}"}]
                         }
                     ]
                 }
