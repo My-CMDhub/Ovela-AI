@@ -6,6 +6,7 @@ Contains system prompts, message templates, and conversation guidance.
 
 from services.voice_agent.prompts_paddlesteamer import get_paddlesteamer_prompt
 from services.voice_agent.prompts_saranda import get_saranda_prompt
+from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt
 from services.knowledge_base.lydoun import LYDOUN_DATA
 
 def get_system_prompt(current_date: str = None, current_time: str = None, tenant_id: str = "lydoun") -> str:
@@ -18,7 +19,7 @@ def get_system_prompt(current_date: str = None, current_time: str = None, tenant
     Args:
         current_date: Current date string
         current_time: Current time string
-        tenant_id: Tenant identifier (lydoun, paddlesteamer, saranda)
+        tenant_id: Tenant identifier (lydoun, paddlesteamer, saranda, coalcreek)
     """
     # Saranda Restaurant (pickup orders, WhatsApp HITL)
     if tenant_id == "saranda":
@@ -27,6 +28,10 @@ def get_system_prompt(current_date: str = None, current_time: str = None, tenant
     # Paddle Steamer Motel
     if tenant_id == "paddlesteamer":
         return get_paddlesteamer_prompt(current_date, current_time)
+    
+    # Coal Creek Motel
+    if tenant_id == "coalcreek":
+        return get_coalcreek_prompt(current_date, current_time)
     
     # Default to Lydoun Motel
     return _get_lydoun_prompt(current_date, current_time)

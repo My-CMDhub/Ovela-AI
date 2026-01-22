@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     DEEPGRAM_API_KEY: str
     
     # Staff Phone (for transfers)
-    STAFF_PHONE_NUMBER: str = "+61493291626"
+    STAFF_PHONE_NUMBER: str = "+61492897718"
     
     # Demo Settings
     TENANT_ID: str = "lydoun"  # Default tenant (lydoun, paddlesteamer, saranda)

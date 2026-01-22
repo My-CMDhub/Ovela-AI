@@ -120,6 +120,17 @@ def get_random_greeting(tenant_id: str = "lydoun") -> str:
         ]
         return random.choice(greetings)
     
+    # Coal Creek Motel
+    if tenant_id == "coalcreek":
+        greetings = [
+            "G'day! Coal Creek Motel, Ovela speaking. How can I help you today?",
+            "Hello! Thanks for calling Coal Creek Motel. What can I do for you?",
+            "Hi there! Coal Creek Motel speaking. Are you after a room or some information?",
+            "Good day! You've reached Coal Creek Motel in Korumburra. How can I help?",
+            "Welcome to Coal Creek Motel! This is Ovela. What can I assist you with?",
+        ]
+        return random.choice(greetings)
+    
     if tenant_id == "paddlesteamer":
         property_name = "Albury Paddlesteamer Motel"
         short_name = "Paddlesteamer Motel"
@@ -149,6 +160,16 @@ def get_random_silence_prompt() -> str:
 
 def get_random_soft_warning(tenant_id: str = "lydoun") -> str:
     """Returns a random soft warning for potential spam."""
+    # Coal Creek Motel
+    if tenant_id == "coalcreek":
+        warnings = [
+            "I notice you might be having trouble. Is there something specific I can help with about Coal Creek Motel?",
+            "If you need a moment, no problem. I'm here to help with enquiries about Coal Creek Motel.",
+            "Just checking - were you after information about Coal Creek Motel or making a booking?",
+            "I'm here to help with Coal Creek Motel enquiries. What dates were you thinking of staying?",
+        ]
+        return random.choice(warnings)
+    
     if tenant_id == "paddlesteamer":
         property_name = "Albury Paddlesteamer Motel"
         short_name = "Paddlesteamer"
