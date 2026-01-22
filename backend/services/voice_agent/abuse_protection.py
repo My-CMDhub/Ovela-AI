@@ -48,7 +48,10 @@ class AbuseProtection:
         
         # Tenant-specific details
         self.tenant_id = tenant_id
-        if tenant_id == "paddlesteamer":
+        if tenant_id == "coalcreek":
+            self.property_name = "Coal Creek Motel"
+            self.short_name = "Coal Creek"
+        elif tenant_id == "paddlesteamer":
             self.property_name = "Albury Paddlesteamer Motel"
             self.short_name = "Paddlesteamer"
         else:
@@ -196,7 +199,7 @@ class AbuseProtection:
                 else:
                     return {
                         "is_spam": True,
-                        "warning": get_random_soft_warning()
+                        "warning": get_random_soft_warning(self.tenant_id)
                     }
         
         # Track repetitive inputs
@@ -221,7 +224,7 @@ class AbuseProtection:
             if self.short_response_count >= 5:
                 return {
                     "is_spam": False,
-                    "warning": get_random_soft_warning()
+                    "warning": get_random_soft_warning(self.tenant_id)
                 }
         else:
             self.short_response_count = 0
