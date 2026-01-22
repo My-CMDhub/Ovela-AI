@@ -204,7 +204,7 @@ class VoiceAgentHandler:
                     "provider": {
                         "type": "deepgram",
                         "model": "nova-3",
-                        "endpointing": 500,
+                        "endpointing": 350,  # Reduced from 500ms - safe human-natural threshold
                         "smart_format": True
                     }
                 },
@@ -664,6 +664,8 @@ class VoiceAgentHandler:
             
             # Mark timing for response latency
             self.ai_response_start_time = time.time()
+            self._stt_complete_time = time.time()  # For TRUE TTFT measurement
+            self._first_ai_response_logged = False  # Reset for new utterance
             
             # Check for spam/abuse
             spam_result = self.abuse_protection.check_spam_behavior(content)
@@ -692,7 +694,14 @@ class VoiceAgentHandler:
             # Log clean content with latency info
             if self.ai_response_start_time:
                 latency_ms = int((time.time() - self.ai_response_start_time) * 1000)
-                logger.info(f"[AI]: {clean_content} (Response latency: {latency_ms}ms)")
+                
+                # TRUE TTFT: Log only for FIRST sentence after user spoke
+                if hasattr(self, '_stt_complete_time') and not getattr(self, '_first_ai_response_logged', False):
+                    ttft_ms = int((time.time() - self._stt_complete_time) * 1000)
+                    logger.info(f"[AI]: {clean_content} (TTFT: {ttft_ms}ms)")
+                    self._first_ai_response_logged = True
+                else:
+                    logger.info(f"[AI]: {clean_content} (Response latency: {latency_ms}ms)")
             else:
                 logger.info(f"[AI]: {clean_content}")
             
