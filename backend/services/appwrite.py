@@ -870,12 +870,139 @@ class AppwriteService:
 
 
 
+    # ==================== PAYMENT STATUS TRACKING ====================
+    
+    def update_booking_payment_status(
+        self,
+        booking_id: str,
+        payment_status: str,
+        payment_link_url: str = None,
+        stripe_payment_id: str = None,
+        tenant_id: str = "coalcreek"
+    ) -> dict:
+        """
+        Update payment status for a booking in motel_reservations.
+        
+        Args:
+            booking_id: Document ID of the booking
+            payment_status: One of: pending, link_sent, paid, failed, refunded
+            payment_link_url: Stripe payment link URL (optional)
+            stripe_payment_id: Stripe payment intent ID (optional)
+            tenant_id: Tenant identifier for logging
+        
+        Returns:
+            Updated document or None on error
+        """
+        try:
+            now = datetime.now(MELBOURNE_TZ).isoformat()
+            
+            data = {
+                "payment_status": payment_status,
+                "updated_at": now
+            }
+            
+            if payment_link_url:
+                data["payment_link_url"] = payment_link_url
+                data["payment_link_sent_at"] = now
+                
+            if stripe_payment_id:
+                data["stripe_payment_id"] = stripe_payment_id
+                
+            if payment_status == "paid":
+                data["payment_received_at"] = now
+                data["status"] = "confirmed"  # Auto-confirm when paid
+            
+            result = self._make_request(
+                "PATCH",
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents/{booking_id}",
+                data={"data": data}
+            )
+            
+            if result:
+                logger.info(f"💳 [{tenant_id}] Booking {booking_id} → payment_status={payment_status}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error updating payment status: {e}")
+            return None
+    
+    def get_bookings_by_payment_status(
+        self,
+        payment_status: str = None,
+        tenant_id: str = "coalcreek",
+        limit: int = 50
+    ) -> list:
+        """
+        Get bookings filtered by payment status for CRM dashboard.
+        
+        Args:
+            payment_status: Filter by specific status (optional)
+            tenant_id: Tenant to filter by
+            limit: Max results
+        
+        Returns:
+            List of booking documents
+        """
+        try:
+            result = self._make_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
+            )
+            
+            bookings = result.get("documents", []) if result else []
+            
+            # Filter by tenant
+            bookings = [b for b in bookings if b.get("tenant_id") == tenant_id]
+            
+            # Filter by payment status if specified
+            if payment_status:
+                bookings = [b for b in bookings if b.get("payment_status") == payment_status]
+            
+            # Sort by created_at descending
+            bookings.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+            
+            return bookings[:limit]
+            
+        except Exception as e:
+            logger.error(f"Error fetching bookings by payment status: {e}")
+            return []
+    
+    def get_booking_by_reference(
+        self,
+        booking_reference: str,
+        tenant_id: str = "coalcreek"
+    ) -> dict:
+        """
+        Find a booking by its reference code.
+        
+        Returns:
+            Booking document or None if not found
+        """
+        try:
+            result = self._make_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
+            )
+            
+            bookings = result.get("documents", []) if result else []
+            
+            for booking in bookings:
+                if (booking.get("booking_reference") == booking_reference and 
+                    booking.get("tenant_id") == tenant_id):
+                    return booking
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding booking by reference: {e}")
+            return None
+
     # ==================== STAFF NOTIFICATIONS (Human-in-Loop) ====================
     
     def create_staff_notification(self, notification_type: str, customer_name: str, 
                                    customer_phone: str, reason: str, 
                                    urgency: str = "medium", extra_data: dict = None,
-                                   tenant_id: str = "lydoun") -> dict:
+                                   tenant_id: str = "coalcreek") -> dict:
         """
         Create a staff notification (callback request, approval needed, etc).
         Flexible schema - extra_data allows adding fields without schema changes.
@@ -970,6 +1097,111 @@ class AppwriteService:
         except Exception as e:
             logger.error(f"Error deleting staff notification: {e}")
             return False
+
+    # ==================== TENANT-SPECIFIC TRANSCRIPTS ====================
+    
+    # Tenant isolation: Each client gets their own transcript collection
+    TENANT_TRANSCRIPT_COLLECTIONS = {
+        "coalcreek": "call_transcripts_coalcreek",
+        # Future tenants:
+        # "lydoun": "call_transcripts_lydoun",
+        # "paddlesteamer": "call_transcripts_paddlesteamer",
+    }
+    
+    def get_transcript_collection_for_tenant(self, tenant_id: str) -> str:
+        """
+        Get the transcript collection ID for a specific tenant.
+        Raises ValueError if tenant is not configured (strict isolation).
+        """
+        if tenant_id not in self.TENANT_TRANSCRIPT_COLLECTIONS:
+            raise ValueError(f"Unknown tenant for transcript storage: {tenant_id}")
+        return self.TENANT_TRANSCRIPT_COLLECTIONS[tenant_id]
+    
+    def save_call_transcript(
+        self,
+        tenant_id: str,
+        call_sid: str,
+        caller_phone: str,
+        transcript: str,
+        duration: int,
+        booking_ref: str = None,
+        status: str = None,
+        room_type: str = None,
+        metadata: dict = None
+    ) -> dict:
+        """
+        Save a call transcript to tenant-specific collection.
+        Enforces strict tenant isolation.
+        """
+        from appwrite.id import ID
+        try:
+            collection_id = self.get_transcript_collection_for_tenant(tenant_id)
+            doc_id = ID.unique()
+            now = datetime.now(MELBOURNE_TZ).isoformat()
+            
+            data = {
+                "call_sid": call_sid,
+                "caller_phone": caller_phone or "",
+                "transcript": transcript[:10000] if transcript else "",  # Max 10k chars
+                "duration": duration or 0,
+                "booking_ref": booking_ref or "",
+                "status": status or "",
+                "room_type": room_type or "",
+                "metadata_json": json.dumps(metadata) if metadata else "{}",
+                "created_at": now
+            }
+            
+            result = self._make_request(
+                "POST",
+                f"/databases/{self.motel_db_id}/collections/{collection_id}/documents",
+                data={"documentId": doc_id, "data": data}
+            )
+            logger.info(f"Saved transcript for {tenant_id}: {doc_id}")
+            return result
+        except ValueError as e:
+            logger.error(f"Tenant isolation error: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error saving call transcript: {e}")
+            return None
+    
+    def get_tenant_call_logs(
+        self,
+        tenant_id: str,
+        limit: int = 50,
+        start_date: str = None,
+        end_date: str = None
+    ) -> list:
+        """
+        Get call logs for a specific tenant.
+        Returns newest first.
+        """
+        try:
+            collection_id = self.get_transcript_collection_for_tenant(tenant_id)
+            
+            result = self._make_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/{collection_id}/documents"
+            )
+            
+            logs = result.get("documents", []) if result else []
+            
+            # Filter by date if provided
+            if start_date:
+                logs = [l for l in logs if l.get("created_at", "") >= start_date]
+            if end_date:
+                logs = [l for l in logs if l.get("created_at", "") <= end_date]
+            
+            # Sort by created_at descending (newest first)
+            logs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+            
+            return logs[:limit]
+        except ValueError as e:
+            logger.error(f"Tenant isolation error: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching tenant call logs: {e}")
+            return []
 
 
 db_service = AppwriteService()

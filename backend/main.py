@@ -2,7 +2,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
-from api import twilio, motel, voice, notifications, actions, saranda
+from api import twilio, motel, voice, notifications, actions, saranda, stripe
 # NOTE: WhatsApp chat agent and dashboard were deleted
 # from api import chat, dashboard
 
@@ -19,6 +19,23 @@ logging.basicConfig(
 
 # Create FastAPI app (New Relic auto-instruments ASGI apps)
 app = FastAPI(title=settings.PROJECT_NAME)
+
+# Scheduler for background jobs
+from services.scheduled_jobs.scheduler import start_scheduler, shutdown_scheduler
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on application startup."""
+    logging.info("🚀 Starting Coal Creek CRM backend...")
+    start_scheduler()
+    logging.info("✅ Application startup complete")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on application shutdown."""
+    logging.info("🛑 Shutting down application...")
+    shutdown_scheduler()
+    logging.info("✅ Application shutdown complete")
 
 # CORS middleware for dashboard frontend
 app.add_middleware(
@@ -45,6 +62,7 @@ app.include_router(motel.router, tags=["motel"])
 app.include_router(notifications.router, prefix="/api", tags=["notifications"])
 app.include_router(actions.router, prefix="/api", tags=["actions"])
 app.include_router(saranda.router, prefix="/api/saranda", tags=["saranda"])
+app.include_router(stripe.router, prefix="/api", tags=["stripe"])
 
 @app.get("/")
 def read_root():

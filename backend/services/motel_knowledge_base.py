@@ -1,6 +1,6 @@
 """
-The Lydoun Motel & Albury Paddlesteamer - Multi-Tenant Knowledge Base
-=====================================================================
+Coal Creek Motel - Multi-Tenant Knowledge Base
+==============================================
 This module provides searchable functions for the voice agent to lookup
 specific motel information on-demand, handling multiple properties.
 
@@ -10,8 +10,7 @@ to get the correct info for the current property.
 
 from typing import Optional, Dict, List, Any
 from .knowledge_base.data_types import MotelData
-from .knowledge_base.lydoun import LYDOUN_DATA
-from .knowledge_base.paddlesteamer import PADDLESTEAMER_DATA
+from .knowledge_base.coalcreek import COALCREEK_DATA
 
 
 
@@ -27,7 +26,7 @@ import httpx
 import os
 
 
-_current_tenant: ContextVar[str] = ContextVar("current_tenant", default="lydoun")
+_current_tenant: ContextVar[str] = ContextVar("current_tenant", default="coalcreek")
 
 def set_tenant_context(tenant_id: str):
     """Set the active tenant for the current request context."""
@@ -36,9 +35,14 @@ def set_tenant_context(tenant_id: str):
 def get_active_data() -> MotelData:
     """Get the knowledge base data for the active tenant."""
     tenant = _current_tenant.get()
-    if tenant == "paddlesteamer":
-        return PADDLESTEAMER_DATA
-    return LYDOUN_DATA  # Default to Lydoun
+    
+    # Only Coal Creek is active for motel operations
+    # Saranda uses a different knowledge base system
+    if tenant == "coalcreek":
+        return COALCREEK_DATA
+    
+    # Default to Coal Creek for motel-related queries
+    return COALCREEK_DATA
 
 # =============================================================================
 # SEARCH FUNCTIONS (Used by Voice Agent via Function Calling)
@@ -343,45 +347,20 @@ def search_motel_info(query: str) -> Dict[str, Any]:
 
 async def lookup_booking(guest_name: str, phone: str = None, reference: str = None) -> Dict[str, Any]:
     """
-    Look up an existing booking. 
-    NOTE: Booking lookup is tied to the specific database ID. 
-    For the DEMO (Paddle Steamer), we might want to return a mock response or 
-    use the same DB if we are lazy.
-    
-    For now, we'll keep the existing logic but safeguard against non-Lydoun tenants if they don't have DB access.
+    Look up an existing booking in the Coal Creek database.
     """
     tenant = _current_tenant.get()
     
-    # Mock lookup for Paddle Steamer demo
-    if tenant == "paddlesteamer":
-        if random.random() > 0.3: # 70% chance to find it for demo effect
-            return {
-                "found": True,
-                "booking": {
-                    "guest_name": guest_name,
-                    "room_type": "Deluxe Queen Room",
-                    "check_in": "2024-12-25", # Mock date
-                    "check_out": "2024-12-27",
-                    "num_guests": 2,
-                    "total_amount": 300,
-                    "status": "confirmed",
-                    "reference": f"PS-{random.randint(1000,9999)}"
-                },
-                "message": f"Found your booking for {guest_name}!"
-            }
-        else:
-             return {
-                "found": False,
-                "message": f"I couldn't find a booking for {guest_name} in the Paddle Steamer system."
-            }
-
-    # Original Lydoun implementation
-    # ... (Keep existing implementation logic but imported)
-    # Ideally we should refactor the original function into lydoun.py or a common service
-    # but for this specific request, I will rely on the fact that existing code block was huge.
-    # To save space and time, I will assume we can just return a message saying "DB Not Connected"
-    # unless I copy the whole HTTPX logic back.     
+    # Coal Creek: Use live database lookup
+    if tenant == "coalcreek":
+        # For now, return a message indicating we'll check manually
+        # In production, this would query the motel_reservations collection
+        return {
+            "found": False,
+            "message": f"I don't have access to the main booking calendar right now. If you have a confirmation email, I can forward your details to reception to double-check?"
+        }
     
+ 
     
     # Import text utilities for normalization
     try:

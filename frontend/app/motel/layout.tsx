@@ -79,7 +79,7 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
 
             {/* Sidebar */}
             <aside
-                className={`fixed top-0 left-0 z-50 h-full bg-gradient-to-b from-[#8B2332] to-[#6B1A26] text-white transition-all duration-300 
+                className={`fixed top-0 left-0 z-50 h-full bg-gradient-to-b from-slate-900 to-slate-800 text-white transition-all duration-300 
                     ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} 
                     lg:translate-x-0
                     ${collapsed ? "lg:w-20" : "lg:w-64"}`}
@@ -89,19 +89,19 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                     {!collapsed && (
                         <div className="flex items-center gap-3">
                             {/* Logo placeholder */}
-                            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
-                                <span className="text-lg font-bold">L</span>
+                            <div className="w-10 h-10 bg-[#D4AF37]/20 text-[#D4AF37] rounded-lg flex items-center justify-center border border-[#D4AF37]/20">
+                                <span className="text-lg font-bold">C</span>
                             </div>
                             <div>
-                                <h1 className="font-bold text-lg leading-tight">The Lydoun</h1>
-                                <p className="text-xs text-white/60">Motel</p>
+                                <h1 className="font-bold text-lg leading-tight text-white">Coal Creek</h1>
+                                <p className="text-xs text-[#D4AF37]">Motel</p>
                             </div>
                         </div>
                     )}
                     {collapsed && (
                         <div className="w-full flex justify-center">
-                            <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
-                                <span className="text-lg font-bold">L</span>
+                            <div className="w-10 h-10 bg-[#D4AF37]/20 text-[#D4AF37] rounded-lg flex items-center justify-center border border-[#D4AF37]/20">
+                                <span className="text-lg font-bold">C</span>
                             </div>
                         </div>
                     )}
@@ -123,8 +123,8 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                             href={item.href}
                             className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200
                                 ${isActive(item.href)
-                                    ? "bg-white/20 text-white shadow-lg"
-                                    : "text-white/70 hover:bg-white/10 hover:text-white"
+                                    ? "bg-[#D4AF37]/10 text-[#D4AF37] shadow-lg border border-[#D4AF37]/20"
+                                    : "text-slate-400 hover:bg-white/5 hover:text-white"
                                 }
                                 ${collapsed ? "justify-center" : ""}`}
                             title={collapsed ? item.name : undefined}
@@ -140,7 +140,7 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                     {/* Collapse Toggle (desktop only) */}
                     <button
                         onClick={() => setCollapsed(!collapsed)}
-                        className="hidden lg:flex w-full items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-white/10 hover:text-white transition-colors mb-2"
+                        className="hidden lg:flex w-full items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-white/5 hover:text-white transition-colors mb-2"
                     >
                         <ChevronLeft className={`w-5 h-5 transition-transform ${collapsed ? "rotate-180" : ""}`} />
                         {!collapsed && <span className="font-medium">Collapse</span>}
@@ -155,7 +155,7 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                             } catch { }
                             window.location.href = "/login";
                         }}
-                        className={`flex items-center gap-3 px-4 py-3 rounded-xl text-white/70 hover:bg-red-500/20 hover:text-red-200 transition-colors w-full
+                        className={`flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-colors w-full
                             ${collapsed ? "justify-center" : ""}`}
                     >
                         <LogOut className="w-5 h-5" />
@@ -165,8 +165,8 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                     {/* Powered by Ovela */}
                     {!collapsed && (
                         <div className="mt-4 text-center">
-                            <p className="text-xs text-white/40">Powered by</p>
-                            <p className="text-sm font-semibold text-white/60">Ovela AI</p>
+                            <p className="text-xs text-slate-600">Powered by</p>
+                            <p className="text-sm font-semibold text-slate-500">Ovela AI</p>
                         </div>
                     )}
                 </div>

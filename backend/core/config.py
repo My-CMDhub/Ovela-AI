@@ -47,11 +47,15 @@ class Settings(BaseSettings):
     # Deepgram
     DEEPGRAM_API_KEY: str
     
+    # Stripe
+    STRIPE_SECRET_KEY: Optional[str] = ""
+    STRIPE_WEBHOOK_SECRET: Optional[str] = ""
+    
     # Staff Phone (for transfers)
     STAFF_PHONE_NUMBER: str = "+61492897718"
     
     # Demo Settings
-    TENANT_ID: str = "lydoun"  # Default tenant (lydoun, paddlesteamer, saranda)
+    TENANT_ID: str = "coalcreek"  # Default tenant (coalcreek is production)
     TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
 
     class Config:

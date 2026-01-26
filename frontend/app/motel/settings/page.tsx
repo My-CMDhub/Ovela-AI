@@ -17,9 +17,9 @@ interface BusinessSettings {
 }
 
 const DEFAULT_SETTINGS: BusinessSettings = {
-    business_name: "The Lydoun",
+    business_name: "Coal Creek Motel",
     business_hours: "24/7 Reception\nCheck-in: 2:00 PM\nCheck-out: 10:00 AM",
-    location: "76 Main Street, Chiltern VIC 3683",
+    location: "123 Coal Creek Rd, Korumburra VIC 3950",
     business_phone: "(03) 5726 1788",
     owner_email: ""
 };
@@ -124,19 +124,19 @@ export default function MotelSettingsPage() {
         <div className="max-w-3xl">
             {/* Header */}
             <div className="mb-8">
-                <h1 className="text-2xl font-semibold text-gray-900">Settings</h1>
-                <p className="mt-1 text-gray-500">
+                <h1 className="text-2xl font-semibold text-slate-900">Settings</h1>
+                <p className="mt-1 text-slate-500">
                     Manage your motel profile and account security
                 </p>
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-4 mb-8 border-b border-gray-200">
+            <div className="flex gap-4 mb-8 border-b border-slate-200">
                 <button
                     onClick={() => setActiveTab("general")}
                     className={`pb-3 px-1 text-sm font-medium transition ${activeTab === "general"
-                            ? "border-b-2 border-[#8B2332] text-[#8B2332]"
-                            : "text-gray-500 hover:text-gray-700"
+                        ? "border-b-2 border-[#D4AF37] text-slate-900"
+                        : "text-slate-500 hover:text-slate-700"
                         }`}
                 >
                     Business Info
@@ -144,8 +144,8 @@ export default function MotelSettingsPage() {
                 <button
                     onClick={() => setActiveTab("security")}
                     className={`pb-3 px-1 text-sm font-medium transition ${activeTab === "security"
-                            ? "border-b-2 border-[#8B2332] text-[#8B2332]"
-                            : "text-gray-500 hover:text-gray-700"
+                        ? "border-b-2 border-[#D4AF37] text-slate-900"
+                        : "text-slate-500 hover:text-slate-700"
                         }`}
                 >
                     Security
@@ -158,52 +158,52 @@ export default function MotelSettingsPage() {
                     <motion.div
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
-                        className="rounded-xl border border-gray-200 p-6 bg-white"
+                        className="rounded-xl border border-slate-200 p-6 bg-white"
                     >
                         <div className="flex items-center gap-2 mb-6">
-                            <Building2 className="w-5 h-5 text-[#8B2332]" />
-                            <h2 className="text-lg font-semibold text-gray-900">Motel Information</h2>
+                            <Building2 className="w-5 h-5 text-[#D4AF37]" />
+                            <h2 className="text-lg font-semibold text-slate-900">Motel Information</h2>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
-                                <label className="block text-sm font-medium mb-1 text-gray-700">
+                                <label className="block text-sm font-medium mb-1 text-slate-700">
                                     Motel Name
                                 </label>
                                 <input
                                     type="text"
                                     value={settings.business_name}
                                     onChange={(e) => setSettings({ ...settings, business_name: e.target.value })}
-                                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 focus:border-[#8B2332] outline-none transition"
+                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-900/20 focus:border-slate-900 outline-none transition"
                                 />
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium mb-1 text-gray-700">
+                                <label className="block text-sm font-medium mb-1 text-slate-700">
                                     Reception Phone
                                 </label>
                                 <input
                                     type="tel"
                                     value={settings.business_phone}
                                     onChange={(e) => setSettings({ ...settings, business_phone: e.target.value })}
-                                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 focus:border-[#8B2332] outline-none transition"
+                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-900/20 focus:border-slate-900 outline-none transition"
                                 />
                             </div>
 
                             <div className="md:col-span-2">
-                                <label className="block text-sm font-medium mb-1 text-gray-700">
+                                <label className="block text-sm font-medium mb-1 text-slate-700">
                                     Address
                                 </label>
                                 <input
                                     type="text"
                                     value={settings.location}
                                     onChange={(e) => setSettings({ ...settings, location: e.target.value })}
-                                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 focus:border-[#8B2332] outline-none transition"
+                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-900/20 focus:border-slate-900 outline-none transition"
                                 />
                             </div>
 
                             <div className="md:col-span-2">
-                                <label className="block text-sm font-medium mb-1 text-gray-700">
+                                <label className="block text-sm font-medium mb-1 text-slate-700">
                                     Notification Email
                                 </label>
                                 <input
@@ -211,9 +211,9 @@ export default function MotelSettingsPage() {
                                     value={settings.owner_email}
                                     onChange={(e) => setSettings({ ...settings, owner_email: e.target.value })}
                                     placeholder="your@email.com"
-                                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 focus:border-[#8B2332] outline-none transition"
+                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-900/20 focus:border-slate-900 outline-none transition"
                                 />
-                                <p className="text-xs text-gray-400 mt-1">
+                                <p className="text-xs text-slate-400 mt-1">
                                     Receive booking requests and callback notifications here
                                 </p>
                             </div>
@@ -225,18 +225,18 @@ export default function MotelSettingsPage() {
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.1 }}
-                        className="rounded-xl border border-gray-200 p-6 bg-white"
+                        className="rounded-xl border border-slate-200 p-6 bg-white"
                     >
                         <div className="flex items-center gap-2 mb-4">
-                            <Clock className="w-5 h-5 text-[#8B2332]" />
-                            <h2 className="text-lg font-semibold text-gray-900">Check-in / Check-out</h2>
+                            <Clock className="w-5 h-5 text-[#D4AF37]" />
+                            <h2 className="text-lg font-semibold text-slate-900">Check-in / Check-out</h2>
                         </div>
 
                         <textarea
                             value={settings.business_hours}
                             onChange={(e) => setSettings({ ...settings, business_hours: e.target.value })}
                             rows={3}
-                            className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 focus:border-[#8B2332] outline-none transition resize-none"
+                            className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-900/20 focus:border-slate-900 outline-none transition resize-none"
                         />
                     </motion.div>
 
@@ -249,7 +249,7 @@ export default function MotelSettingsPage() {
                     >
                         <button
                             onClick={fetchSettings}
-                            className="flex items-center gap-2 px-4 py-2.5 text-gray-600 hover:text-gray-800 transition"
+                            className="flex items-center gap-2 px-4 py-2.5 text-slate-600 hover:text-gray-800 transition"
                         >
                             <RefreshCw className="w-4 h-4" />
                             Reset
@@ -257,7 +257,7 @@ export default function MotelSettingsPage() {
                         <button
                             onClick={handleSave}
                             disabled={saving}
-                            className="flex items-center gap-2 px-6 py-2.5 bg-[#8B2332] text-white rounded-lg hover:bg-[#6B1A26] transition disabled:opacity-50"
+                            className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition disabled:opacity-50"
                         >
                             {saving ? (
                                 <>
@@ -285,15 +285,15 @@ export default function MotelSettingsPage() {
                     className="space-y-6"
                 >
                     {/* Change Password */}
-                    <div className="rounded-xl border border-gray-200 p-6 bg-white">
+                    <div className="rounded-xl border border-slate-200 p-6 bg-white">
                         <div className="flex items-center gap-2 mb-6">
-                            <Lock className="w-5 h-5 text-[#8B2332]" />
-                            <h2 className="text-lg font-semibold text-gray-900">Change Password</h2>
+                            <Lock className="w-5 h-5 text-[#D4AF37]" />
+                            <h2 className="text-lg font-semibold text-slate-900">Change Password</h2>
                         </div>
 
                         <form onSubmit={handleUpdatePassword} className="space-y-4 max-w-md">
                             <div>
-                                <label className="block text-sm font-medium mb-1 text-gray-700">
+                                <label className="block text-sm font-medium mb-1 text-slate-700">
                                     Current Password
                                 </label>
                                 <input
@@ -301,12 +301,12 @@ export default function MotelSettingsPage() {
                                     required
                                     value={passwordData.oldPassword}
                                     onChange={(e) => setPasswordData({ ...passwordData, oldPassword: e.target.value })}
-                                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 focus:border-[#8B2332] outline-none transition"
+                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-900/20 focus:border-slate-900 outline-none transition"
                                 />
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium mb-1 text-gray-700">
+                                <label className="block text-sm font-medium mb-1 text-slate-700">
                                     New Password
                                 </label>
                                 <input
@@ -315,13 +315,13 @@ export default function MotelSettingsPage() {
                                     minLength={8}
                                     value={passwordData.newPassword}
                                     onChange={(e) => setPasswordData({ ...passwordData, newPassword: e.target.value })}
-                                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 focus:border-[#8B2332] outline-none transition"
+                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-900/20 focus:border-slate-900 outline-none transition"
                                 />
-                                <p className="text-xs text-gray-500 mt-1">Must be at least 8 characters</p>
+                                <p className="text-xs text-slate-500 mt-1">Must be at least 8 characters</p>
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium mb-1 text-gray-700">
+                                <label className="block text-sm font-medium mb-1 text-slate-700">
                                     Confirm New Password
                                 </label>
                                 <input
@@ -329,7 +329,7 @@ export default function MotelSettingsPage() {
                                     required
                                     value={passwordData.confirmPassword}
                                     onChange={(e) => setPasswordData({ ...passwordData, confirmPassword: e.target.value })}
-                                    className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 focus:border-[#8B2332] outline-none transition"
+                                    className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-slate-900/20 focus:border-slate-900 outline-none transition"
                                 />
                             </div>
 
@@ -370,8 +370,8 @@ export default function MotelSettingsPage() {
                                 <ShieldCheck className="w-6 h-6 text-emerald-600" />
                             </div>
                             <div>
-                                <h3 className="font-semibold text-gray-900">Account Secured</h3>
-                                <p className="text-sm text-gray-600">
+                                <h3 className="font-semibold text-slate-900">Account Secured</h3>
+                                <p className="text-sm text-slate-600">
                                     Logged in as {user?.email}
                                 </p>
                             </div>

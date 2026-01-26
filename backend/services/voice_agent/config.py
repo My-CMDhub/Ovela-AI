@@ -6,7 +6,6 @@ Easy to switch between demo and production environments.
 """
 
 import random
-from .audio_assets import BACKCHANNEL_AUDIO
 
 
 # =============================================================================
@@ -106,7 +105,7 @@ MIN_SUBSTANTIVE_LENGTH = 3
 # =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
-def get_random_greeting(tenant_id: str = "lydoun") -> str:
+def get_random_greeting(tenant_id: str = "coalcreek") -> str:
     """Returns a random Australian-tone greeting for the specified tenant."""
     # Saranda Restaurant
     if tenant_id == "saranda":
@@ -131,21 +130,8 @@ def get_random_greeting(tenant_id: str = "lydoun") -> str:
         ]
         return random.choice(greetings)
     
-    if tenant_id == "paddlesteamer":
-        property_name = "Albury Paddlesteamer Motel"
-        short_name = "Paddlesteamer Motel"
-    else:
-        property_name = "The Lydoun Motel"
-        short_name = "Lydoun Motel"
-    
-    greetings = [
-        f"G'day! {short_name}, Ovela speaking. How can I help you today?",
-        f"Good day! {property_name}, this is Ovela. What can I do for you?",
-        f"Hello there! You've reached {property_name}. I'm Ovela, how can I help?",
-        f"Ovela is here, speaking from {short_name}. How can I assist you?",
-        f"Hi there! This is Ovela at {property_name}. What can I help you with?",
-    ]
-    return random.choice(greetings)
+    # Default fallback for unknown tenants
+    return "Hello! This is Ovela. How can I help you today?"
 
 
 def get_random_farewell() -> str:
@@ -158,7 +144,7 @@ def get_random_silence_prompt() -> str:
     return random.choice(SILENCE_PROMPTS)
 
 
-def get_random_soft_warning(tenant_id: str = "lydoun") -> str:
+def get_random_soft_warning(tenant_id: str = "coalcreek") -> str:
     """Returns a random soft warning for potential spam."""
     # Coal Creek Motel
     if tenant_id == "coalcreek":
@@ -170,20 +156,18 @@ def get_random_soft_warning(tenant_id: str = "lydoun") -> str:
         ]
         return random.choice(warnings)
     
-    if tenant_id == "paddlesteamer":
-        property_name = "Albury Paddlesteamer Motel"
-        short_name = "Paddlesteamer"
-    else:
-        property_name = "The Lydoun Motel"
-        short_name = "Lydoun"
+    # Saranda Restaurant
+    if tenant_id == "saranda":
+        warnings = [
+            "I notice you might be having trouble. Is there something specific I can help with about Saranda Cafe?",
+            "If you need a moment, no problem. I'm here to help with orders and reservations.",
+            "Just checking - were you after a pickup order or a table reservation?",
+            "I'm here to help with Saranda enquiries. What can I get for you?",
+        ]
+        return random.choice(warnings)
     
-    warnings = [
-        f"I notice you might be having trouble. Is there something specific I can help with about {short_name}?",
-        f"If you need a moment, no problem. I'm here to help with enquiries about {property_name}.",
-        f"Just checking - were you after information about {property_name}?",
-        f"I'm here to help with {short_name} enquiries. What dates were you thinking of staying?",
-    ]
-    return random.choice(warnings)
+    # Default fallback
+    return "I notice you might be having trouble. Is there something specific I can help with?"
 
 
 
@@ -191,21 +175,3 @@ def get_random_filler_prompt() -> str:
     """Returns a random filler prompt to hold the floor."""
     return random.choice(FILLER_PROMPTS)
 
-
-# =============================================================================
-# SMART BACKCHANNEL AUDIO (Zero-Latency)
-# =============================================================================
-# Imported from audio_assets.py to keep config clean
-
-
-# def get_backchannel_audio(type: str = "neutral") -> str:
-#     """
-#     Get a random pre-cached backchannel audio chunk.
-#     Returns Base64 string or None if empty.
-#     """
-#     options = BACKCHANNEL_AUDIO.get(type, [])
-#     # Filter out empty placeholders
-#     valid = [opt for opt in options if opt]
-#     if not valid:
-#         return None
-#     return random.choice(valid)

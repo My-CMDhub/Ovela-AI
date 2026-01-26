@@ -1,28 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Phone, Clock, User, RefreshCw, Trash2, CheckCircle, XCircle, MessageSquare, Plus } from "lucide-react";
-
-interface StaffNotification {
-    $id: string;
-    type: string;
-    status: "pending" | "in_progress" | "completed" | "dismissed";
-    customer_name: string;
-    customer_phone: string;
-    reason: string;
-    urgency: "low" | "medium" | "high";
-    staff_notes?: string;
-    extra_data?: string;  // JSON with action history
-    created_at?: string;
-    completed_at?: string;
-}
+import { useState, useEffect, useCallback } from "react";
+import { getColumns, StaffNotification } from "@/components/notifications/columns";
+import { DataTable } from "@/components/notifications/data-table";
+import { RefreshCw, Plus, CheckCircle, Smartphone } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ovela-12c561a30285.herokuapp.com";
 
 export default function NotificationsPage() {
     const [notifications, setNotifications] = useState<StaffNotification[]>([]);
-    const [counts, setCounts] = useState<{ pending: number; in_progress: number; completed: number; dismissed: number }>({ pending: 0, in_progress: 0, completed: 0, dismissed: 0 });
-    const [filter, setFilter] = useState<string>("pending");
     const [loading, setLoading] = useState(true);
     const [actionLoading, setActionLoading] = useState<string | null>(null);
 
@@ -42,44 +29,99 @@ export default function NotificationsPage() {
     });
     const [creating, setCreating] = useState(false);
 
-    const fetchNotifications = async () => {
+    const fetchNotifications = useCallback(async () => {
+        // Fetch generic list, large enough to cover recent history
+        // Implementing client-side filtering for smoother UX
         setLoading(true);
         try {
-            const url = filter
-                ? `${API_URL}/api/notifications?status=${filter}`
-                : `${API_URL}/api/notifications`;
-            const res = await fetch(url);
+            const res = await fetch(`${API_URL}/api/notifications?limit=200`);
             const data = await res.json();
-            setNotifications(data.notifications || []);
+            if (data.notifications) {
+                setNotifications(data.notifications);
+            }
         } catch (error) {
             console.error("Failed to fetch notifications:", error);
         } finally {
             setLoading(false);
         }
-    };
-
-    const fetchCounts = async () => {
-        try {
-            const res = await fetch(`${API_URL}/api/notifications/counts`);
-            const data = await res.json();
-            setCounts(data);
-        } catch (error) {
-            console.error("Failed to fetch counts:", error);
-        }
-    };
+    }, []);
 
     useEffect(() => {
         fetchNotifications();
-        fetchCounts();
 
         // Auto-refresh every 30 seconds
         const interval = setInterval(() => {
-            fetchNotifications();
-            fetchCounts();
+            // optimized to not set loading state on poll
+            fetch(`${API_URL}/api/notifications?limit=200`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.notifications) setNotifications(data.notifications);
+                })
+                .catch(console.error);
         }, 30000);
 
         return () => clearInterval(interval);
-    }, [filter]);
+    }, [fetchNotifications]);
+
+    const updateStatus = async (id: string, newStatus: StaffNotification["status"]) => {
+        setActionLoading(id);
+        try {
+            await fetch(`${API_URL}/api/notifications/${id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: newStatus })
+            });
+            // Update local state immediately
+            setNotifications(prev => prev.map(n => n.$id === id ? { ...n, status: newStatus } : n));
+        } catch (error) {
+            console.error("Failed to update status:", error);
+            alert("Failed to update status");
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
+    const deleteNotification = async (id: string) => {
+        if (!confirm("Are you sure you want to archive this notification?")) return;
+        setActionLoading(id);
+        try {
+            await fetch(`${API_URL}/api/notifications/${id}`, {
+                method: "DELETE"
+            });
+            setNotifications(prev => prev.filter(n => n.$id !== id));
+        } catch (error) {
+            console.error("Failed to delete:", error);
+            alert("Failed to delete notification");
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
+    const openNotesModal = (id: string, currentNotes: string) => {
+        setEditingId(id);
+        setNotesText(currentNotes);
+        setShowNotesModal(true);
+    };
+
+    const saveNotes = async () => {
+        if (!editingId) return;
+        setActionLoading(editingId);
+        try {
+            await fetch(`${API_URL}/api/notifications/${editingId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ staff_notes: notesText })
+            });
+            setNotifications(prev => prev.map(n => n.$id === editingId ? { ...n, staff_notes: notesText } : n));
+            setShowNotesModal(false);
+            setEditingId(null);
+        } catch (error) {
+            console.error("Failed to save notes:", error);
+            alert("Failed to save notes");
+        } finally {
+            setActionLoading(null);
+        }
+    };
 
     const createNotification = async () => {
         if (!createForm.customer_name || !createForm.customer_phone || !createForm.reason) {
@@ -98,383 +140,119 @@ export default function NotificationsPage() {
             fetchNotifications();
         } catch (error) {
             console.error("Failed to create:", error);
+            alert("Failed to create notification");
         } finally {
             setCreating(false);
         }
     };
 
-    const updateStatus = async (id: string, status: string) => {
-        setActionLoading(id);
-        try {
-            await fetch(`${API_URL}/api/notifications/${id}`, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ status })
-            });
-            fetchNotifications();
-        } catch (error) {
-            console.error("Failed to update:", error);
-        } finally {
-            setActionLoading(null);
-        }
-    };
-
-    const deleteNotification = async (id: string) => {
-        if (!confirm("Archive this notification? You can restore it later if needed.")) return;
-        setActionLoading(id);
-        try {
-            await fetch(`${API_URL}/api/notifications/${id}`, { method: "DELETE" });
-            fetchNotifications();
-        } catch (error) {
-            console.error("Failed to delete:", error);
-        } finally {
-            setActionLoading(null);
-        }
-    };
-
-    const openNotesModal = (id: string, currentNotes: string) => {
-        setEditingId(id);
-        setNotesText(currentNotes || "");
-        setShowNotesModal(true);
-    };
-
-    const saveNotes = async () => {
-        if (!editingId) return;
-        setActionLoading(editingId);
-        try {
-            await fetch(`${API_URL}/api/notifications/${editingId}`, {
-                method: "PATCH",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ staff_notes: notesText })
-            });
-            setShowNotesModal(false);
-            fetchNotifications();
-        } catch (error) {
-            console.error("Failed to save notes:", error);
-        } finally {
-            setActionLoading(null);
-        }
-    };
-
-    const formatDate = (dateStr?: string) => {
-        if (!dateStr) return "N/A";
-        try {
-            return new Date(dateStr).toLocaleDateString("en-AU", {
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-            });
-        } catch {
-            return dateStr;
-        }
-    };
-
-    const getUrgencyBadge = (urgency: string) => {
-        switch (urgency) {
-            case "high":
-                return <span className="px-2 py-1 bg-red-100 text-red-700 text-xs rounded-full">🔴 High</span>;
-            case "medium":
-                return <span className="px-2 py-1 bg-yellow-100 text-yellow-700 text-xs rounded-full">🟡 Medium</span>;
-            default:
-                return <span className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full">🟢 Low</span>;
-        }
-    };
-
-    const getTypeBadge = (type: string) => {
-        switch (type) {
-            case "callback_request":
-                return <span className="px-2 py-1 bg-blue-100 text-blue-700 text-xs rounded-full">📞 Callback</span>;
-            case "booking_approval":
-                return <span className="px-2 py-1 bg-purple-100 text-purple-700 text-xs rounded-full">📋 Approval</span>;
-            default:
-                return <span className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded-full">{type}</span>;
-        }
-    };
+    const columns = getColumns({
+        onStatusUpdate: updateStatus,
+        onAddNotes: openNotesModal,
+        onDelete: deleteNotification,
+    });
 
     return (
-        <div className="p-4 md:p-8">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+        <div className="space-y-6">
+            {/* Header */}
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Staff Notifications</h1>
-                    <p className="text-gray-500">Callback requests & human-in-loop operations</p>
-                </div>
-                <div className="flex gap-2">
-                    <button
-                        onClick={() => setShowCreateModal(true)}
-                        className="flex items-center gap-2 px-4 py-2 bg-[#8B2332] text-white rounded-lg hover:bg-[#6B1A26]"
-                    >
-                        <Plus className="w-4 h-4" />
-                        New Request
-                    </button>
-                    <button
-                        onClick={fetchNotifications}
-                        className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-lg hover:bg-gray-200 dark:text-black"
-                    >
-                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                        Refresh
-                    </button>
+                    <h1 className="text-2xl font-bold text-slate-900">Notifications</h1>
+                    <p className="text-slate-600 mt-1">
+                        Manage callbacks and staff alerts
+                    </p>
                 </div>
             </div>
 
-            {/* Filter Tabs - Now with counts */}
-            <div className="flex flex-wrap gap-2 mb-6">
-                {[
-                    { key: "pending", label: "Pending", count: counts.pending },
-                    { key: "in_progress", label: "In Progress", count: counts.in_progress },
-                    { key: "completed", label: "Completed", count: counts.completed },
-                    { key: "dismissed", label: "Dismissed", count: counts.dismissed },
-                    { key: "", label: "All", count: counts.pending + counts.in_progress + counts.completed + counts.dismissed },
-                ].map((tab) => (
-                    <button
-                        key={tab.key || "all"}
-                        onClick={() => setFilter(tab.key)}
-                        className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${filter === tab.key
-                            ? "bg-[#8B2332] text-white"
-                            : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                            }`}
-                    >
-                        {tab.label}
-                        {tab.count > 0 && (
-                            <span className={`px-1.5 py-0.5 text-xs rounded-full ${filter === tab.key
-                                ? "bg-white/20 text-white"
-                                : "bg-gray-200 text-gray-600"
-                                }`}>
-                                {tab.count}
-                            </span>
-                        )}
-                    </button>
-                ))}
-            </div>
+            {/* Data Table */}
+            <DataTable
+                columns={columns}
+                data={notifications}
+                loading={loading}
+                onCreate={() => setShowCreateModal(true)}
+            />
 
             {/* Create Modal */}
             {showCreateModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md shadow-xl">
-                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                            New Callback Request
-                        </h3>
+                    <div className="bg-white rounded-xl p-6 w-full max-w-lg shadow-xl">
+                        <h3 className="text-lg font-semibold text-slate-900 mb-4">Create Notification</h3>
                         <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Customer Name *</label>
-                                <input
-                                    type="text"
-                                    value={createForm.customer_name}
-                                    onChange={(e) => setCreateForm({ ...createForm, customer_name: e.target.value })}
-                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                                    placeholder="John Smith"
-                                />
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Customer Name</label>
+                                    <input
+                                        type="text"
+                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
+                                        value={createForm.customer_name}
+                                        onChange={e => setCreateForm({ ...createForm, customer_name: e.target.value })}
+                                        placeholder="John Doe"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number</label>
+                                    <input
+                                        type="text"
+                                        className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
+                                        value={createForm.customer_phone}
+                                        onChange={e => setCreateForm({ ...createForm, customer_phone: e.target.value })}
+                                        placeholder="0400 000 000"
+                                    />
+                                </div>
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone Number *</label>
-                                <input
-                                    type="tel"
-                                    value={createForm.customer_phone}
-                                    onChange={(e) => setCreateForm({ ...createForm, customer_phone: e.target.value })}
-                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                                    placeholder="0412 345 678"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Reason *</label>
-                                <input
-                                    type="text"
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Reason</label>
+                                <textarea
+                                    className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
                                     value={createForm.reason}
-                                    onChange={(e) => setCreateForm({ ...createForm, reason: e.target.value })}
-                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                                    placeholder="Room availability inquiry"
+                                    onChange={e => setCreateForm({ ...createForm, reason: e.target.value })}
+                                    rows={3}
+                                    placeholder="Needs to change booking dates..."
                                 />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Urgency</label>
-                                <select
-                                    value={createForm.urgency}
-                                    onChange={(e) => setCreateForm({ ...createForm, urgency: e.target.value })}
-                                    className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-[#8B2332]/20 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                                >
-                                    <option value="low">🟢 Low</option>
-                                    <option value="medium">🟡 Medium</option>
-                                    <option value="high">🔴 High</option>
-                                </select>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Urgency</label>
+                                <div className="flex gap-2">
+                                    {['low', 'medium', 'high'].map((u) => (
+                                        <button
+                                            key={u}
+                                            onClick={() => setCreateForm({ ...createForm, urgency: u })}
+                                            className={`flex-1 py-2 px-3 rounded-lg capitalize text-sm font-medium transition-colors ${createForm.urgency === u
+                                                ? 'bg-slate-900 text-white'
+                                                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                                }`}
+                                        >
+                                            {u}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
                         </div>
                         <div className="flex gap-3 justify-end mt-6">
                             <button
                                 onClick={() => setShowCreateModal(false)}
-                                className="px-4 py-2 text-gray-600 hover:text-gray-800"
+                                className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium"
                             >
                                 Cancel
                             </button>
-                            <button
+                            <Button
                                 onClick={createNotification}
                                 disabled={creating}
-                                className="flex items-center gap-2 px-4 py-2 bg-[#8B2332] text-white rounded-lg hover:bg-[#6B1A26] disabled:opacity-50"
+                                className="bg-slate-900 hover:bg-slate-800 text-white"
                             >
-                                {creating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                                {creating ? <RefreshCw className="w-4 h-4 animate-spin mr-2" /> : <Plus className="w-4 h-4 mr-2" />}
                                 Create
-                            </button>
+                            </Button>
                         </div>
                     </div>
-                </div>
-            )}
-
-            {/* Notifications List */}
-            {loading ? (
-                <div className="flex justify-center py-12">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
-                </div>
-            ) : notifications.length === 0 ? (
-                <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-xl">
-                    <Clock className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                    <p className="text-gray-500">No {filter.replace("_", " ")} notifications</p>
-                </div>
-            ) : (
-                <div className="space-y-4">
-                    {notifications.map((notif) => (
-                        <div
-                            key={notif.$id}
-                            className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 md:p-6 hover:shadow-md transition-shadow"
-                        >
-                            <div className="flex flex-col lg:flex-row justify-between items-start gap-4">
-                                <div className="space-y-2 flex-1">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        {getTypeBadge(notif.type)}
-                                        {getUrgencyBadge(notif.urgency)}
-                                    </div>
-
-                                    <div className="flex items-center gap-3">
-                                        <User className="w-5 h-5 text-gray-400" />
-                                        <span className="font-medium text-gray-900 dark:text-white">
-                                            {notif.customer_name}
-                                        </span>
-                                    </div>
-
-                                    <div className="flex items-center gap-3 text-gray-500">
-                                        <Phone className="w-4 h-4" />
-                                        <a href={`tel:${notif.customer_phone}`} className="hover:text-indigo-600">
-                                            {notif.customer_phone}
-                                        </a>
-                                    </div>
-
-                                    <p className="text-gray-700 dark:text-gray-300">
-                                        <span className="font-medium">Reason:</span> {notif.reason}
-                                    </p>
-
-                                    {notif.staff_notes && (
-                                        <p className="text-sm text-gray-500 italic bg-gray-50 dark:bg-gray-700 p-2 rounded">
-                                            📝 {notif.staff_notes}
-                                        </p>
-                                    )}
-
-                                    {/* Action History Log */}
-                                    {notif.extra_data && (() => {
-                                        try {
-                                            const data = JSON.parse(notif.extra_data);
-                                            if (data.link_consumed || data.first_action) {
-                                                return (
-                                                    <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/30 rounded-lg border-l-4 border-blue-400">
-                                                        <p className="text-xs font-semibold text-blue-700 dark:text-blue-300 mb-1">📋 Action Log:</p>
-                                                        <div className="text-xs text-blue-600 dark:text-blue-400 space-y-1">
-                                                            {data.first_action && (
-                                                                <p>✓ First action: <span className={`font-semibold ${data.first_action === 'approved' ? 'text-green-600' : 'text-red-600'}`}>{data.first_action.toUpperCase()}</span></p>
-                                                            )}
-                                                            {data.first_action_time && (
-                                                                <p>📅 Via email link at: {data.first_action_time}</p>
-                                                            )}
-                                                            {data.email_sent_via_dashboard && (
-                                                                <p>📧 Email sent via dashboard</p>
-                                                            )}
-                                                            {data.link_consumed && (
-                                                                <p className="text-gray-500 italic">🔒 Email links consumed (dashboard only)</p>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            }
-                                        } catch { return null; }
-                                        return null;
-                                    })()}
-
-                                    <p className="text-xs text-gray-400">
-                                        Received: {formatDate(notif.created_at)}
-                                        {notif.completed_at && ` • Completed: ${formatDate(notif.completed_at)}`}
-                                    </p>
-                                </div>
-
-                                {/* Actions */}
-                                <div className="flex flex-wrap gap-2 w-full lg:w-auto">
-                                    {notif.status === "pending" && (
-                                        <>
-                                            <button
-                                                onClick={() => updateStatus(notif.$id, "in_progress")}
-                                                disabled={actionLoading === notif.$id}
-                                                className="flex items-center gap-2 px-3 py-2 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 disabled:opacity-50"
-                                            >
-                                                <Clock className="w-4 h-4" />
-                                                In Progress
-                                            </button>
-                                            <button
-                                                onClick={() => updateStatus(notif.$id, "completed")}
-                                                disabled={actionLoading === notif.$id}
-                                                className="flex items-center gap-2 px-3 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 disabled:opacity-50"
-                                            >
-                                                <CheckCircle className="w-4 h-4" />
-                                                Complete
-                                            </button>
-                                        </>
-                                    )}
-
-                                    {notif.status === "in_progress" && (
-                                        <button
-                                            onClick={() => updateStatus(notif.$id, "completed")}
-                                            disabled={actionLoading === notif.$id}
-                                            className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
-                                        >
-                                            <CheckCircle className="w-4 h-4" />
-                                            Mark Complete
-                                        </button>
-                                    )}
-
-                                    {notif.status !== "dismissed" && (
-                                        <button
-                                            onClick={() => updateStatus(notif.$id, "dismissed")}
-                                            disabled={actionLoading === notif.$id}
-                                            title="Not needed / Invalid request (use Complete if you handled it)"
-                                            className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 disabled:opacity-50"
-                                        >
-                                            <XCircle className="w-4 h-4" />
-                                            Not Needed
-                                        </button>
-                                    )}
-
-                                    <button
-                                        onClick={() => openNotesModal(notif.$id, notif.staff_notes || "")}
-                                        className="flex items-center gap-2 px-3 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200"
-                                    >
-                                        <MessageSquare className="w-4 h-4" />
-                                        Notes
-                                    </button>
-
-                                    <button
-                                        onClick={() => deleteNotification(notif.$id)}
-                                        disabled={actionLoading === notif.$id}
-                                        title="Archive this notification"
-                                        className="flex items-center gap-2 px-3 py-2 bg-gray-200 text-gray-600 rounded-lg hover:bg-gray-300 disabled:opacity-50"
-                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    ))}
                 </div>
             )}
 
             {/* Notes Modal */}
             {showNotesModal && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl p-6 w-full max-w-md shadow-xl">
-                        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                    <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
+                        <h3 className="text-lg font-semibold text-slate-900 mb-4">
                             Staff Notes
                         </h3>
                         <textarea
@@ -482,27 +260,27 @@ export default function NotificationsPage() {
                             onChange={(e) => setNotesText(e.target.value)}
                             placeholder="Add notes about this callback (e.g., 'Called back, left voicemail')"
                             rows={4}
-                            className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 rounded-lg focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none transition resize-none mb-4 dark:bg-gray-700 dark:text-white"
+                            className="w-full px-4 py-3 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900 outline-none transition resize-none mb-4"
                         />
                         <div className="flex gap-3 justify-end">
                             <button
                                 onClick={() => setShowNotesModal(false)}
-                                className="px-4 py-2 text-gray-600 hover:text-gray-800 transition"
+                                className="px-4 py-2 text-slate-600 hover:text-slate-800 transition font-medium"
                             >
                                 Cancel
                             </button>
-                            <button
+                            <Button
                                 onClick={saveNotes}
                                 disabled={actionLoading === editingId}
-                                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                                className="bg-slate-900 hover:bg-slate-800 text-white"
                             >
                                 {actionLoading === editingId ? (
-                                    <RefreshCw className="w-4 h-4 animate-spin" />
+                                    <RefreshCw className="w-4 h-4 animate-spin mr-2" />
                                 ) : (
-                                    <CheckCircle className="w-4 h-4" />
+                                    <CheckCircle className="w-4 h-4 mr-2" />
                                 )}
                                 Save Notes
-                            </button>
+                            </Button>
                         </div>
                     </div>
                 </div>

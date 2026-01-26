@@ -32,7 +32,7 @@ class AbuseProtection:
     - limit+ flags: Auto-hangup with polite message
     """
     
-    def __init__(self, tenant_id: str = "lydoun"):
+    def __init__(self, tenant_id: str = "coalcreek"):
         # Off-topic tracking
         self.off_topic_count = 0
         
@@ -48,15 +48,17 @@ class AbuseProtection:
         
         # Tenant-specific details
         self.tenant_id = tenant_id
-        if tenant_id == "coalcreek":
+        
+        if tenant_id == "saranda":
+            self.property_name = "Saranda Restaurant"
+            self.short_name = "Saranda"
+        elif tenant_id == "coalcreek":
             self.property_name = "Coal Creek Motel"
             self.short_name = "Coal Creek"
-        elif tenant_id == "paddlesteamer":
-            self.property_name = "Albury Paddlesteamer Motel"
-            self.short_name = "Paddlesteamer"
         else:
-            self.property_name = "The Lydoun Motel"
-            self.short_name = "Lydoun"
+            # Generic Fallback for unknown tenants
+            self.property_name = "Our Business"
+            self.short_name = "Staff"
     
     def set_call_start_time(self, start_time: float):
         """Set when the call started for duration monitoring."""

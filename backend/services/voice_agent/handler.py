@@ -42,7 +42,6 @@ from .config import (
     get_random_filler_prompt,
 )
 from .prompts import get_system_prompt
-from .demo_prompts import get_demo_prompt, get_demo_greeting, is_demo_mode
 from .abuse_protection import AbuseProtection
 from .silence_detection import SilenceMonitor
 from .functions import get_booking_functions, get_saranda_functions, SarandaFunctionDispatcher
@@ -133,8 +132,7 @@ class VoiceAgentHandler:
         self.is_demo_call = False  # Set in _handle_twilio_start based on custom parameters
         
         # Multi-tenant support
-        # Demo calls → "ovela_demo", Production calls → resolved from phone or default "lydoun"
-        self.tenant_id = "ovela_demo"  # Default to demo, updated in _handle_twilio_start
+        self.tenant_id = "coalcreek"  # Default to coalcreek
         self.demo_type = None
         
         # Smart Memory (for latency optimization & amnesia fix)
@@ -204,13 +202,13 @@ class VoiceAgentHandler:
                     "provider": {
                         "type": "deepgram",
                         "model": "nova-3",
-                        "endpointing": 350,  # Reduced from 500ms - safe human-natural threshold
+                        "endpointing": 350,  
                         "smart_format": True
                     }
                 },
                 "think": self._get_llm_config(),
                 "speak": self._get_tts_config(),
-                "greeting": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else (None if self.is_demo_call else self._get_active_greeting())
+                "greeting": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else self._get_active_greeting()
             }
         }
     
@@ -252,22 +250,12 @@ class VoiceAgentHandler:
     
     
     def _get_active_prompt(self) -> str:
-        """Get the active prompt - demo prompt if configured, otherwise motel."""
-        demo_prompt = get_demo_prompt(
-            current_date=datetime.now(ZoneInfo("Australia/Perth")).strftime("%A, %d %B %Y"),
-            current_time=datetime.now(ZoneInfo("Australia/Perth")).strftime("%I:%M %p"),
-            demo_type=self.demo_type
+        """Get the active prompt based on tenant."""
+        base_prompt = get_system_prompt(
+            current_date=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%A, %d %B %Y"),
+            current_time=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%I:%M %p"),
+            tenant_id=self.tenant_id
         )
-        base_prompt = ""
-        if demo_prompt:
-            logger.info(f"Using DEMO prompt mode")
-            base_prompt = demo_prompt
-        else:
-            base_prompt = get_system_prompt(
-                current_date=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%A, %d %B %Y"),
-                current_time=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%I:%M %p"),
-                tenant_id=self.tenant_id
-            )
         
         # Smart Memory Injection
         memory_context = ""
@@ -287,13 +275,13 @@ class VoiceAgentHandler:
         """Get the correct function definitions based on tenant."""
         if self.tenant_id == "saranda":
             return get_saranda_functions()
+        elif self.tenant_id == "coalcreek":
+            return get_coalcreek_functions()
         return get_booking_functions()
     
     def _get_active_greeting(self) -> str:
-        """Get the active greeting - demo greeting if configured, otherwise motel."""
-        if is_demo_mode() or self.is_demo_call:
-            return get_demo_greeting()
-        return get_random_greeting(self.tenant_id)  # Pass tenant_id for property-specific greeting
+        """Get the active greeting based on tenant."""
+        return get_random_greeting(self.tenant_id)
     
     def _get_tts_config(self) -> dict:
         """
@@ -388,19 +376,17 @@ class VoiceAgentHandler:
         call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
         
         # Multi-tenant: Resolve tenant_id
-        # 1. Explicit tenant_id (e.g. "paddlesteamer")
+        # 1. Explicit tenant_id from custom_params
         # 2. Demo flag -> "ovela_demo"
-        # 3. Default -> "lydoun"
+        # 3. Default -> settings.TENANT_ID (coalcreek)
         
         explicit_tenant = custom_params.get("tenant_id")
         
         if explicit_tenant:
             self.tenant_id = explicit_tenant
-        elif self.is_demo_call:
-            self.tenant_id = "ovela_demo"
         else:
-            # Fallback to environment variable (default "lydoun")
-            self.tenant_id = settings.TENANT_ID
+            # Fallback to configured tenant or coalcreek
+            self.tenant_id = settings.TENANT_ID or "coalcreek" 
             
         # Set context for knowledge base so tool calls use correct data
         set_tenant_context(self.tenant_id)
@@ -422,6 +408,15 @@ class VoiceAgentHandler:
                 abuse_protection=self.abuse_protection
             )
             logger.info("Using Saranda restaurant function dispatcher")
+        elif self.tenant_id == "coalcreek":
+            from .functions import CoalCreekFunctionDispatcher
+            self.function_dispatcher = CoalCreekFunctionDispatcher(
+                db_service=db_service,
+                user_phone=self.user_phone,
+                save_reservation_fn=self._save_motel_reservation,
+                abuse_protection=self.abuse_protection
+            )
+            logger.info("Using Coal Creek specific function dispatcher")
         else:
             self.function_dispatcher = FunctionDispatcher(
                 db_service=db_service,

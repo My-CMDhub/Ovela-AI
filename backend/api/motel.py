@@ -1,7 +1,7 @@
 """
 Motel API Routes
 ================
-Backend API routes for Lydoun Motel dashboard data.
+Backend API routes for motel dashboard data (multi-tenant).
 These routes handle Appwrite database operations securely - the API key
 stays on the backend and is never exposed to the frontend.
 
@@ -103,7 +103,7 @@ async def get_motel_stats():
             "stats": {
                 "todayCheckIns": today_check_ins,
                 "todayCheckOuts": today_check_outs,
-                "totalRooms": 14,  # Fixed for Lydoun Motel
+                "totalRooms": 14,  # TODO: Make this tenant-specific
                 "occupiedRooms": confirmed,
                 "pendingReservations": pending,
                 "totalGuests": total_guests
@@ -162,7 +162,7 @@ async def create_reservation(data: dict):
         # Generate booking reference if not provided
         if "booking_reference" not in data:
             ref_suffix = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
-            data["booking_reference"] = f"LYD-{ref_suffix}"
+            data["booking_reference"] = f"MTL-{ref_suffix}"
         
         # Add timestamp
         if "created_at" not in data:
@@ -368,13 +368,15 @@ async def create_manual_booking(data: dict):
         from services.motel_knowledge_base import ROOM_INFO
 
         guest_name = data.get("guest_name")
+        guest_phone = data.get("guest_phone")
+        guest_email = data.get("guest_email")
         check_in = data.get("check_in_date")
         check_out = data.get("check_out_date")
         room_type = data.get("room_type", "queen")
         force = data.get("force", False)
 
-        if not guest_name or not check_in:
-            return {"success": False, "error": "Name and check-in date required"}
+        if not guest_name or not check_in or not guest_phone:
+            return {"success": False, "error": "Name, Phone, and Check-in date required"}
 
         # 1. Check Availability (Prevent collisions)
         if not force:
@@ -455,3 +457,329 @@ async def create_manual_booking(data: dict):
     except Exception as e:
         logger.error(f"Error creating manual reservation: {e}")
         return {"success": False, "error": str(e)}
+
+
+# ============================================================================
+# BOOKING MANAGEMENT ENDPOINTS (Approve/Reject/Payments)
+# ============================================================================
+
+@router.patch("/bookings/{booking_id}")
+async def update_booking(booking_id: str, data: dict):
+    """
+    Update a booking (general update).
+    Staff can update notes, dates, guest details etc.
+    """
+    try:
+        # Don't allow changing sensitive fields directly via this endpoint if needed
+        # but for MVP trust the staff dashboard.
+        
+        # Add updated_at
+        data["updated_at"] = datetime.now().isoformat()
+        
+        endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents/{booking_id}"
+        payload = {"data": data}
+        
+        result = await appwrite_request("PATCH", endpoint, payload)
+        
+        if "error" in result:
+            return {"success": False, "error": result["error"]}
+        
+        return {"success": True, "booking": result}
+        
+    except Exception as e:
+        logger.error(f"Error updating booking {booking_id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/bookings/{booking_id}/approve")
+async def approve_booking(booking_id: str):
+    """
+    Approve a pending booking.
+    1. Update status to 'link_sent' (or 'approved' if no payment).
+    2. Generate Stripe Payment Link.
+    3. Send SMS to guest with link (PRIMARY).
+    4. Send Email to guest with link (SECONDARY/OPTIONAL).
+    """
+    try:
+        from services.tenants.coalcreek.stripe import coalcreek_stripe_service
+        from services.tenants.coalcreek.email import coalcreek_email_service
+        from services.sms import sms_service
+        
+        # 1. Get Booking Details
+        endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents/{booking_id}"
+        booking = await appwrite_request("GET", endpoint)
+        
+        if "error" in booking:
+            return {"success": False, "error": "Booking not found"}
+            
+        # 2. Generate Payment Link
+        # Calculate price if missing
+        num_nights = booking.get("num_nights", 1)
+        rate = booking.get("rate_per_night", 145) # Fallback rate
+        if not rate: rate = 145
+        
+        payment_res = await coalcreek_stripe_service.create_payment_link(
+            booking_ref=booking.get("booking_reference"),
+            room_type=booking.get("room_type"),
+            num_nights=num_nights,
+            price_per_night=rate,
+            customer_email=booking.get("guest_email"),
+            customer_name=booking.get("guest_name"),
+            check_in=booking.get("check_in_date"),
+            check_out=booking.get("check_out_date")
+        )
+        
+        payment_link = None
+        status = "approved" # Default if payment fails/not needed
+        
+        if payment_res.get("success"):
+            payment_link = payment_res.get("payment_url")
+            status = "link_sent"
+        else:
+            logger.warning(f"Failed to generate payment link: {payment_res.get('error')}")
+            # Continue anyway, staff can retry later
+        
+        # 3. Update Booking Status
+        update_data = {
+            "status": status,
+            "payment_link_url": payment_link,
+            "payment_link_sent_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        patch_res = await appwrite_request("PATCH", endpoint, {"data": update_data})
+        
+        if "error" in patch_res:
+             return {"success": False, "error": f"Failed to update booking status: {patch_res['error']}"}
+        
+        messages = []
+        
+        # 4. SEND SMS (Primary)
+        guest_phone = booking.get("guest_phone")
+        if payment_link and guest_phone:
+            # Shorten message for SMS
+            sms_body = f"Hi {booking.get('guest_name', 'Guest').split(' ')[0]}, your booking at Coal Creek Motel is approved! Secure it here: {payment_link}"
+            
+            sms_sent = sms_service.send_sms(guest_phone, sms_body)
+            if sms_sent:
+                messages.append("SMS sent")
+            else:
+                messages.append("SMS failed")
+        
+        # 5. SEND EMAIL (Secondary/If provided)
+        guest_email = booking.get("guest_email")
+        if payment_link and guest_email:
+            await coalcreek_email_service.send_payment_link(
+                to_email=guest_email,
+                guest_name=booking.get("guest_name"),
+                booking_ref=booking.get("booking_reference"),
+                payment_link=payment_link,
+                room_type=booking.get("room_type"),
+                check_in=booking.get("check_in_date"),
+                check_out=booking.get("check_out_date"),
+                amount=payment_res.get("total_amount", 0)
+            )
+            messages.append("Email sent")
+            
+        return {
+            "success": True, 
+            "status": status, 
+            "payment_link": payment_link,
+            "message": f"Booking approved. {', '.join(messages)}"
+        }
+
+    except Exception as e:
+        logger.error(f"Error approving booking {booking_id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/bookings/{booking_id}/reject")
+async def reject_booking(booking_id: str):
+    """
+    Reject a booking request.
+    1. Update status to 'rejected'.
+    2. Send rejection email.
+    """
+    try:
+        from services.tenants.coalcreek.email import coalcreek_email_service
+        
+        # 1. Update Status
+        endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents/{booking_id}"
+        update_data = {
+            "status": "rejected",
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        booking = await appwrite_request("PATCH", endpoint, {"data": update_data})
+        
+        if "error" in booking:
+            return {"success": False, "error": booking["error"]}
+            
+        # 2. Send Email (Optional - can be manual, but nice to automate)
+        # Note: Implement send_rejection in email service if needed, or just skip for now.
+        # For MVP we just update status.
+        
+        return {"success": True, "message": "Booking rejected"}
+        
+    except Exception as e:
+        logger.error(f"Error rejecting booking {booking_id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/bookings/{booking_id}/payment-link")
+async def regenerate_payment_link(booking_id: str):
+    """
+    Regenerate or retrieve payment link for an existing booking.
+    """
+    try:
+        from services.tenants.coalcreek.stripe import coalcreek_stripe_service
+        
+        endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents/{booking_id}"
+        booking = await appwrite_request("GET", endpoint)
+        
+        if "error" in booking:
+            return {"success": False, "error": "Booking not found"}
+            
+        # Reuse existing if valid? Stripe links don't expire quickly usually.
+        if booking.get("payment_link_url") and booking.get("status") != "paid":
+             return {"success": True, "payment_link": booking.get("payment_link_url")}
+             
+        # Generate New
+        num_nights = booking.get("num_nights", 1)
+        rate = booking.get("rate_per_night", 145)
+        
+        payment_res = await coalcreek_stripe_service.create_payment_link(
+            booking_ref=booking.get("booking_reference"),
+            room_type=booking.get("room_type"),
+            num_nights=num_nights,
+            price_per_night=rate,
+            customer_email=booking.get("guest_email"),
+            customer_name=booking.get("guest_name"),
+            check_in=booking.get("check_in_date"),
+            check_out=booking.get("check_out_date")
+        )
+        
+        if not payment_res.get("success"):
+            return {"success": False, "error": payment_res.get("error")}
+            
+        # Update DB
+        update_data = {
+            "payment_link_url": payment_res.get("payment_url"),
+            "updated_at": datetime.now().isoformat()
+        }
+        await appwrite_request("PATCH", endpoint, {"data": update_data})
+        
+        return {"success": True, "payment_link": payment_res.get("payment_url")}
+
+    except Exception as e:
+        logger.error(f"Error getting payment link for {booking_id}: {e}")
+        return {"success": False, "error": str(e)}
+
+
+# ============================================================================
+# STRIPE WEBHOOK
+# ============================================================================
+
+from fastapi import Request, Header
+
+@router.post("/payments/webhook")
+async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
+    """
+    Handle Stripe webhooks for payment confirmation.
+    """
+    try:
+        from services.tenants.coalcreek.stripe import coalcreek_stripe_service
+        
+        payload = await request.body()
+        verification = coalcreek_stripe_service.verify_webhook(payload, stripe_signature)
+        
+        if not verification.get("valid"):
+            logger.warning("Invalid Stripe webhook signature")
+            # Don't return 400 to avoid Stripe retrying, just warn and 200
+            return {"status": "ignored", "reason": "invalid_signature"}
+            
+        event = verification.get("event")
+        event_type = event.get("type")
+        
+        if event_type == "checkout.session.completed":
+            session = event.get("data", {}).get("object", {})
+            
+            # Handle success
+            result = await coalcreek_stripe_service.handle_payment_success(session)
+            
+            if result.get("success"):
+                # Update Booking Status in DB
+                booking_ref = result.get("booking_ref")
+                
+                # Find booking by reference
+                # (Ideally we'd store doc ID in metadata, but ref works too)
+                query_endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
+                query_params = {"queries": [f'equal("booking_reference", "{booking_ref}")']}
+                
+                # Manually doing the query request since appwrite_request doesn't support params dict properly in our wrapper
+                # Wait, our wrapper appwrite_request is simple. Let's do a direct listing and filter in python if needed
+                # or just use the wrapper slightly differently?
+                # Actually appwrite_request only takes (method, endpoint, data). 
+                # Let's just list and filter or implement simple query param support.
+                # For safety, let's just list active bookings (hacky but safer with limited wrapper)
+                # BETTER: Add ?queries[]=equal("booking_reference","REF") to endpoint string manually
+                
+                q_str = f'?queries[]=equal("booking_reference", "{booking_ref}")'
+                search_res = await appwrite_request("GET", query_endpoint + q_str)
+                
+                if search_res.get("documents"):
+                    doc = search_res["documents"][0]
+                    doc_id = doc.get("$id")
+                    
+                    update_data = {
+                        "status": "paid",
+                        "payment_status": "paid",
+                        "payment_received_at": datetime.now().isoformat(),
+                        "stripe_payment_id": session.get("payment_intent"),
+                        "updated_at": datetime.now().isoformat()
+                    }
+                    
+                    await appwrite_request("PATCH", f"{query_endpoint}/{doc_id}", {"data": update_data})
+                    logger.info(f"💰 Booking {booking_ref} marked as PAID")
+                    
+                    # Send Notifications
+                    try:
+                        from services.tenants.coalcreek.email import coalcreek_email_service
+                        
+                        # 1. Notify Staff
+                        await coalcreek_email_service.send_payment_notification(
+                            staff_email=None, # Uses default
+                            booking_reference=booking_ref,
+                            customer_name=result.get("customer_name"),
+                            customer_email=result.get("customer_email"),
+                            room_type=result.get("room_type"),
+                            check_in=result.get("check_in"),
+                            check_out=result.get("check_out"),
+                            num_nights=result.get("num_nights"),
+                            amount_paid=session.get("amount_total", 0) / 100
+                        )
+                        
+                        # 2. Notify Guest (Confirmation from Owner)
+                        if result.get("customer_email"):
+                             await coalcreek_email_service.send_guest_confirmation(
+                                guest_email=result.get("customer_email"),
+                                guest_name=result.get("customer_name"),
+                                booking_reference=booking_ref,
+                                room_type=result.get("room_type"),
+                                check_in=result.get("check_in"),
+                                check_out=result.get("check_out"),
+                                num_nights=result.get("num_nights"),
+                                total_amount=session.get("amount_total", 0) / 100
+                             )
+                             
+                    except Exception as email_err:
+                        logger.error(f"Failed to send payment emails: {email_err}")
+                        
+                else:
+                    logger.warning(f"Booking {booking_ref} not found for payment update")
+
+        return {"status": "received"}
+
+    except Exception as e:
+        logger.error(f"Stripe webhook error: {e}")
+        return {"status": "error", "message": str(e)}

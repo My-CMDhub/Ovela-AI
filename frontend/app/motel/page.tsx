@@ -146,7 +146,7 @@ export default function MotelDashboard() {
                         Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}!
                     </h1>
                     <p className="text-gray-600 mt-1">
-                        Here's what's happening at The Lydoun today
+                        Here's what's happening at Coal Creek Motel today
                     </p>
                 </div>
                 <div className="text-sm text-gray-500">
@@ -203,7 +203,7 @@ export default function MotelDashboard() {
                             </h2>
                             <a
                                 href="/motel/reservations"
-                                className="text-sm text-[#8B2332] hover:underline font-medium"
+                                className="text-sm text-[#D4AF37] hover:underline font-medium"
                             >
                                 View all
                             </a>
@@ -228,7 +228,7 @@ export default function MotelDashboard() {
                                 >
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-4">
-                                            <div className="w-10 h-10 bg-[#8B2332]/10 rounded-xl flex items-center justify-center text-lg">
+                                            <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-lg">
                                                 {getRoomTypeIcon(res.room_type)}
                                             </div>
                                             <div>
@@ -288,21 +288,21 @@ export default function MotelDashboard() {
                     </div>
 
                     {/* Voice AI Status */}
-                    <div className="bg-gradient-to-br from-[#8B2332] to-[#6B1A26] rounded-2xl p-6 text-white">
+                    <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 text-white border border-[#D4AF37]/20">
                         <div className="flex items-center gap-3 mb-4">
-                            <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                            <div className="w-10 h-10 bg-[#D4AF37]/20 rounded-xl flex items-center justify-center text-[#D4AF37]">
                                 <Phone className="w-5 h-5" />
                             </div>
                             <div>
-                                <h3 className="font-semibold">Voice AI</h3>
-                                <p className="text-sm text-white/70">Ovela Receptionist</p>
+                                <h3 className="font-semibold text-white">Voice AI</h3>
+                                <p className="text-sm text-[#D4AF37]">Ovela Receptionist</p>
                             </div>
                         </div>
                         <div className="flex items-center gap-2 mb-3">
-                            <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+                            <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse shadow-[0_0_10px_rgba(74,222,128,0.5)]"></span>
                             <span className="text-sm">Active & Ready</span>
                         </div>
-                        <p className="text-sm text-white/60">
+                        <p className="text-sm text-slate-400">
                             Answering calls 24/7, booking rooms, and helping guests
                         </p>
                     </div>
