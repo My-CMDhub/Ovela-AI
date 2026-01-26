@@ -53,7 +53,7 @@ __pycache__/
 # Local Documentation (Do not push)
 future-plan/
 memory_bank/
-current-demoes/
+current-demoes-context/
 
 # guide files
 backend/redeploy-guide.md
