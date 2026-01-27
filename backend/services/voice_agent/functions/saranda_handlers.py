@@ -34,20 +34,15 @@ logger = logging.getLogger(__name__)
 # ORDER HANDLERS
 # =============================================================================
 
+# Square Integration
+from services.tenants.saranda.square_client import SquareClient, SquareOrderItem
+from services.tenants.saranda.square_flows import saranda_approval_tracker, SquareOrderRequest, ApprovalState
+
 async def handle_submit_order(args: dict, user_phone: str) -> dict:
     """
-    Submit a new pickup order for kitchen approval via WhatsApp.
+    Submit a new pickup order for kitchen approval via Square.
     
-    This does NOT confirm the order - it sends to HITL queue.
-    Customer will receive SMS when approved/rejected.
-    
-    Args:
-        args: {
-            items: [{name, quantity?, modifiers?}],
-            customer_name: str,
-            pickup_time?: str (e.g., "20 minutes", "6:30 PM")
-        }
-        user_phone: Customer phone from caller ID
+    Creates an order in Square (OPEN state) and tracks it for HITL approval.
     """
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -63,7 +58,6 @@ async def handle_submit_order(args: dict, user_phone: str) -> dict:
     # Check if restaurant is open
     is_open, rejection_reason = is_within_operating_hours(current_day, current_time)
     if not is_open:
-        # Get next opening time for helpful response
         next_open = get_next_opening_datetime()
         next_open_str = next_open.strftime("%A at %I:%M %p") if next_open else "tomorrow"
         
@@ -105,14 +99,14 @@ DO NOT promise later delivery."""
             "message": "What name should I put the order under?"
         }
     
-    # Default pickup time based on queue/busyness
+    # Default pickup time based on queue/busyness (Simple fallback)
     if not pickup_time:
-        is_busy = saranda_queue.is_busy
-        pickup_time = get_prep_time_estimate(is_busy)
+        pickup_time = "20 minutes"
     
-    # Parse items and calculate totals
-    order_items: List[OrderItem] = []
+    # Parse items for Square
+    square_items: List[SquareOrderItem] = []
     unrecognized = []
+    total_cents = 0
     
     for item_raw in items_raw:
         item_name = item_raw.get("name", "")
@@ -122,24 +116,29 @@ DO NOT promise later delivery."""
         # Look up in menu
         menu_item = get_menu_item_by_name(item_name)
         if menu_item:
-            # Calculate price with modifiers
+            # Calculate price
             base_price = menu_item["price"]
             modifier_cost = 0
             for mod in modifiers:
                 mod_key = mod.lower().replace(" ", "_")
                 modifier_cost += SARANDA_DATA["modifiers"].get(mod_key, 0)
             
-            order_items.append(OrderItem(
+            price_inc_mods = base_price + modifier_cost
+            price_cents = int(price_inc_mods * 100)
+            
+            total_cents += price_cents * quantity
+            
+            square_items.append(SquareOrderItem(
                 name=menu_item["name"],
-                price=base_price + modifier_cost,
                 quantity=quantity,
+                price_cents=price_cents,
                 modifiers=modifiers
             ))
         else:
             unrecognized.append(item_name)
     
     # Handle unrecognized items
-    if unrecognized and not order_items:
+    if unrecognized and not square_items:
         return {
             "success": False,
             "message": f"Sorry, I couldn't find '{unrecognized[0]}' on the menu. Could you try again or check our menu?"
@@ -148,58 +147,51 @@ DO NOT promise later delivery."""
     if unrecognized:
         logger.warning(f"Unrecognized items: {unrecognized}")
     
-    # Create order request
-    request_id = generate_request_id()
-    order = OrderRequest(
-        id=request_id,
-        customer_name=customer_name,
-        customer_phone=user_phone,
-        items=order_items,
-        pickup_time=pickup_time,
-        request_type=RequestType.NEW_ORDER
-    )
+    # --- SQUARE INTEGRATION ---
+    call_id = generate_request_id() # Using existing generator for short ID as call_id suffix
     
-    # Format summary for WhatsApp
-    items_summary = format_order_summary([
-        {"name": item.name, "quantity": item.quantity, "modifiers": item.modifiers}
-        for item in order_items
-    ])
-    
-    # Check queue status
-    queue_position = saranda_queue.queue_length
-    if queue_position > 0:
-        logger.info(f"Order {request_id} queued at position {queue_position + 1}")
-    
-    # Add to queue (this may activate immediately or queue it)
-    await saranda_queue.add(order)
-    
-    # If this order is now active, send WhatsApp
-    if saranda_queue.get_active() and saranda_queue.get_active().id == request_id:
-        try:
-            await staff_notification_service.send_whatsapp_order_approval(
-                request_id=request_id,
-                request_type="order",
-                customer_name=customer_name,
-                order_summary=items_summary,
-                pickup_time=pickup_time,
-                total_amount=order.total_amount
-            )
-            logger.info(f"✅ WhatsApp sent for order {request_id}")
-        except Exception as e:
-            logger.error(f"Failed to send WhatsApp: {e}")
-    
-    # Calculate total for the message
-    total = order.total_amount
-    
-    return {
-        "success": True,
-        "request_id": request_id,
-        "status": "pending_approval",
-        "total_amount": total,
-        "estimated_pickup": pickup_time,
-        "queue_position": queue_position,
-        "message": f"I've sent that through to the kitchen. {len(order_items)} item{'s' if len(order_items) > 1 else ''} totalling ${total:.2f}. They'll confirm shortly and you'll get a text. Pickup in about {pickup_time}."
-    }
+    try:
+        square_client = SquareClient()
+        order = await square_client.create_pickup_order(
+            customer_name=customer_name,
+            customer_phone=user_phone,
+            items=square_items,
+            pickup_time=pickup_time,
+            call_id=call_id
+        )
+        
+        # Format summary
+        items_summary = ", ".join([f"{item.quantity}x {item.name}" for item in square_items])
+        
+        # Track for HITL
+        request = SquareOrderRequest(
+            square_order_id=order.order_id,
+            square_order_version=order.version,
+            call_id=call_id,
+            request_id=call_id,
+            customer_name=customer_name,
+            customer_phone=user_phone,
+            pickup_time=pickup_time,
+            total_cents=int(order.total_cents),
+            items_summary=items_summary
+        )
+        saranda_approval_tracker.track(request)
+        
+        return {
+            "success": True,
+            "request_id": call_id,
+            "status": "pending_approval",
+            "total_amount": order.total_dollars,
+            "estimated_pickup": pickup_time,
+            "message": f"I've sent that through to the kitchen. {len(square_items)} item{'s' if len(square_items) > 1 else ''} totalling ${order.total_dollars:.2f}. They'll confirm shortly and you'll get a text. Pickup in about {pickup_time}."
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to create Square order: {e}")
+        return {
+            "success": False,
+            "message": "I'm having a bit of trouble connecting to the kitchen system properly. Could you give us a call directly?"
+        }
 
 
 async def handle_request_change(args: dict, user_phone: str) -> dict:

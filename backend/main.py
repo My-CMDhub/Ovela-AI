@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 from api import twilio, motel, voice, notifications, actions, saranda
+from api import saranda_square  
 # NOTE: WhatsApp chat agent and dashboard were deleted
 # from api import chat, dashboard
 
@@ -45,6 +46,7 @@ app.include_router(motel.router, tags=["motel"])
 app.include_router(notifications.router, prefix="/api", tags=["notifications"])
 app.include_router(actions.router, prefix="/api", tags=["actions"])
 app.include_router(saranda.router, prefix="/api/saranda", tags=["saranda"])
+app.include_router(saranda_square.router, prefix="/api", tags=["saranda-square"])
 
 @app.get("/")
 def read_root():
