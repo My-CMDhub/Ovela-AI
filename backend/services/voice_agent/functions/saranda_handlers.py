@@ -14,6 +14,12 @@ import logging
 import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from zoneinfo import ZoneInfo
+import asyncio
+from core.config import settings
+
+
+
 
 from services.saranda_flows import (
     OrderRequest, OrderItem, ReservationRequest,
@@ -44,8 +50,6 @@ async def handle_submit_order(args: dict, user_phone: str) -> dict:
     
     Creates an order in Square (OPEN state) and tracks it for HITL approval.
     """
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
     
     # Get current time in Perth timezone
     tz = ZoneInfo("Australia/Perth")
@@ -339,10 +343,7 @@ async def handle_request_reservation(args: dict, user_phone: str) -> dict:
             time: str,  # e.g., "7pm", "7:00 PM"
             notes?: str
         }
-    """
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    
+    """    
     customer_name = args.get("customer_name", "")
     party_size = args.get("party_size", 2)
     date = args.get("date", "")
@@ -560,7 +561,6 @@ class SarandaFunctionDispatcher:
     
     async def execute(self, function_name: str, args: dict) -> dict:
         """Execute a Saranda function with error handling."""
-        import asyncio
         
         TIMEOUT = 15.0
         
@@ -620,7 +620,6 @@ class SarandaFunctionDispatcher:
         
         # Transfer
         elif function_name == "transfer_to_staff":
-            from core.config import settings
             return {
                 "action": "transfer",
                 "transfer_to": getattr(settings, 'SARANDA_STAFF_PHONE', settings.STAFF_PHONE_NUMBER),

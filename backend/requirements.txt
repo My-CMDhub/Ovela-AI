@@ -14,3 +14,5 @@ websockets
 aiohttp
 PyJWT
 newrelic>=11.0.0
+squareup>=32.0.0
+streamlit>=1.30.0
