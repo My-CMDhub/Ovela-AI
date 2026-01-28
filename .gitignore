@@ -61,3 +61,4 @@ backend/redeploy-guide.md
 scripts/*.py
 !scripts/health_check.py
 .agent/
+logs
