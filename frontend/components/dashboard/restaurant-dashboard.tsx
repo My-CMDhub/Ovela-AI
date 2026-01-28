@@ -37,7 +37,7 @@ export default function RestaurantDashboard() {
         // Ideally we fetch from /api/motel/call-logs
         const fetchCalls = async () => {
             try {
-                const res = await fetch(`/api/dashboard/call-logs?limit=5`);
+                const res = await fetch(`/api/dashboard/call-logs?limit=5&tenant_id=${tenant.id}`);
                 if (res.ok) {
                     const data = await res.json();
                     if (data.success) {

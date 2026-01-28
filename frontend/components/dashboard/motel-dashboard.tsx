@@ -53,8 +53,8 @@ export default function MotelDashboard() {
     const fetchDashboardData = async () => {
         try {
             const [statsRes, reservationsRes] = await Promise.all([
-                fetch("/api/dashboard/stats"),
-                fetch("/api/dashboard/reservations?limit=5"),
+                fetch(`/api/dashboard/stats?tenant_id=${tenant.id}`),
+                fetch(`/api/dashboard/reservations?limit=5&tenant_id=${tenant.id}`),
             ]);
 
             if (statsRes.ok) {

@@ -74,7 +74,7 @@ async def appwrite_request(method: str, endpoint: str, data: dict = None) -> dic
 # ============================================================================
 
 @router.get("/stats")
-async def get_motel_stats():
+async def get_motel_stats(tenant_id: str = Query(default="coalcreek")):
     """Get dashboard statistics for the motel."""
     try:
         # Get all reservations to calculate stats
@@ -85,6 +85,11 @@ async def get_motel_stats():
             return {"success": False, "error": result["error"]}
         
         reservations = result.get("documents", [])
+        
+        # Filter by tenant
+        if tenant_id:
+            reservations = [r for r in reservations if r.get("tenant_id") == tenant_id]
+            
         today = datetime.now().strftime("%Y-%m-%d")
         
         # Calculate stats
@@ -138,8 +143,13 @@ async def get_reservations(
         documents = result.get("documents", [])
         
         # Filter by tenant_id (CRITICAL for multi-tenant)
-        if tenant_id:
-             documents = [d for d in documents if d.get("tenant_id") == tenant_id]
+        documents = result.get("documents", [])
+        
+        # Filter by tenant_id (CRITICAL for multi-tenant)
+        if not tenant_id:
+            return {"success": False, "error": "Tenant ID is required"}
+            
+        documents = [d for d in documents if d.get("tenant_id") == tenant_id]
         
         # Filter by status if provided
         if status:
@@ -238,8 +248,12 @@ async def get_guests(
              return {"success": False, "error": result["error"]}
              
         guests = result.get("documents", [])
-        if tenant_id:
-             guests = [g for g in guests if g.get("tenant_id") == tenant_id]
+        guests = result.get("documents", [])
+        
+        if not tenant_id:
+             return {"success": False, "error": "Tenant ID is required"}
+             
+        guests = [g for g in guests if g.get("tenant_id") == tenant_id]
              
         return {
             "success": True,
