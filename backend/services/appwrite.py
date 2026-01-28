@@ -1330,7 +1330,7 @@ class AppwriteService:
             if not result:
                 # Fallback: Query by slug if doc ID lookup failed
                 params = {
-                    "queries[]": [f'equal("slug", ["{tenant_id}"])']
+                    "queries": [f'equal("slug", "{tenant_id}")']
                 }
                 list_result = self._make_request(
                     "GET", 
@@ -1353,12 +1353,13 @@ class AppwriteService:
                     config = {}
             
             # Map to settings schema
+            # Screenshot 2 shows: name, slug, owner_email, config
             return {
-                "business_name": result.get("name", ""),
-                "business_hours": config.get("business_hours", ""), # Might not exist in config yet
+                "business_name": result.get("name") or result.get("business_name", ""),
+                "business_hours": config.get("business_hours", ""),
                 "location": config.get("location", ""),
-                "business_phone": result.get("twilio_phone", ""),
-                "owner_email": result.get("owner_email", "")
+                "business_phone": result.get("twilio_phone") or result.get("business_phone", ""),
+                "owner_email": result.get("owner_email", "") 
             }
             
         except Exception as e:

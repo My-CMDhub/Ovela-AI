@@ -20,14 +20,17 @@ async function proxyRequest(request: NextRequest, path: string) {
     // We rewrite here to ensure maximum compatibility.
     // /api/dashboard/settings -> /api/motel/settings
     // /api/dashboard/call-logs -> /api/motel/call-logs
-    let backendPath = path;
+    // Construct target URL
+    // BACKEND_URL normally doesn't have /api/ (e.g. herokuapp.com)
+    // path normally is just the suffix (e.g. 'settings')
+    let targetBase = BACKEND_URL;
+    if (targetBase.endsWith('/api')) targetBase = targetBase.replace(/\/api$/, '');
 
-    // We construct the target URL by swapping 'dashboard' for 'motel' effectively
-    // But since 'path' here is the *suffix* (e.g. 'settings'), we just append it to /api/motel
-    const targetUrl = `${BACKEND_URL}/api/motel/${path}${url.search}`;
+    // We use /api/motel/ specifically to hit the legacy-compatible route on the backend
+    const targetUrl = `${targetBase}/api/motel/${path}${url.search}`;
 
     try {
-        console.log(`[API Proxy] Rewrite: /api/dashboard/${path} -> ${targetUrl}`);
+        console.log(`[API Proxy] IN: /api/dashboard/${path} | OUT: ${targetUrl}`);
 
         const response = await fetch(targetUrl, {
             method: request.method,

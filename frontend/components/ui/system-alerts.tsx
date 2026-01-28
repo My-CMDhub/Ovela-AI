@@ -70,6 +70,11 @@ export default function SystemAlerts() {
         let interval: NodeJS.Timeout;
 
         const runFetch = async () => {
+            // If we already failed with 404, or if we have a sentinel unreadCount, stop polling.
+            if (unreadCount === -1) {
+                if (interval) clearInterval(interval);
+                return;
+            }
             // If we already failed with 404, don't try again
             if (!loading && alerts.length === 0 && unreadCount === -1) return;
             await fetchAlerts();
