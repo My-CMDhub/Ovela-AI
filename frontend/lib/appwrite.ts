@@ -14,7 +14,7 @@ const account = new Account(client);
 const databases = new Databases(client);
 
 // Dashboard database ID
-const DATABASE_ID = process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID || "ovela_db";
+const DATABASE_ID = process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID || "6947b8300005f5863f96";
 
 
 // ===========================================

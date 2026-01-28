@@ -63,7 +63,13 @@ app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 from api import dashboard
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(dashboard.router, prefix="/api/motel", tags=["motel_legacy"]) # Legacy support (webhooks)
-app.include_router(notifications.router, prefix="/api", tags=["notifications"])
+
+# Fix: Mount notifications under /api/motel so proxy works (dashboard/notifications -> motel/notifications)
+app.include_router(notifications.router, prefix="/api/dashboard", tags=["notifications"]) 
+app.include_router(notifications.router, prefix="/api/motel", tags=["notifications_legacy"])
+
+# Original mounts (keep for direct access if needed)
+app.include_router(notifications.router, prefix="/api", tags=["notifications_root"])
 app.include_router(actions.router, prefix="/api", tags=["actions"])
 app.include_router(saranda.router, prefix="/api/saranda", tags=["saranda"])
 app.include_router(stripe.router, prefix="/api", tags=["stripe"])

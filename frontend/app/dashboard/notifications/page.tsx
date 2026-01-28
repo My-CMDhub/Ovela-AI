@@ -35,7 +35,8 @@ export default function NotificationsPage() {
         // Implementing client-side filtering for smoother UX
         setLoading(true);
         try {
-            const res = await fetch(`${API_URL}/api/notifications?limit=200`);
+            // Route through dashboard proxy (mapped to /api/motel/notifications on backend)
+            const res = await fetch(`${API_URL}/api/dashboard/notifications?limit=200`);
             const data = await res.json();
             if (data.notifications) {
                 setNotifications(data.notifications);
@@ -53,7 +54,7 @@ export default function NotificationsPage() {
         // Auto-refresh every 30 seconds
         const interval = setInterval(() => {
             // optimized to not set loading state on poll
-            fetch(`${API_URL}/api/notifications?limit=200`)
+            fetch(`${API_URL}/api/dashboard/notifications?limit=200`)
                 .then(res => res.json())
                 .then(data => {
                     if (data.notifications) setNotifications(data.notifications);
