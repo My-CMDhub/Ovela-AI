@@ -143,7 +143,7 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                         return (
                             <Link
                                 key={item.name}
-                                href={item.href}
+                                href={`${item.href}?tenant=${tenant.id}`}
                                 className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200
                                     ${isActive(item.href)
                                         ? "shadow-lg border"

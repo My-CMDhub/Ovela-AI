@@ -961,3 +961,51 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                                 )
                         except Exception as ex:
                             logger.error(f"Failed to send expiry email: {ex}")
+
+# -----------------------------------------------------------------------------
+# SETTINGS
+# -----------------------------------------------------------------------------
+
+@router.get("/settings")
+async def get_settings(
+    tenant_id: str = Query(default="coalcreek", description="Tenant ID")
+):
+    """
+    Get business settings (Profile, Hours, etc).
+    Currently returns static/mock data until 'Business_Info' collection is fully migrated.
+    """
+    if tenant_id == "saranda":
+        return {
+            "success": True,
+            "settings": {
+                "business_name": "Saranda on Hutton",
+                "business_hours": "Reception: 8:00 AM - 8:00 PM\nCheck-in: 2:00 PM\nCheck-out: 10:00 AM",
+                "location": "The Entrance, NSW",
+                "business_phone": "0452557167",
+                "owner_email": "sarandacafe@gmail.com"
+            }
+        }
+    
+    # Default to Coal Creek
+    return {
+        "success": True,
+        "settings": {
+            "business_name": "Coal Creek Motel",
+            "business_hours": "24/7 Reception\nCheck-in: 2:00 PM\nCheck-out: 10:00 AM",
+            "location": "123 Coal Creek Rd, Korumburra VIC 3950",
+            "business_phone": "0492897718",
+            "owner_email": "coalcreekmotel@gmail.com"
+        }
+    }
+
+@router.post("/settings")
+async def update_settings(
+    settings: dict,
+    tenant_id: str = Query(default="coalcreek", description="Tenant ID")
+):
+    """
+    Update business settings.
+    Mock implementation for now.
+    """
+    # In future: Save to Appwrite 'Business_Info' collection for specific tenant
+    return {"success": True, "message": "Settings updated (Mock)"}

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Save, Building2, Clock, RefreshCw, Check, Lock, ShieldCheck, Phone } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTenant } from "@/contexts/TenantContext";
 import { account } from "@/lib/appwrite";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ovela-12c561a30285.herokuapp.com";
@@ -17,15 +18,16 @@ interface BusinessSettings {
 }
 
 const DEFAULT_SETTINGS: BusinessSettings = {
-    business_name: "Coal Creek Motel",
-    business_hours: "24/7 Reception\nCheck-in: 2:00 PM\nCheck-out: 10:00 AM",
-    location: "123 Coal Creek Rd, Korumburra VIC 3950",
-    business_phone: "(03) 5726 1788",
+    business_name: "Loading...",
+    business_hours: "",
+    location: "",
+    business_phone: "",
     owner_email: ""
 };
 
 export default function MotelSettingsPage() {
     const { user, logout } = useAuth();
+    const { tenant } = useTenant();
     const [activeTab, setActiveTab] = useState<"general" | "security">("general");
 
     // Settings State
@@ -41,15 +43,15 @@ export default function MotelSettingsPage() {
     const [updatingPassword, setUpdatingPassword] = useState(false);
 
     useEffect(() => {
-        fetchSettings();
-    }, []);
+        if (tenant) fetchSettings();
+    }, [tenant]);
 
     const fetchSettings = async () => {
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/settings`);
+            const res = await fetch(`${API_URL}/api/motel/settings?tenant_id=${tenant.id}`);
             const data = await res.json();
             if (data.success && data.settings) {
-                setSettings({ ...DEFAULT_SETTINGS, ...data.settings });
+                setSettings(data.settings);
             }
         } catch (error) {
             console.error("Error fetching settings:", error);
@@ -62,7 +64,7 @@ export default function MotelSettingsPage() {
         setSaving(true);
         setSaved(false);
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/settings`, {
+            const res = await fetch(`${API_URL}/api/motel/settings?tenant_id=${tenant.id}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(settings)
