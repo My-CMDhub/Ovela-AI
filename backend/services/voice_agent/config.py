@@ -131,11 +131,11 @@ def get_random_greeting(tenant_id: str = "coalcreek") -> str:
     # Coal Creek Motel
     if tenant_id == "coalcreek":
         greetings = [
-            "G'day! Coal Creek Motel, Ovela speaking. How can I help you today?",
-            "Hello! Thanks for calling Coal Creek Motel. What can I do for you?",
-            "Hi there! Coal Creek Motel speaking. Are you after a room or some information?",
-            "Good day! You've reached Coal Creek Motel in Korumburra. How can I help?",
-            "Welcome to Coal Creek Motel! This is Ovela. What can I assist you with?",
+            "G'day! Coal Creek Motel, Ovela speaking. Please note this call is recorded for quality and training purposes. How can I help you today?",
+            "Hello! Thanks for calling Coal Creek Motel. Just letting you know this call is recorded for quality and training. What can I do for you?",
+            "Hi there! Coal Creek Motel speaking. Please note calls are recorded for quality and training. Are you after a room or some information?",
+            "Good day! You've reached Coal Creek Motel in Korumburra. Calls are recorded for quality assurance. How can I help?",
+            "Welcome to Coal Creek Motel! This is Ovela. Please note this call is recorded for quality and training purposes. What can I assist you with?",
         ]
         return random.choice(greetings)
     
