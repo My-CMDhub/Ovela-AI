@@ -19,6 +19,13 @@ class AppwriteService:
         self.db_id = "ovela_db"
         self.motel_db_id = "6947b8300005f5863f96"  # Motel database for reservations + staff notifications
 
+    def _motel_request(self, method: str, path: str, data: dict = None, params: dict = None):
+        """Helper for Motel DB requests (different from main DB)."""
+        # Prefix path with Motel DB base if not full path
+        if not path.startswith("/databases/"):
+             path = f"/databases/{self.motel_db_id}{path}"
+        return self._make_request(method, path, data, params)
+
     def _make_request(self, method: str, path: str, data: dict = None, params: dict = None):
         """Direct HTTP request to Appwrite API."""
         headers = {
@@ -360,6 +367,97 @@ class AppwriteService:
         except Exception as e:
             logger.error(f"Error fetching requests by phone: {e}")
             return []
+        except Exception as e:
+            logger.error(f"Error fetching requests by phone: {e}")
+            return []
+
+    # ============ MOTEL GUESTS (CRM) ============
+
+    def upsert_motel_guest(self, 
+                          guest_name: str, 
+                          guest_phone: str, 
+                          guest_email: str = None, 
+                          tenant_id: str = "coalcreek", 
+                          status: str = "inquiry") -> dict:
+        """
+        Create or Update a guest in the Motel CRM.
+        tenant_id: Critical for multi-tenant scalability.
+        status: 'inquiry' (called but didn't book) or 'guest' (has booking).
+        """
+        if not guest_phone:
+            return None
+            
+        try:
+            # 1. Search for existing guest by phone AND tenant_id
+            # We scope guests to the tenant (different motels might have same guest but different profile)
+            # OR we could have a global guest ID, but for now tenant-scoped is safer for data privacy.
+            queries = [
+                f'equal("phone", "{guest_phone}")',
+                f'equal("tenant_id", "{tenant_id}")'
+            ]
+            params = {'queries': queries}
+            
+            endpoint = f"/collections/motel_guests/documents"
+            result = self._motel_request("GET", endpoint, params=params)
+            
+            existing_doc = None
+            if result and result.get("documents"):
+                existing_doc = result["documents"][0]
+            
+            now = datetime.now().isoformat()
+            
+            # Data to save
+            data = {
+                "name": guest_name,
+                "phone": guest_phone,
+                "tenant_id": tenant_id,
+                "updated_at": now
+            }
+            if guest_email:
+                data["email"] = guest_email
+            
+            # Logic: If existing status is 'guest', don't downgrade to 'inquiry'
+            # If new status is 'guest', upgrade.
+            if existing_doc:
+                current_status = existing_doc.get("status", "inquiry")
+                if status == "guest" or current_status != "guest":
+                    data["status"] = status
+            else:
+                data["status"] = status
+
+            # 2. Update or Create
+            if existing_doc:
+                doc_id = existing_doc.get("$id")
+                # Merge: don't overwrite email with None if existing has it
+                if not guest_email and existing_doc.get("email"):
+                    del data["email"]
+                    
+                self._motel_request(
+                    "PATCH", 
+                    f"/collections/motel_guests/documents/{doc_id}",
+                    data={"data": data}
+                )
+                logger.info(f"Updated motel guest ({tenant_id}): {guest_name}")
+                return {"id": doc_id, "status": "updated"}
+            else:
+                from appwrite.id import ID
+                doc_id = ID.unique()
+                data["created_at"] = now
+                
+                self._motel_request(
+                    "POST",
+                    "/collections/motel_guests/documents",
+                    data={
+                        "documentId": doc_id,
+                        "data": data
+                    }
+                )
+                logger.info(f"Created new motel guest ({tenant_id}): {guest_name}")
+                return {"id": doc_id, "status": "created"}
+
+        except Exception as e:
+            logger.error(f"Error upserting motel guest: {e}")
+            return None
 
     # ============ BOOKINGS (Confirmed Appointments) ============
     

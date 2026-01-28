@@ -7,7 +7,7 @@ import { Models, AppwriteException } from "appwrite";
 interface AuthContextType {
     user: Models.User<Models.Preferences> | null;
     loading: boolean;
-    login: (email: string, password: string) => Promise<void>;
+    login: (email: string, password: string) => Promise<Models.User<Models.Preferences>>;
     logout: () => Promise<void>;
     refreshSession: () => Promise<void>;
 }
@@ -67,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await account.createEmailPasswordSession(email, password);
         const session = await account.get();
         setUser(session);
+        return session;
     };
 
     const logout = async () => {

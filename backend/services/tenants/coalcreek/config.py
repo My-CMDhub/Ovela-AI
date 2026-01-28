@@ -23,7 +23,7 @@ COALCREEK_CONFIG = {
     
     # Placeholders (replace when client provides)
     "logo_url": "[LOGO_URL_PLACEHOLDER]",
-    "staff_email": "staff@placeholder.com",
+    "staff_email": "officialcoalcreek@gmail.com",
     
     # Operations
     "timezone": "Australia/Melbourne",

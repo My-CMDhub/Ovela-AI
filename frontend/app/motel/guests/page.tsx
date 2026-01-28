@@ -21,17 +21,20 @@ interface Guest {
     created_at?: string;
 }
 
+import { useTenant } from "@/contexts/TenantContext";
+
 export default function GuestsPage() {
     const [guests, setGuests] = useState<Guest[]>([]);
     const [loading, setLoading] = useState(true);
+    const { tenant } = useTenant();
 
     useEffect(() => {
         fetchGuests();
-    }, []);
+    }, [tenant.id]);
 
     const fetchGuests = async () => {
         try {
-            const res = await fetch("/api/motel/guests");
+            const res = await fetch(`/api/motel/guests?tenant_id=${tenant.id}`);
             const data = await res.json();
             if (data.success) {
                 setGuests(data.guests);

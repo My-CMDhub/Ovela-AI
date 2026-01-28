@@ -122,7 +122,8 @@ async def get_motel_stats():
 @router.get("/reservations")
 async def get_reservations(
     limit: int = Query(default=100, ge=1, le=500),
-    status: Optional[str] = Query(default=None)
+    status: Optional[str] = Query(default=None),
+    tenant_id: str = Query(default="coalcreek", description="Tenant ID (e.g. coalcreek)")
 ):
     """Get list of reservations."""
     try:
@@ -133,6 +134,12 @@ async def get_reservations(
             return {"success": False, "error": result["error"]}
         
         documents = result.get("documents", [])
+        
+        documents = result.get("documents", [])
+        
+        # Filter by tenant_id (CRITICAL for multi-tenant)
+        if tenant_id:
+             documents = [d for d in documents if d.get("tenant_id") == tenant_id]
         
         # Filter by status if provided
         if status:
@@ -171,6 +178,10 @@ async def create_reservation(data: dict):
         # Default status
         if "status" not in data:
             data["status"] = "pending"
+
+        # Enforce tenant_id
+        if "tenant_id" not in data:
+            data["tenant_id"] = "coalcreek"  # Default for legacy/dev
         
         # Generate document ID
         doc_id = f"res_{int(datetime.now().timestamp())}"
@@ -203,20 +214,37 @@ async def create_reservation(data: dict):
 
 @router.get("/guests")
 async def get_guests(
-    limit: int = Query(default=100, ge=1, le=500)
+    limit: int = Query(default=100, ge=1, le=500),
+    tenant_id: str = Query(default="coalcreek", description="Tenant ID")
 ):
     """Get list of guests."""
     try:
-        endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_guests/documents?queries[]=limit({limit})"
+        # Filter by Tenant via query
+        endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_guests/documents"
+        
+        # We can use Appwrite queries if attribute is indexed, else fetch and filter
+        # Assuming index exists on tenant_id, but fall safe to manual filter
+        # queries[]=equal("tenant_id", tenant_id)
+        
+        # Fetching with query param directly if using helper? 
+        # appwrite_request helper handles queries params if passed specifically?
+        # The current helper in motel.py calls appwrite_request which wraps requests.
+        # Let's use manual filtering for reliability as we did in get_reservations
+        
+        endpoint = f"{endpoint}?queries[]=limit({limit})"
         result = await appwrite_request("GET", endpoint)
         
         if "error" in result:
-            return {"success": False, "error": result["error"]}
-        
+             return {"success": False, "error": result["error"]}
+             
+        guests = result.get("documents", [])
+        if tenant_id:
+             guests = [g for g in guests if g.get("tenant_id") == tenant_id]
+             
         return {
             "success": True,
-            "guests": result.get("documents", []),
-            "total": result.get("total", 0)
+            "guests": guests,
+            "total": len(guests)
         }
         
     except Exception as e:
@@ -231,6 +259,10 @@ async def create_guest(data: dict):
         # Add timestamp
         if "created_at" not in data:
             data["created_at"] = datetime.now().isoformat()
+            
+        # Enforce tenant_id
+        if "tenant_id" not in data:
+            data["tenant_id"] = "coalcreek"
         
         # Generate document ID
         doc_id = f"guest_{int(datetime.now().timestamp())}"
@@ -512,22 +544,48 @@ async def approve_booking(booking_id: str):
         if "error" in booking:
             return {"success": False, "error": "Booking not found"}
             
-        # 2. Generate Payment Link
+        # 2. Generate Payment/Setup Link (Dynamic Logic)
+        check_in_str = booking.get("check_in_date")
+        days_until = 0
+        try:
+            ci_dt = datetime.strptime(check_in_str, "%Y-%m-%d")
+            days_until = (ci_dt - datetime.now()).days
+        except:
+            pass
+
+        # 7-DAY RULE: 
+        # <= 7 Days: Payment (Immediate Charge)
+        # > 7 Days: Setup (Card Hold)
+        mode = "payment"
+        if days_until > 7:
+            mode = "setup"
+        
         # Calculate price if missing
         num_nights = booking.get("num_nights", 1)
         rate = booking.get("rate_per_night", 145) # Fallback rate
         if not rate: rate = 145
         
-        payment_res = await coalcreek_stripe_service.create_payment_link(
-            booking_ref=booking.get("booking_reference"),
-            room_type=booking.get("room_type"),
-            num_nights=num_nights,
-            price_per_night=rate,
-            customer_email=booking.get("guest_email"),
-            customer_name=booking.get("guest_name"),
-            check_in=booking.get("check_in_date"),
-            check_out=booking.get("check_out_date")
-        )
+        if mode == "setup":
+            payment_res = await coalcreek_stripe_service.create_setup_session(
+                booking_ref=booking.get("booking_reference"),
+                customer_email=booking.get("guest_email"),
+                customer_name=booking.get("guest_name"),
+                room_type=booking.get("room_type"),
+                check_in=booking.get("check_in_date"),
+                check_out=booking.get("check_out_date"),
+                num_nights=num_nights
+            )
+        else:
+            payment_res = await coalcreek_stripe_service.create_payment_link(
+                booking_ref=booking.get("booking_reference"),
+                room_type=booking.get("room_type"),
+                num_nights=num_nights,
+                price_per_night=rate,
+                customer_email=booking.get("guest_email"),
+                customer_name=booking.get("guest_name"),
+                check_in=booking.get("check_in_date"),
+                check_out=booking.get("check_out_date")
+            )
         
         payment_link = None
         status = "approved" # Default if payment fails/not needed
@@ -536,7 +594,7 @@ async def approve_booking(booking_id: str):
             payment_link = payment_res.get("payment_url")
             status = "link_sent"
         else:
-            logger.warning(f"Failed to generate payment link: {payment_res.get('error')}")
+            logger.warning(f"Failed to generate {mode} link: {payment_res.get('error')}")
             # Continue anyway, staff can retry later
         
         # 3. Update Booking Status
@@ -544,7 +602,8 @@ async def approve_booking(booking_id: str):
             "status": status,
             "payment_link_url": payment_link,
             "payment_link_sent_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now().isoformat(),
+            "payment_mode_requested": mode  # Track what we asked for
         }
         
         patch_res = await appwrite_request("PATCH", endpoint, {"data": update_data})
@@ -558,7 +617,8 @@ async def approve_booking(booking_id: str):
         guest_phone = booking.get("guest_phone")
         if payment_link and guest_phone:
             # Shorten message for SMS
-            sms_body = f"Hi {booking.get('guest_name', 'Guest').split(' ')[0]}, your booking at Coal Creek Motel is approved! Secure it here: {payment_link}"
+            action_text = "Secure your booking here" if mode == "setup" else "Complete payment here"
+            sms_body = f"Hi {booking.get('guest_name', 'Guest').split(' ')[0]}, your booking at Coal Creek Motel is approved! {action_text}: {payment_link}"
             
             sms_sent = sms_service.send_sms(guest_phone, sms_body)
             if sms_sent:
@@ -569,6 +629,10 @@ async def approve_booking(booking_id: str):
         # 5. SEND EMAIL (Secondary/If provided)
         guest_email = booking.get("guest_email")
         if payment_link and guest_email:
+            # We reuse send_payment_link but arguments might need flexible handling in email service
+            # For now, we use the same method but imply the context via email service update (next step)
+            # or we create a generic 'send_booking_link' wrapper.
+            # Assuming send_payment_link can handle generic 'link' logic or we update it shortly.
             await coalcreek_email_service.send_payment_link(
                 to_email=guest_email,
                 guest_name=booking.get("guest_name"),
@@ -577,7 +641,7 @@ async def approve_booking(booking_id: str):
                 room_type=booking.get("room_type"),
                 check_in=booking.get("check_in_date"),
                 check_out=booking.get("check_out_date"),
-                amount=payment_res.get("total_amount", 0)
+                amount=payment_res.get("total_amount", 0) if mode == "payment" else 0
             )
             messages.append("Email sent")
             
@@ -585,7 +649,8 @@ async def approve_booking(booking_id: str):
             "success": True, 
             "status": status, 
             "payment_link": payment_link,
-            "message": f"Booking approved. {', '.join(messages)}"
+            "mode": mode,
+            "message": f"Booking approved ({mode}). {', '.join(messages)}"
         }
 
     except Exception as e:
@@ -760,13 +825,21 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                                 amount_paid=session.get("amount_total", 0) / 100
                             )
                         else:
-                            # For setup/pre-auth, simpler notification (or reuse payment one with $0)
-                            # For MVP, maybe skip or send a specific "Card Verified" email?
-                            # Logging is sufficient for now as staff checks dashboard
-                            pass
+                            # For setup/pre-auth
+                             await coalcreek_email_service.send_payment_notification(
+                                staff_email=None, 
+                                booking_reference=booking_ref,
+                                customer_name=result.get("customer_name"),
+                                customer_email=result.get("customer_email"),
+                                room_type=result.get("room_type"),
+                                check_in=result.get("check_in"),
+                                check_out=result.get("check_out"),
+                                num_nights=result.get("num_nights"),
+                                amount_paid=0.0 # Signal it's pre-auth
+                            )
                         
                         # 2. Notify Guest (Confirmation) - Only if paid or explicit confirmation needed
-                        if result.get("customer_email") and mode == "payment":
+                        if result.get("customer_email"):
                              await coalcreek_email_service.send_guest_confirmation(
                                 guest_email=result.get("customer_email"),
                                 guest_name=result.get("customer_name"),
@@ -784,8 +857,88 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                 else:
                     logger.warning(f"Booking {booking_ref} not found for payment/setup update")
 
+        elif event_type == "checkout.session.expired":
+            session = event.get("data", {}).get("object", {})
+            metadata = session.get("metadata", {})
+            
+            if metadata.get("tenant_id") == "coalcreek":
+                booking_ref = metadata.get("booking_ref")
+                logger.info(f"⚠️ Booking {booking_ref} link EXPIRED")
+                
+                # Find booking by reference
+                query_endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
+                q_str = f'?queries[]=equal("booking_reference", "{booking_ref}")'
+                search_res = await appwrite_request("GET", query_endpoint + q_str)
+                
+                if search_res.get("documents"):
+                    doc = search_res["documents"][0]
+                    # Only expire if still strictly in 'link_sent' status (avoid race conditions if paid)
+                    if doc.get("status") == "link_sent":
+                        await appwrite_request("PATCH", f"{query_endpoint}/{doc.get('$id')}", {
+                            "data": {
+                                "status": "expired", 
+                                "updated_at": datetime.now().isoformat()
+                            }
+                        })
+                        
+                        # Notify Staff
+                        try:
+                            from services.tenants.coalcreek.email import coalcreek_email_service
+                            if hasattr(coalcreek_email_service, 'send_expiry_notification'):
+                                await coalcreek_email_service.send_expiry_notification(
+                                    staff_email=None,
+                                    booking_ref=booking_ref,
+                                    customer_name=metadata.get("customer_name"),
+                                    room_type=metadata.get("room_type"),
+                                    check_in=metadata.get("check_in")
+                                )
+                        except Exception as ex:
+                            logger.error(f"Failed to send expiry email: {ex}")
+                            
         return {"status": "received"}
 
     except Exception as e:
         logger.error(f"Stripe webhook error: {e}")
         return {"status": "error", "message": str(e)}
+
+        if event_type == "checkout.session.expired":
+            session = event.get("data", {}).get("object", {})
+            metadata = session.get("metadata", {})
+            
+            if metadata.get("tenant_id") == "coalcreek":
+                booking_ref = metadata.get("booking_ref")
+                logger.info(f"⚠️ Booking {booking_ref} link EXPIRED")
+                
+                # Update DB to expired
+                # Find booking by reference
+                query_endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
+                q_str = f'?queries[]=equal("booking_reference", "{booking_ref}")'
+                search_res = await appwrite_request("GET", query_endpoint + q_str)
+                
+                if search_res.get("documents"):
+                    doc = search_res["documents"][0]
+                    # Only expire if still strictly in 'link_sent' status (avoid race conditions if paid)
+                    if doc.get("status") == "link_sent":
+                        await appwrite_request("PATCH", f"{query_endpoint}/{doc.get('$id')}", {
+                            "data": {
+                                "status": "expired", 
+                                "updated_at": datetime.now().isoformat()
+                            }
+                        })
+                        
+                        # Notify Staff
+                        try:
+                            from services.tenants.coalcreek.email import coalcreek_email_service
+                            # Use Payment Notification method but with specific title logic or new method
+                            # For MVP: Re-using payment_notification might be confusing. 
+                            # Let's call a specific method (we will add it to email.py).
+                            if hasattr(coalcreek_email_service, 'send_expiry_notification'):
+                                await coalcreek_email_service.send_expiry_notification(
+                                    staff_email=None,
+                                    booking_ref=booking_ref,
+                                    customer_name=metadata.get("customer_name"),
+                                    room_type=metadata.get("room_type"),
+                                    check_in=metadata.get("check_in")
+                                )
+                        except Exception as ex:
+                            logger.error(f"Failed to send expiry email: {ex}")

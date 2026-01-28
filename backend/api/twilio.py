@@ -19,19 +19,29 @@ DEFAULT_BUSINESS_ID = "default_business"
 
 @router.post("/voice")
 async def handle_voice_webhook(
+    request: Request,
     CallSid: str = Form(...),
-    From: str = Form(...)
+    From: str = Form(...),
+    To: str = Form(default=None),
+    tenant_id: str = None  # Allow passing via Query Param (e.g. /voice?tenant_id=saranda)
 ):
     """
     Main voice webhook - connects caller to AI agent.
     
-    This is used for:
-    1. Initial call routing (when configured as voice webhook)
-    2. Transfer fallback (when staff doesn't answer)
+    Multi-Tenant Strategy:
+    1. Query Param: Configure Twilio Webhook as https://api.../voice?tenant_id=saranda
+    2. 'To' Number Lookup: Fallback to mapping known numbers (future)
+    3. Default: Env var or 'coalcreek'
     """
-    logger.info(f"📞 Voice webhook from {From}, CallSid: {CallSid}")
+    logger.info(f"📞 Voice webhook from {From} to {To} (tenant_id={tenant_id}), CallSid: {CallSid}")
     
+    # Resolve tenant_id
+    if not tenant_id:
+        # Check settings or default
+        tenant_id = settings.TENANT_ID or "coalcreek"
+        
     # Return TwiML that connects to the AI stream
+    # Pass tenant_id to the WebSocket via Parameter
     stream_url = f"wss://{settings.BACKEND_URL.replace('https://', '')}/api/voice/stream"
     
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -39,6 +49,8 @@ async def handle_voice_webhook(
     <Connect>
         <Stream url="{stream_url}">
             <Parameter name="user_phone" value="{From}" />
+            <Parameter name="tenant_id" value="{tenant_id}" />
+            <Parameter name="user_to" value="{To}" />
         </Stream>
     </Connect>
     <Say voice="Polly.Nicole">I'm sorry, we seem to have lost connection. Please call back. Goodbye!</Say>

@@ -235,6 +235,15 @@ class CoalCreekEmailService(EmailService):
         except:
             check_in_fmt, check_out_fmt = check_in, check_out
         
+        if amount_paid > 0:
+            title = "Booking Paid & Confirmed"
+            content = "The customer has completed payment."
+            amount_display = f"<strong style='font-size: 22px; color: #22c55e;'>Amount Paid: ${amount_paid}</strong>"
+        else:
+            title = "Card Verified & Secured" 
+            content = "The customer has successfully saved their card on file (Pre-Auth)."
+            amount_display = "<strong style='font-size: 22px; color: #22c55e;'>✅ Card Secured (No Charge)</strong>"
+
         details = [
             f"<strong>Booking Ref:</strong> <span style='font-size: 18px; font-weight: 700;'>{booking_reference}</span>",
             f"<strong>Customer:</strong> {customer_name}",
@@ -242,7 +251,7 @@ class CoalCreekEmailService(EmailService):
             f"<strong>Room:</strong> {room_type.title()} Room",
             f"<strong>Check-in:</strong> {check_in_fmt}",
             f"<strong>Check-out:</strong> {check_out_fmt}",
-            f"<strong style='font-size: 22px; color: #22c55e;'>Amount Paid: ${amount_paid}</strong>"
+            amount_display
         ]
         
         action_html = '''
@@ -254,10 +263,42 @@ class CoalCreekEmailService(EmailService):
         '''
         
         html = self._template(
-            title="Booking Paid & Confirmed",
-            content="The customer has completed payment.",
+            title=title,
+            content=content,
             details=details,
             action_buttons_html=action_html
+        )
+        
+        sender = "Coal Creek Motel <notifications@ovela.dev>"
+        return await self.send_email(staff_email, subject, html, from_email=sender)
+
+    async def send_expiry_notification(
+        self,
+        staff_email: str,
+        booking_ref: str,
+        customer_name: str,
+        room_type: str,
+        check_in: str
+    ):
+        """Notify staff that a booking link expired."""
+        if not staff_email:
+            staff_email = self.config["staff_email"]
+            
+        subject = f"⚠️ Booking Expired - Dates Released ({booking_ref})"
+        
+        details = [
+            f"<strong>Booking Ref:</strong> {booking_ref}",
+            f"<strong>Guest:</strong> {customer_name}",
+            f"<strong>Room:</strong> {room_type}",
+            f"<strong>Check-in:</strong> {check_in}"
+        ]
+        
+        content = "The payment/setup link for this booking has expired (24 hours passed).<br>The booking is now marked as <strong>EXPIRED</strong> and dates are released."
+        
+        html = self._template(
+            title="Booking Expired / Cancelled",
+            content=content,
+            details=details
         )
         
         sender = "Coal Creek Motel <notifications@ovela.dev>"
@@ -277,8 +318,10 @@ class CoalCreekEmailService(EmailService):
         """Send payment link to guest."""
         if not to_email:
             return False
-            
-        subject = f"Payment Required - Booking {booking_ref}"
+        
+        is_setup = (amount == 0)
+        subject_prefix = "Secure Your Booking" if is_setup else "Payment Required"
+        subject = f"{subject_prefix} - Booking {booking_ref}"
         
         try:
             ci = datetime.strptime(check_in, "%Y-%m-%d")
@@ -288,21 +331,29 @@ class CoalCreekEmailService(EmailService):
         except:
             check_in_fmt, check_out_fmt = check_in, check_out
             
+        amount_display = f"<strong style='font-size: 18px;'>TOTAL TO PAY: ${amount}</strong>"
+        if is_setup:
+            amount_display = "<strong>Secure Card (No charge today)</strong>"
+
         details = [
             f"<strong>Booking Ref:</strong> {booking_ref}",
             f"<strong>Room:</strong> {room_type.title()} Room",
             f"<strong>Check-in:</strong> {check_in_fmt}",
             f"<strong>Check-out:</strong> {check_out_fmt}",
-            f"<strong style='font-size: 18px;'>TOTAL TO PAY: ${amount}</strong>"
+            amount_display
         ]
         
-        content = f"Hi {guest_name},<br><br>Your booking request has been approved! To secure your room, please complete payment using the secure link below."
+        action_text = "To secure your room, please securely save your card details below." if is_setup else "To secure your room, please complete payment using the secure link below."
+        content = f"Hi {guest_name},<br><br>Your booking request has been approved! {action_text}"
+        
+        btn_text = "💳 Secure Booking" if is_setup else "💳 Pay Securely Now"
+        title_text = "Booking Approved - Security Required" if is_setup else "Booking Approved - Payment Required"
         
         html = self._template(
-            title="Booking Approved - Payment Required",
+            title=title_text,
             content=content,
             details=details,
-            button_text="💳 Pay Securely Now",
+            button_text=btn_text,
             button_url=payment_link
         )
         

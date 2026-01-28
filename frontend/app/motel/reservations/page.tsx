@@ -38,6 +38,8 @@ export interface Reservation {
 
 type StatusFilter = "all" | "pending" | "confirmed" | "checked_in" | "checked_out" | "cancelled" | "rejected" | "link_sent" | "approved";
 
+import { useTenant } from "@/contexts/TenantContext";
+
 export default function ReservationsPage() {
     const [reservations, setReservations] = useState<Reservation[]>([]);
     const [loading, setLoading] = useState(true);
@@ -47,13 +49,15 @@ export default function ReservationsPage() {
     const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
     const [isWalkInModalOpen, setIsWalkInModalOpen] = useState(false);
 
+    const { tenant } = useTenant();
+
     useEffect(() => {
         fetchReservations();
-    }, []);
+    }, [tenant.id]); // Re-fetch on tenant change
 
     const fetchReservations = async () => {
         try {
-            const res = await fetch("/api/motel/reservations?limit=100");
+            const res = await fetch(`/api/motel/reservations?limit=100&tenant_id=${tenant.id}`);
             const data = await res.json();
             if (data.success) {
                 setReservations(data.reservations);

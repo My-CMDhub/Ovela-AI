@@ -18,6 +18,7 @@ import {
     MessageSquare,
 } from "lucide-react";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { TenantProvider, useTenant } from "@/contexts/TenantContext";
 import SystemAlerts from "@/components/ui/system-alerts";
 
 const navigation = [
@@ -33,6 +34,7 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
     const router = useRouter();
     const { user, loading } = useAuth();
+    const { tenant, isLoading: tenantLoading } = useTenant();
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [collapsed, setCollapsed] = useState(false);
 
@@ -49,7 +51,7 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
     };
 
     // Show loading state
-    if (loading) {
+    if (loading || tenantLoading) {
         return (
             <div className="min-h-screen bg-[#FBF8F5] flex items-center justify-center">
                 <div className="text-gray-400">Loading...</div>
@@ -89,19 +91,33 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                     {!collapsed && (
                         <div className="flex items-center gap-3">
                             {/* Logo placeholder */}
-                            <div className="w-10 h-10 bg-[#D4AF37]/20 text-[#D4AF37] rounded-lg flex items-center justify-center border border-[#D4AF37]/20">
-                                <span className="text-lg font-bold">C</span>
+                            <div
+                                className="w-10 h-10 rounded-lg flex items-center justify-center border transition-colors"
+                                style={{
+                                    backgroundColor: `${tenant.colors.primary}20`,
+                                    color: tenant.colors.primary,
+                                    borderColor: `${tenant.colors.primary}20`
+                                }}
+                            >
+                                <span className="text-lg font-bold">{tenant.logoChar}</span>
                             </div>
                             <div>
-                                <h1 className="font-bold text-lg leading-tight text-white">Coal Creek</h1>
-                                <p className="text-xs text-[#D4AF37]">Motel</p>
+                                <h1 className="font-bold text-lg leading-tight text-white">{tenant.name}</h1>
+                                <p className="text-xs" style={{ color: tenant.colors.primary }}>CRM Dashboard</p>
                             </div>
                         </div>
                     )}
                     {collapsed && (
                         <div className="w-full flex justify-center">
-                            <div className="w-10 h-10 bg-[#D4AF37]/20 text-[#D4AF37] rounded-lg flex items-center justify-center border border-[#D4AF37]/20">
-                                <span className="text-lg font-bold">C</span>
+                            <div
+                                className="w-10 h-10 rounded-lg flex items-center justify-center border"
+                                style={{
+                                    backgroundColor: `${tenant.colors.primary}20`,
+                                    color: tenant.colors.primary,
+                                    borderColor: `${tenant.colors.primary}20`
+                                }}
+                            >
+                                <span className="text-lg font-bold">{tenant.logoChar}</span>
                             </div>
                         </div>
                     )}
@@ -123,10 +139,15 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                             href={item.href}
                             className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200
                                 ${isActive(item.href)
-                                    ? "bg-[#D4AF37]/10 text-[#D4AF37] shadow-lg border border-[#D4AF37]/20"
+                                    ? "shadow-lg border"
                                     : "text-slate-400 hover:bg-white/5 hover:text-white"
                                 }
                                 ${collapsed ? "justify-center" : ""}`}
+                            style={isActive(item.href) ? {
+                                backgroundColor: `${tenant.colors.primary}10`,
+                                color: tenant.colors.primary,
+                                borderColor: `${tenant.colors.primary}20`
+                            } : {}}
                             title={collapsed ? item.name : undefined}
                         >
                             <item.icon className="w-5 h-5 flex-shrink-0" />
@@ -219,10 +240,16 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
     );
 }
 
+import { Suspense } from "react";
+
 export default function MotelLayout({ children }: { children: React.ReactNode }) {
     return (
         <AuthProvider>
-            <MotelLayoutContent>{children}</MotelLayoutContent>
+            <Suspense fallback={<div className="min-h-screen bg-[#FBF8F5]" />}>
+                <TenantProvider>
+                    <MotelLayoutContent>{children}</MotelLayoutContent>
+                </TenantProvider>
+            </Suspense>
         </AuthProvider>
     );
 }

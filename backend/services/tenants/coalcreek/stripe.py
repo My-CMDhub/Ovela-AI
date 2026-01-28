@@ -47,61 +47,58 @@ class CoalCreekStripeService:
         check_in: str,
         check_out: str
     ) -> dict:
-        """Create Stripe payment link for booking."""
+        """
+        Create Stripe Checkout Session (Payment Mode) for booking.
+        Set to expire in 24 hours to enforce urgency.
+        """
         if not self.configured:
             return {"success": False, "error": "Stripe not configured"}
         
         try:
             total_cents = int(price_per_night * num_nights * 100)
+            expiry_time = int(datetime.now().timestamp() + 86400) # 24 Hours from now
             
-            # Create product
-            product = stripe.Product.create(
-                name=f"Coal Creek Motel - {room_type}",
-                description=f"{num_nights} night(s): {check_in} to {check_out}",
+            # Create Coupon for Checkout Session (One-time, expires)
+            session = stripe.checkout.Session.create(
+                mode="payment",
+                currency="aud",
+                customer_email=customer_email,
+                payment_method_types=["card"],
+                line_items=[{
+                    "price_data": {
+                        "currency": "aud",
+                        "product_data": {
+                            "name": f"Coal Creek Motel - {room_type}",
+                            "description": f"{num_nights} night(s): {check_in} to {check_out}",
+                            "metadata": {
+                                "booking_ref": booking_ref
+                            }
+                        },
+                        "unit_amount": total_cents,
+                    },
+                    "quantity": 1,
+                }],
                 metadata={
                     "tenant_id": self.tenant_id,
                     "booking_ref": booking_ref,
                     "customer_name": customer_name,
-                    "room_type": room_type,
-                }
-            )
-            
-            # Create price
-            price = stripe.Price.create(
-                product=product.id,
-                unit_amount=total_cents,
-                currency="aud",
-            )
-            
-            # Create payment link
-            payment_link = stripe.PaymentLink.create(
-                line_items=[{"price": price.id, "quantity": 1}],
-                metadata={
-                    "tenant_id": self.tenant_id,
-                    "booking_ref": booking_ref,
                     "room_type": room_type,
                     "check_in": check_in,
                     "check_out": check_out,
                     "num_nights": str(num_nights),
-                    "customer_email": customer_email,
-                    "customer_name": customer_name,
+                    "type": "payment"
                 },
-                after_completion={
-                    "type": "hosted_confirmation",
-                    "hosted_confirmation": {
-                        "custom_message": f"Thank you! Your booking ({booking_ref}) is confirmed."
-                    }
-                },
-                customer_creation="always",
-                billing_address_collection="auto",
+                expires_at=expiry_time,
+                success_url="https://coalcreekmotel.com.au/booking/success?ref=" + booking_ref, 
+                cancel_url="https://coalcreekmotel.com.au/booking/cancel?ref=" + booking_ref,
             )
             
-            logger.info(f"✅ [Coal Creek] Payment link created: {booking_ref}")
+            logger.info(f"✅ [Coal Creek] Payment session created: {booking_ref} (Expires in 24h)")
             
             return {
                 "success": True,
-                "payment_url": payment_link.url,
-                "payment_link_id": payment_link.id,
+                "payment_url": session.url,
+                "session_id": session.id,
                 "total_amount": price_per_night * num_nights
             }
             

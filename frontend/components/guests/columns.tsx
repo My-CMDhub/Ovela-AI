@@ -23,6 +23,7 @@ export type Guest = {
     preferred_room_type?: string
     notes?: string
     is_vip?: string // "true" or "false" string from DB
+    status?: string // "inquiry" or "guest"
     created_at?: string
 }
 
@@ -83,6 +84,25 @@ export const columns: ColumnDef<Guest>[] = [
                 </div>
             )
         },
+    },
+    {
+        accessorKey: "status",
+        header: "Status",
+        cell: ({ row }) => {
+            const status = row.original.status || "inquiry";
+            const isGuest = status !== "inquiry";
+
+            return (
+                <div className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border
+                    ${isGuest
+                        ? "bg-green-50 text-green-700 border-green-200"
+                        : "bg-slate-50 text-slate-600 border-slate-200"
+                    }`}
+                >
+                    {isGuest ? "Guest" : "Inquiry"}
+                </div>
+            )
+        }
     },
     {
         accessorKey: "total_stays",

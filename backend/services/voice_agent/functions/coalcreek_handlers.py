@@ -296,11 +296,37 @@ async def handle_request_human_callback(args: dict, user_phone: str) -> dict:
     }
 
 
-async def handle_update_guest_info(args: dict) -> dict:
-    """Pass-through to log guest info."""
-    guest_name = args.get("guest_name","")
-    logger.info(f"Captured Guest Info: {guest_name} - {args.get('guest_phone')}")
-    return {"success": True, "message": "Details saved."}
+async def handle_update_guest_info(args: dict, db_service) -> dict:
+    """
+    Save guest details to CRM for persistent memory.
+    Call this when guest verifies their info.
+    """
+    guest_name = args.get("guest_name", "")
+    guest_phone = args.get("guest_phone", "")
+    guest_email = args.get("guest_email", "")
+    
+    logger.info(f"Captured Guest Info: {guest_name} - {guest_phone}")
+    
+    if db_service and hasattr(db_service, "upsert_motel_guest"):
+        try:
+            # Save as 'inquiry' since they haven't booked yet (just memory)
+            # If they book later, the booking logic should upgrade this or we can add a 'create_booking' hook.
+            # But upsert is safe.
+            db_service.upsert_motel_guest(
+                guest_name=guest_name, 
+                guest_phone=guest_phone, 
+                guest_email=guest_email,
+                tenant_id="coalcreek",
+                status="inquiry"
+            )
+            message = "Details securely saved to guest profile."
+        except Exception as e:
+            logger.error(f"Failed to save guest info: {e}")
+            message = "Details captured."
+    else:
+        message = "Details captured (temporary)."
+        
+    return {"success": True, "message": message}
 
 
 # =============================================================================
@@ -395,7 +421,7 @@ class CoalCreekFunctionDispatcher:
              return await handle_report_missing_booking(args, self.user_phone)
              
         elif function_name == "update_guest_info":
-             return await handle_update_guest_info(args)
+             return await handle_update_guest_info(args, self.db_service)
              
         # Common controls
         elif function_name == "end_call":
