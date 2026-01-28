@@ -44,7 +44,7 @@ from .config import (
 from .prompts import get_system_prompt
 from .abuse_protection import AbuseProtection
 from .silence_detection import SilenceMonitor
-from .functions import get_booking_functions, get_saranda_functions, SarandaFunctionDispatcher
+from .functions import get_booking_functions, get_saranda_functions, SarandaFunctionDispatcher, get_coalcreek_functions
 from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
 from .text_utils import prepare_for_tts, clean_tts_output
 from services.motel_knowledge_base import set_tenant_context
