@@ -133,27 +133,49 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
 
                 {/* Navigation */}
                 <nav className="p-4 space-y-2">
-                    {navigation.map((item) => (
-                        <Link
-                            key={item.name}
-                            href={item.href}
-                            className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200
-                                ${isActive(item.href)
-                                    ? "shadow-lg border"
-                                    : "text-slate-400 hover:bg-white/5 hover:text-white"
-                                }
-                                ${collapsed ? "justify-center" : ""}`}
-                            style={isActive(item.href) ? {
-                                backgroundColor: `${tenant.colors.primary}10`,
-                                color: tenant.colors.primary,
-                                borderColor: `${tenant.colors.primary}20`
-                            } : {}}
-                            title={collapsed ? item.name : undefined}
+                    {navigation.map((item) => {
+                        // Niche-Specific Filtering
+                        if (tenant.industry === "food") {
+                            // Food Niche: Hide Motel specific items
+                            if (["Reservations", "Guests", "Notifications"].includes(item.name)) return null;
+                        }
+
+                        return (
+                            <Link
+                                key={item.name}
+                                href={item.href}
+                                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200
+                                    ${isActive(item.href)
+                                        ? "shadow-lg border"
+                                        : "text-slate-400 hover:bg-white/5 hover:text-white"
+                                    }
+                                    ${collapsed ? "justify-center" : ""}`}
+                                style={isActive(item.href) ? {
+                                    backgroundColor: `${tenant.colors.primary}10`,
+                                    color: tenant.colors.primary,
+                                    borderColor: `${tenant.colors.primary}20`
+                                } : {}}
+                                title={collapsed ? item.name : undefined}
+                            >
+                                <item.icon className="w-5 h-5 flex-shrink-0" />
+                                {!collapsed && <span className="font-medium">{item.name}</span>}
+                            </Link>
+                        );
+                    })}
+
+                    {/* EXT: Square Dashboard Link (Specific for Food/Saranda) */}
+                    {tenant.industry === "food" && (
+                        <a
+                            href="https://squareup.com/dashboard" // Real link would go here
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-slate-400 hover:bg-white/5 hover:text-white ${collapsed ? "justify-center" : ""}`}
+                            title={collapsed ? "Square Dashboard" : undefined}
                         >
-                            <item.icon className="w-5 h-5 flex-shrink-0" />
-                            {!collapsed && <span className="font-medium">{item.name}</span>}
-                        </Link>
-                    ))}
+                            <LayoutDashboard className="w-5 h-5 flex-shrink-0 text-green-500" />
+                            {!collapsed && <span className="font-medium">Square POS</span>}
+                        </a>
+                    )}
                 </nav>
 
                 {/* Bottom Section */}

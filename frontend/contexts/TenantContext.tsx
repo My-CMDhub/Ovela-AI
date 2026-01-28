@@ -14,6 +14,7 @@ interface TenantConfig {
         secondary: string; // Accent color
     };
     logoChar: string; // Fallback logo
+    industry: "hospitality" | "food"; // Niche-specific UI
 }
 
 // Tenant Registry
@@ -26,6 +27,7 @@ export const TENANTS: Record<string, TenantConfig> = {
             secondary: "#1E293B", // Slate 800
         },
         logoChar: "C",
+        industry: "hospitality",
     },
     saranda: {
         id: "saranda",
@@ -35,6 +37,7 @@ export const TENANTS: Record<string, TenantConfig> = {
             secondary: "#0F172A", // Slate 900
         },
         logoChar: "S",
+        industry: "food",
     },
 };
 
