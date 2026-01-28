@@ -704,26 +704,16 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
         if event_type == "checkout.session.completed":
             session = event.get("data", {}).get("object", {})
             
-            # Handle success
-            result = await coalcreek_stripe_service.handle_payment_success(session)
+            # Handle success (Payment or Setup)
+            result = await coalcreek_stripe_service.handle_checkout_completion(session)
             
             if result.get("success"):
                 # Update Booking Status in DB
                 booking_ref = result.get("booking_ref")
+                mode = result.get("mode", "payment")
                 
                 # Find booking by reference
-                # (Ideally we'd store doc ID in metadata, but ref works too)
                 query_endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
-                query_params = {"queries": [f'equal("booking_reference", "{booking_ref}")']}
-                
-                # Manually doing the query request since appwrite_request doesn't support params dict properly in our wrapper
-                # Wait, our wrapper appwrite_request is simple. Let's do a direct listing and filter in python if needed
-                # or just use the wrapper slightly differently?
-                # Actually appwrite_request only takes (method, endpoint, data). 
-                # Let's just list and filter or implement simple query param support.
-                # For safety, let's just list active bookings (hacky but safer with limited wrapper)
-                # BETTER: Add ?queries[]=equal("booking_reference","REF") to endpoint string manually
-                
                 q_str = f'?queries[]=equal("booking_reference", "{booking_ref}")'
                 search_res = await appwrite_request("GET", query_endpoint + q_str)
                 
@@ -732,35 +722,51 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                     doc_id = doc.get("$id")
                     
                     update_data = {
-                        "status": "paid",
-                        "payment_status": "paid",
-                        "payment_received_at": datetime.now().isoformat(),
-                        "stripe_payment_id": session.get("payment_intent"),
                         "updated_at": datetime.now().isoformat()
                     }
+
+                    # CASE 1: CARD SAVED (Pre-Auth / Setup)
+                    if mode == "setup":
+                        update_data["status"] = "confirmed" # Card confirmed, but not paid
+                        update_data["payment_status"] = "card_on_file"
+                        update_data["stripe_setup_intent"] = result.get("setup_intent")
+                        logger.info(f"💳 Booking {booking_ref} card securely saved (SetupIntent)")
+
+                    # CASE 2: PAID (Payment)
+                    else:
+                        update_data["status"] = "paid"
+                        update_data["payment_status"] = "paid"
+                        update_data["payment_received_at"] = datetime.now().isoformat()
+                        update_data["stripe_payment_id"] = result.get("payment_intent")
+                        logger.info(f"💰 Booking {booking_ref} marked as PAID")
                     
                     await appwrite_request("PATCH", f"{query_endpoint}/{doc_id}", {"data": update_data})
-                    logger.info(f"💰 Booking {booking_ref} marked as PAID")
                     
                     # Send Notifications
                     try:
                         from services.tenants.coalcreek.email import coalcreek_email_service
                         
                         # 1. Notify Staff
-                        await coalcreek_email_service.send_payment_notification(
-                            staff_email=None, # Uses default
-                            booking_reference=booking_ref,
-                            customer_name=result.get("customer_name"),
-                            customer_email=result.get("customer_email"),
-                            room_type=result.get("room_type"),
-                            check_in=result.get("check_in"),
-                            check_out=result.get("check_out"),
-                            num_nights=result.get("num_nights"),
-                            amount_paid=session.get("amount_total", 0) / 100
-                        )
+                        if mode == "payment":
+                            await coalcreek_email_service.send_payment_notification(
+                                staff_email=None, 
+                                booking_reference=booking_ref,
+                                customer_name=result.get("customer_name"),
+                                customer_email=result.get("customer_email"),
+                                room_type=result.get("room_type"),
+                                check_in=result.get("check_in"),
+                                check_out=result.get("check_out"),
+                                num_nights=result.get("num_nights"),
+                                amount_paid=session.get("amount_total", 0) / 100
+                            )
+                        else:
+                            # For setup/pre-auth, simpler notification (or reuse payment one with $0)
+                            # For MVP, maybe skip or send a specific "Card Verified" email?
+                            # Logging is sufficient for now as staff checks dashboard
+                            pass
                         
-                        # 2. Notify Guest (Confirmation from Owner)
-                        if result.get("customer_email"):
+                        # 2. Notify Guest (Confirmation) - Only if paid or explicit confirmation needed
+                        if result.get("customer_email") and mode == "payment":
                              await coalcreek_email_service.send_guest_confirmation(
                                 guest_email=result.get("customer_email"),
                                 guest_name=result.get("customer_name"),
@@ -773,10 +779,10 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                              )
                              
                     except Exception as email_err:
-                        logger.error(f"Failed to send payment emails: {email_err}")
+                        logger.error(f"Failed to send payment/setup emails: {email_err}")
                         
                 else:
-                    logger.warning(f"Booking {booking_ref} not found for payment update")
+                    logger.warning(f"Booking {booking_ref} not found for payment/setup update")
 
         return {"status": "received"}
 
