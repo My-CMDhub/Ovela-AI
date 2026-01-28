@@ -489,6 +489,11 @@ class VoiceAgentHandler:
     
     async def _handle_twilio_media(self, data: dict):
         """Forward Twilio audio to Deepgram Agent."""
+        # GO DEAF: Stop forwarding audio during hangup to ensure clean termination
+        # This prevents the AI from hearing/responding to user's "bye" after we said farewell
+        if getattr(self, '_is_hanging_up', False):
+            return  # Silently drop audio - user won't be heard after farewell
+        
         if not self.deepgram_ws:
             return
         
@@ -946,22 +951,22 @@ class VoiceAgentHandler:
         
         # Check for end_call signal (LLM explicitly requested call termination)
         if result.get("action") == "end_call":
-            logger.info("👋 end_call function called - scheduling graceful hangup")
+            logger.info("👋 end_call function called - injecting farewell + scheduling hangup")
             self._is_hanging_up = True
             
-            # If function provided a message (e.g. voicemail), speak it before hanging up
+            # Use pre-configured farewell for consistency (or custom message if provided)
             message = result.get("message")
-            delay = 3.5  # default farewell delay
+            if not message:
+                # Use tenant-specific pre-configured farewell (like greetings)
+                message = get_random_farewell(self.tenant_id)
+                logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
             
-            if message:
-                await self._inject_message(message)
-                # Estimate duration: ~15 chars/sec + buffer. Min 4s.
-                # "Hi, this is Ovela..." is ~150 chars -> ~10s
-                estimated_tts = max(4.0, len(message) / 12) 
-                delay = estimated_tts
-                logger.info(f"🗣️ Speaking end_call message ({len(message)} chars), delay={delay:.1f}s")
-
-            # Delay to let any pending TTS complete
+            # Inject the farewell message
+            await self._inject_message(message)
+            
+            # Schedule hangup after TTS completes (~15 chars/sec + buffer)
+            delay = max(3.0, len(message) / 15) + 1.5
+            logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
             asyncio.create_task(self._scheduled_hangup(delay))
             return  # Don't send function response, call is ending
         

@@ -17,11 +17,20 @@ DEEPGRAM_AGENT_URL = "wss://agent.deepgram.com/v1/agent/converse"
 # See get_random_greeting(tenant_id) function below
 
 FAREWELL_STYLES = [
-    "No worries, have a great one! feel free to reach out us when needed",
-    "Cheers, take care! feel free to call use whenever needed. Have a greate day",
+    "No worries, have a great one! Feel free to reach out when needed.",
+    "Cheers, take care! Feel free to call whenever needed. Have a great day!",
     "All good, thanks for calling!",
-    "Beauty, catch you later! Thanks for calling",
-    "Thanks for calling, have a lovely day! Bye",
+    "Beauty, catch you later! Thanks for calling.",
+    "Thanks for calling, have a lovely day! Bye.",
+]
+
+# Coal Creek Motel-specific farewells (motel hospitality style)
+COALCREEK_FAREWELLS = [
+    "Thanks for calling Coal Creek Motel! Have a great stay. Bye!",
+    "Perfect! We look forward to seeing you. Take care!",
+    "All sorted! Safe travels, and see you soon. Bye!",
+    "You're all set! Thanks for choosing Coal Creek. Bye!",
+    "Cheers! We'll have your room ready. Goodbye!",
 ]
 
 SILENCE_PROMPTS = [
@@ -134,8 +143,11 @@ def get_random_greeting(tenant_id: str = "coalcreek") -> str:
     return "Hello! This is Ovela. How can I help you today?"
 
 
-def get_random_farewell() -> str:
-    """Returns a random warm farewell."""
+def get_random_farewell(tenant_id: str = None) -> str:
+    """Returns a random warm farewell for the specified tenant."""
+    if tenant_id == "coalcreek":
+        return random.choice(COALCREEK_FAREWELLS)
+    # Add other tenants here as needed (saranda, etc.)
     return random.choice(FAREWELL_STYLES)
 
 
