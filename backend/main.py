@@ -2,7 +2,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
-from api import twilio, motel, voice, notifications, actions, saranda, stripe
+from api import twilio, voice, notifications, actions, saranda, stripe
 # NOTE: WhatsApp chat agent and dashboard were deleted
 # from api import chat, dashboard
 
@@ -58,7 +58,11 @@ app.add_middleware(
 # app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(twilio.router, prefix="/twilio", tags=["twilio"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
-app.include_router(motel.router, tags=["motel"])
+app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
+# Refactored: 'motel' is now 'dashboard', mounted on both paths for backward compatibility
+from api import dashboard
+app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
+app.include_router(dashboard.router, prefix="/api/motel", tags=["motel_legacy"]) # Legacy support (webhooks)
 app.include_router(notifications.router, prefix="/api", tags=["notifications"])
 app.include_router(actions.router, prefix="/api", tags=["actions"])
 app.include_router(saranda.router, prefix="/api/saranda", tags=["saranda"])

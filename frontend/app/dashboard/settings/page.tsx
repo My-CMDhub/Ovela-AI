@@ -141,18 +141,20 @@ export default function MotelSettingsPage() {
                 <button
                     onClick={() => setActiveTab("general")}
                     className={`pb-3 px-1 text-sm font-medium transition ${activeTab === "general"
-                        ? "border-b-2 border-[#D4AF37] text-slate-900"
+                        ? "border-b-2 text-slate-900"
                         : "text-slate-500 hover:text-slate-700"
                         }`}
+                    style={activeTab === "general" ? { borderColor: tenant?.colors?.primary } : {}}
                 >
                     Business Info
                 </button>
                 <button
                     onClick={() => setActiveTab("security")}
                     className={`pb-3 px-1 text-sm font-medium transition ${activeTab === "security"
-                        ? "border-b-2 border-[#D4AF37] text-slate-900"
+                        ? "border-b-2 text-slate-900"
                         : "text-slate-500 hover:text-slate-700"
                         }`}
+                    style={activeTab === "security" ? { borderColor: tenant?.colors?.primary } : {}}
                 >
                     Security
                 </button>
@@ -167,8 +169,10 @@ export default function MotelSettingsPage() {
                         className="rounded-xl border border-slate-200 p-6 bg-white"
                     >
                         <div className="flex items-center gap-2 mb-6">
-                            <Building2 className="w-5 h-5 text-[#D4AF37]" />
-                            <h2 className="text-lg font-semibold text-slate-900">Motel Information</h2>
+                            <Building2 className="w-5 h-5" style={{ color: tenant?.colors?.primary }} />
+                            <h2 className="text-lg font-semibold text-slate-900">
+                                {tenant?.industry === "food" ? "Restaurant Information" : "Motel Information"}
+                            </h2>
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -234,8 +238,10 @@ export default function MotelSettingsPage() {
                         className="rounded-xl border border-slate-200 p-6 bg-white"
                     >
                         <div className="flex items-center gap-2 mb-4">
-                            <Clock className="w-5 h-5 text-[#D4AF37]" />
-                            <h2 className="text-lg font-semibold text-slate-900">Check-in / Check-out</h2>
+                            <Clock className="w-5 h-5" style={{ color: tenant?.colors?.primary }} />
+                            <h2 className="text-lg font-semibold text-slate-900">
+                                {tenant?.industry === "food" ? "Opening Hours" : "Check-in / Check-out"}
+                            </h2>
                         </div>
 
                         <textarea
@@ -293,7 +299,7 @@ export default function MotelSettingsPage() {
                     {/* Change Password */}
                     <div className="rounded-xl border border-slate-200 p-6 bg-white">
                         <div className="flex items-center gap-2 mb-6">
-                            <Lock className="w-5 h-5 text-[#D4AF37]" />
+                            <Lock className="w-5 h-5" style={{ color: tenant?.colors?.primary }} />
                             <h2 className="text-lg font-semibold text-slate-900">Change Password</h2>
                         </div>
 

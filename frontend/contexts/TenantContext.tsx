@@ -29,11 +29,11 @@ export const TENANTS: Record<string, TenantConfig> = {
         },
         logoChar: "C",
         industry: "hospitality",
-        contact_phone: "(03) 5726 1788"
+        contact_phone: "0492897718"
     },
     saranda: {
         id: "saranda",
-        name: "Saranda on Hutton",
+        name: "Saranda Cafe",
         colors: {
             primary: "#0EA5E9", // Sky Blue
             secondary: "#0F172A", // Slate 900

@@ -22,6 +22,8 @@ const API_KEY = process.env.DASHBOARD_API_KEY || "";
 
 async function proxyRequest(request: NextRequest, path: string) {
     const url = new URL(request.url);
+    // Direct Proxy: /api/dashboard/* -> Backend /api/dashboard/*
+    // Backend now handles /api/dashboard, so no rewrite needed.
     const targetUrl = `${BACKEND_URL}/api/dashboard/${path}${url.search}`;
 
     try {

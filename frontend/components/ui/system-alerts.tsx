@@ -51,7 +51,12 @@ export default function SystemAlerts() {
             const documents = response.documents as unknown as SystemAlert[];
             setAlerts(documents);
             setUnreadCount(documents.filter(a => a.status === 'new').length);
-        } catch (error) {
+        } catch (error: any) {
+            // Silence "Collection not found" error to prevent console spam
+            if (error?.code === 404 || error?.message?.includes('not be found')) {
+                // Collection likely doesn't exist yet, just ignore.
+                return;
+            }
             console.error("Failed to fetch system alerts:", error);
         } finally {
             setLoading(false);

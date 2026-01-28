@@ -22,7 +22,8 @@ from core.config import settings
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/motel", tags=["motel"])
+# NOTE: Prefix is handled in main.py to allow dual mounting (/api/dashboard AND /api/motel)
+router = APIRouter(tags=["dashboard"])
 
 # Motel-specific database ID (separate from main WhatsApp database)
 MOTEL_DB_ID = "6947b8300005f5863f96"
