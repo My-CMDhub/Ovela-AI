@@ -1268,7 +1268,8 @@ class AppwriteService:
         tenant_id: str,
         limit: int = 50,
         start_date: str = None,
-        end_date: str = None
+        end_date: str = None,
+        phone: str = None
     ) -> list:
         """
         Get call logs for a specific tenant.
@@ -1289,6 +1290,10 @@ class AppwriteService:
                 logs = [l for l in logs if l.get("created_at", "") >= start_date]
             if end_date:
                 logs = [l for l in logs if l.get("created_at", "") <= end_date]
+
+            # Filter by phone if provided (Search)
+            if phone:
+                logs = [l for l in logs if phone in l.get("caller_phone", "")]
             
             # Sort by created_at descending (newest first)
             logs.sort(key=lambda x: x.get("created_at", ""), reverse=True)

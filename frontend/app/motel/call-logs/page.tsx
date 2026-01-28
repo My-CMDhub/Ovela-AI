@@ -9,9 +9,12 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+import { useAuth } from "@/contexts/AuthContext";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ovela-12c561a30285.herokuapp.com";
 
 export default function CallLogsPage() {
+    const { user } = useAuth();
     const [logs, setLogs] = useState<CallLog[]>([]);
     const [loading, setLoading] = useState(true); // Initial load
     const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
@@ -27,6 +30,11 @@ export default function CallLogsPage() {
             const params = new URLSearchParams();
             params.append("limit", "200"); // Fetch decent chunk
 
+            // Pass Tenant ID if authenticated
+            if (user?.prefs && 'tenant_id' in user.prefs) {
+                params.append("tenant_id", user.prefs['tenant_id'] as string);
+            }
+
             const res = await fetch(`${API_URL}/api/motel/call-logs?${params.toString()}`);
             const data = await res.json();
 
@@ -39,17 +47,19 @@ export default function CallLogsPage() {
         } finally {
             if (!isBackground) setLoading(false);
         }
-    }, []);
+    }, [user]);
 
     useEffect(() => {
-        fetchLogs();
+        if (user) {
+            fetchLogs();
+        }
 
         // Auto-refresh every 30 seconds (Silent)
         const interval = setInterval(() => {
-            fetchLogs(true);
+            if (user) fetchLogs(true);
         }, 30000);
         return () => clearInterval(interval);
-    }, [fetchLogs]);
+    }, [fetchLogs, user]);
 
     const exportToCSV = () => {
         if (logs.length === 0) return;
