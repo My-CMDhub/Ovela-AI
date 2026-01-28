@@ -11,7 +11,8 @@ import { Button } from "@/components/ui/button";
 
 import { useAuth } from "@/contexts/AuthContext";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ovela-12c561a30285.herokuapp.com";
+const API_URL = "";
+// Force relative path to use Next.js Proxy (route.ts) for auth and routing.
 
 export default function CallLogsPage() {
     const { user } = useAuth();

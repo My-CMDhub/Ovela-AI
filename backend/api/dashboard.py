@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 # NOTE: Prefix is handled in main.py to allow dual mounting (/api/dashboard AND /api/motel)
 router = APIRouter(tags=["dashboard"])
 
-# Motel-specific database ID (separate from main WhatsApp database)
 MOTEL_DB_ID = "6947b8300005f5863f96"
 APPWRITE_ENDPOINT = settings.APPWRITE_ENDPOINT
 APPWRITE_PROJECT_ID = settings.APPWRITE_PROJECT_ID
@@ -1028,12 +1027,17 @@ async def get_settings(
 
 @router.post("/settings")
 async def update_settings(
-    settings: dict,
+    settings_data: dict,
     tenant_id: str = Query(default="coalcreek", description="Tenant ID")
 ):
     """
-    Update business settings.
-    Mock implementation for now.
+    Update business settings in Appwrite.
     """
-    # In future: Save to Appwrite 'Business_Info' collection for specific tenant
-    return {"success": True, "message": "Settings updated (Mock)"}
+    from services.appwrite import db_service
+    
+    success = db_service.update_tenant_settings(tenant_id, settings_data)
+    
+    return {
+        "success": success,
+        "message": "Settings updated successfully" if success else "Failed to update settings"
+    }

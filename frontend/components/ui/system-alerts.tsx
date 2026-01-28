@@ -38,14 +38,18 @@ export default function SystemAlerts() {
 
     // Fetch alerts
     const fetchAlerts = async () => {
+        // Check if we already failed with 404
+        if (unreadCount === -1) return;
+
         try {
+            const queries = [
+                Query.orderDesc("$createdAt"),
+                Query.limit(10)
+            ];
             const response = await databases.listDocuments(
                 DATABASE_ID,
                 "system_alerts",
-                [
-                    Query.orderDesc("created_at"),
-                    Query.limit(10)
-                ]
+                queries
             );
 
             const documents = response.documents as unknown as SystemAlert[];

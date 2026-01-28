@@ -26,11 +26,11 @@ async function proxyRequest(request: NextRequest, path: string) {
     let targetBase = BACKEND_URL;
     if (targetBase.endsWith('/api')) targetBase = targetBase.replace(/\/api$/, '');
 
-    // We use /api/motel/ specifically to hit the legacy-compatible route on the backend
+    // We use /api/motel/ prefix for ALL calls from dashboard to hit the unified dashboard/motel router
     const targetUrl = `${targetBase}/api/motel/${path}${url.search}`;
 
     try {
-        console.log(`[API Proxy] IN: /api/dashboard/${path} | OUT: ${targetUrl}`);
+        console.log(`[Proxy] ${request.method} /api/dashboard/${path} -> ${targetUrl}`);
 
         const response = await fetch(targetUrl, {
             method: request.method,

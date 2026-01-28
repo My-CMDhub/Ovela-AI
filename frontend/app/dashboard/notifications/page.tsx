@@ -6,7 +6,8 @@ import { DataTable } from "@/components/notifications/data-table";
 import { RefreshCw, Plus, CheckCircle, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ovela-12c561a30285.herokuapp.com";
+const API_URL = "";
+// Force relative path to use Next.js Proxy for auth and routing.
 
 export default function NotificationsPage() {
     const [notifications, setNotifications] = useState<StaffNotification[]>([]);

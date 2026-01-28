@@ -17,7 +17,7 @@ class AppwriteService:
         self.project_id = settings.APPWRITE_PROJECT_ID
         self.api_key = settings.APPWRITE_API_KEY
         self.db_id = "ovela_db"
-        self.motel_db_id = "6947b8300005f5863f96"  # Motel database for reservations + staff notifications
+        self.motel_db_id = "6947b8300005f5863f96"  # Ovela_Clients Database (Motel + Tenants)
 
     def _motel_request(self, method: str, path: str, data: dict = None, params: dict = None):
         """Helper for Motel DB requests (different from main DB)."""
@@ -53,7 +53,7 @@ class AppwriteService:
             return response.json()
         except requests.exceptions.HTTPError as e:
             if e.response.status_code != 404:
-                logger.error(f"Appwrite HTTP error: {e}")
+                logger.error(f"Appwrite HTTP error: {e.response.status_code} - {e.response.text}")
             return None
         except Exception as e:
             logger.error(f"Appwrite request error: {e}")
@@ -1327,6 +1327,10 @@ class AppwriteService:
             
             result = self._make_request("GET", path)
             
+            # Robust Logging
+            if not result:
+                logger.warning(f"Settings document not found at {path}. Trying slug query...")
+            
             if not result:
                 # Fallback: Query by slug if doc ID lookup failed
                 params = {
@@ -1353,18 +1357,46 @@ class AppwriteService:
                     config = {}
             
             # Map to settings schema
-            # Screenshot 2 shows: name, slug, owner_email, config
+            # We now have business_hours and location as proper attributes in Appwrite
             return {
                 "business_name": result.get("name") or result.get("business_name", ""),
-                "business_hours": config.get("business_hours", ""),
-                "location": config.get("location", ""),
+                "business_hours": result.get("business_hours") or config.get("business_hours", ""),
+                "location": result.get("location") or config.get("location", ""),
                 "business_phone": result.get("twilio_phone") or result.get("business_phone", ""),
-                "owner_email": result.get("owner_email", "") 
+                "owner_email": result.get("owner_email", ""),
+                "staff_email": result.get("staff_email", "") or config.get("staff_email", "")
             }
             
         except Exception as e:
             logger.error(f"Error fetching tenant settings for {tenant_id}: {e}")
             return None
+
+    def update_tenant_settings(self, tenant_id: str, settings_data: dict) -> bool:
+        """
+        Update tenant document in 'tenants' collection.
+        """
+        try:
+            # Prepare update payload
+            # Map from frontend keys to Appwrite attributes
+            payload = {
+                "name": settings_data.get("business_name"),
+                "business_hours": settings_data.get("business_hours"),
+                "location": settings_data.get("location"),
+                "twilio_phone": settings_data.get("business_phone"),
+                "owner_email": settings_data.get("owner_email"),
+                "staff_email": settings_data.get("staff_email")
+            }
+            
+            # Appwrite REST API expects document attributes inside a 'data' key
+            body = {"data": payload}
+            
+            path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
+            result = self._make_request("PATCH", path, data=body)
+            
+            return result is not None
+        except Exception as e:
+            logger.error(f"Error updating tenant settings for {tenant_id}: {e}")
+            return False
 
 
 db_service = AppwriteService()
