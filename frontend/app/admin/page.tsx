@@ -25,6 +25,12 @@ export default function AdminPage() {
 
     if (!user) return null;
 
+    // Security: Enforce Admin Label
+    if (!user.labels?.includes("admin")) {
+        router.push("/dashboard");
+        return null;
+    }
+
     return (
         <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
             {/* Top Bar */}

@@ -66,6 +66,18 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
 
     const isAdmin = user?.labels?.includes("admin");
 
+    // Security check: Ensure non-admins stay on their assigned tenant
+    useEffect(() => {
+        if (!isAdmin && user && tenant) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const userTenant = (user.prefs as any)?.tenant_id;
+            if (userTenant && userTenant !== tenant.id) {
+                // User trying to access unauthorized tenant -> Force back to their tenant
+                router.push(`${pathname}?tenant=${userTenant}`);
+            }
+        }
+    }, [user, tenant, isAdmin, pathname, router]);
+
     return (
         <div className="min-h-screen bg-[#FBF8F5]">
             {/* Mobile sidebar overlay */}
