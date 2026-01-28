@@ -54,7 +54,8 @@ export default function SystemAlerts() {
         } catch (error: any) {
             // Silence "Collection not found" error to prevent console spam
             if (error?.code === 404 || error?.message?.includes('not be found')) {
-                // Collection likely doesn't exist yet, just ignore.
+                // Mark as "do not poll"
+                setUnreadCount(-1); // Sentinel value
                 return;
             }
             console.error("Failed to fetch system alerts:", error);
@@ -65,9 +66,21 @@ export default function SystemAlerts() {
 
     // Poll for alerts every 30s
     useEffect(() => {
-        fetchAlerts();
-        const interval = setInterval(fetchAlerts, 30000);
-        return () => clearInterval(interval);
+        let isMounted = true;
+        let interval: NodeJS.Timeout;
+
+        const runFetch = async () => {
+            // If we already failed with 404, don't try again
+            if (!loading && alerts.length === 0 && unreadCount === -1) return;
+            await fetchAlerts();
+        };
+
+        runFetch();
+        interval = setInterval(runFetch, 30000);
+        return () => {
+            isMounted = false;
+            clearInterval(interval);
+        };
     }, []);
 
     const markAsRead = async (alertId: string) => {

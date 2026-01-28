@@ -58,7 +58,7 @@ app.add_middleware(
 # app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(twilio.router, prefix="/twilio", tags=["twilio"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
-app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
+
 # Refactored: 'motel' is now 'dashboard', mounted on both paths for backward compatibility
 from api import dashboard
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])

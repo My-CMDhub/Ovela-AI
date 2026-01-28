@@ -8,7 +8,11 @@ import { useTenant } from "@/contexts/TenantContext";
 import { account } from "@/lib/appwrite";
 
 // Use localhost for development if env var is missing
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Use relative path for client-side fetches to hit Next.js Proxy
+// This ensures route.ts handles the request (and potential rewrites)
+const API_URL = "";
+// Note: We used to rely on NEXT_PUBLIC_API_URL but that points to Backend directly in some envs, bypassing Proxy.
+// By using "", we force it to /api/dashboard/... on the local domain.
 
 interface BusinessSettings {
     business_name: string;
@@ -44,7 +48,19 @@ export default function MotelSettingsPage() {
     const [updatingPassword, setUpdatingPassword] = useState(false);
 
     useEffect(() => {
-        if (tenant) fetchSettings();
+        if (tenant) {
+            // Pre-fill with known tenant data so UI isn't empty on error
+            setSettings(prev => ({
+                ...prev,
+                business_name: tenant.name,
+                business_phone: tenant.contact_phone,
+                // Partial fallbacks or defaults
+                owner_email: prev.owner_email || "",
+                location: prev.location || "",
+                business_hours: prev.business_hours || ""
+            }));
+            fetchSettings();
+        }
     }, [tenant]);
 
     const fetchSettings = async () => {

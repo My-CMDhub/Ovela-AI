@@ -3,18 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 /**
  * Server-Side API Proxy for Dashboard
  * 
- * This catch-all route proxies all dashboard API requests to the Python backend.
- * The API key is added SERVER-SIDE, so it's never exposed to the browser.
- * 
- * Routes handled:
- * - /api/dashboard/stats → Backend /api/dashboard/stats
- * - /api/dashboard/bookings → Backend /api/dashboard/bookings
- * - /api/dashboard/bookings/today → Backend /api/dashboard/bookings/today
- * - /api/dashboard/settings → Backend /api/dashboard/settings
- * - /api/dashboard/requests → Backend /api/dashboard/requests
- * - /api/dashboard/requests/{id}/approve → Backend /api/dashboard/requests/{id}/approve
- * - /api/dashboard/requests/{id}/reject → Backend /api/dashboard/requests/{id}/reject
- * - etc.
+ * Proxies requests to the Python Backend.
+ * CRITICAL: Rewrites /api/dashboard to /api/motel to ensure compatibility with
+ * both Legacy/Production backends (which use /api/motel) and New/Local backends.
  */
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -22,12 +13,21 @@ const API_KEY = process.env.DASHBOARD_API_KEY || "";
 
 async function proxyRequest(request: NextRequest, path: string) {
     const url = new URL(request.url);
-    // Direct Proxy: /api/dashboard/* -> Backend /api/dashboard/*
-    // Backend now handles /api/dashboard, so no rewrite needed.
-    const targetUrl = `${BACKEND_URL}/api/dashboard/${path}${url.search}`;
+
+    // REWRITE STRATEGY:
+    // The frontend always talks to /api/dashboard.
+    // The backend (especially in production) might still be expecting /api/motel.
+    // We rewrite here to ensure maximum compatibility.
+    // /api/dashboard/settings -> /api/motel/settings
+    // /api/dashboard/call-logs -> /api/motel/call-logs
+    let backendPath = path;
+
+    // We construct the target URL by swapping 'dashboard' for 'motel' effectively
+    // But since 'path' here is the *suffix* (e.g. 'settings'), we just append it to /api/motel
+    const targetUrl = `${BACKEND_URL}/api/motel/${path}${url.search}`;
 
     try {
-        console.log(`[API Proxy] Forwarding to: ${targetUrl}`);
+        console.log(`[API Proxy] Rewrite: /api/dashboard/${path} -> ${targetUrl}`);
 
         const response = await fetch(targetUrl, {
             method: request.method,
@@ -40,16 +40,14 @@ async function proxyRequest(request: NextRequest, path: string) {
                 : undefined,
         });
 
-        // 1. Check if response is JSON
         const contentType = response.headers.get("content-type");
         if (contentType && contentType.includes("application/json")) {
             const data = await response.json();
             return NextResponse.json(data, { status: response.status });
         }
 
-        // 2. Handle non-JSON response (likely an error page)
         const text = await response.text();
-        console.error(`[API Proxy] Backend returned non-JSON (${response.status}):`, text.substring(0, 200)); // Log first 200 chars
+        console.error(`[API Proxy] Backend returned non-JSON (${response.status}):`, text.substring(0, 200));
 
         return new NextResponse(text, {
             status: response.status,
@@ -65,7 +63,6 @@ async function proxyRequest(request: NextRequest, path: string) {
     }
 }
 
-// Handle GET requests
 export async function GET(
     request: NextRequest,
     { params }: { params: Promise<{ path: string[] }> }
@@ -75,7 +72,6 @@ export async function GET(
     return proxyRequest(request, pathString);
 }
 
-// Handle POST requests
 export async function POST(
     request: NextRequest,
     { params }: { params: Promise<{ path: string[] }> }
@@ -85,7 +81,6 @@ export async function POST(
     return proxyRequest(request, pathString);
 }
 
-// Handle PATCH requests
 export async function PATCH(
     request: NextRequest,
     { params }: { params: Promise<{ path: string[] }> }
@@ -95,7 +90,6 @@ export async function PATCH(
     return proxyRequest(request, pathString);
 }
 
-// Handle DELETE requests
 export async function DELETE(
     request: NextRequest,
     { params }: { params: Promise<{ path: string[] }> }
