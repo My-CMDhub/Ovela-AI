@@ -22,12 +22,12 @@ import { TenantProvider, useTenant } from "@/contexts/TenantContext";
 import SystemAlerts from "@/components/ui/system-alerts";
 
 const navigation = [
-    { name: "Dashboard", href: "/motel", icon: LayoutDashboard },
-    { name: "Reservations", href: "/motel/reservations", icon: CalendarCheck },
-    { name: "Guests", href: "/motel/guests", icon: Users },
-    { name: "Notifications", href: "/motel/notifications", icon: Bell },
-    { name: "Call Logs", href: "/motel/call-logs", icon: MessageSquare },
-    { name: "Settings", href: "/motel/settings", icon: Settings },
+    { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+    { name: "Reservations", href: "/dashboard/reservations", icon: CalendarCheck },
+    { name: "Guests", href: "/dashboard/guests", icon: Users },
+    { name: "Notifications", href: "/dashboard/notifications", icon: Bell },
+    { name: "Call Logs", href: "/dashboard/call-logs", icon: MessageSquare },
+    { name: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
 
 function MotelLayoutContent({ children }: { children: React.ReactNode }) {
@@ -46,7 +46,7 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
     }, [user, loading, router]);
 
     const isActive = (href: string) => {
-        if (href === "/motel") return pathname === "/motel";
+        if (href === "/dashboard") return pathname === "/dashboard";
         return pathname.startsWith(href);
     };
 
@@ -63,6 +63,8 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
     if (!user) {
         return null;
     }
+
+    const isAdmin = user?.labels?.includes("admin");
 
     return (
         <div className="min-h-screen bg-[#FBF8F5]">
@@ -92,30 +94,46 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                         <div className="flex items-center gap-3">
                             {/* Logo placeholder */}
                             <div
-                                className="w-10 h-10 rounded-lg flex items-center justify-center border transition-colors"
+                                className={`w-10 h-10 rounded-lg flex items-center justify-center border transition-colors ${isAdmin ? "cursor-pointer hover:bg-white/5" : ""}`}
                                 style={{
                                     backgroundColor: `${tenant.colors.primary}20`,
                                     color: tenant.colors.primary,
                                     borderColor: `${tenant.colors.primary}20`
                                 }}
+                                onClick={isAdmin ? () => router.push(pathname + "?tenant=" + (tenant.id === "coalcreek" ? "saranda" : "coalcreek")) : undefined}
+                                title={isAdmin ? "Click to Switch Tenant" : undefined}
                             >
                                 <span className="text-lg font-bold">{tenant.logoChar}</span>
                             </div>
                             <div>
                                 <h1 className="font-bold text-lg leading-tight text-white">{tenant.name}</h1>
-                                <p className="text-xs" style={{ color: tenant.colors.primary }}>CRM Dashboard</p>
+                                {isAdmin ? (
+                                    <button
+                                        onClick={() => router.push(pathname + "?tenant=" + (tenant.id === "coalcreek" ? "saranda" : "coalcreek"))}
+                                        className="text-xs hover:underline flex items-center gap-1 opacity-80 hover:opacity-100"
+                                        style={{ color: tenant.colors.primary }}
+                                    >
+                                        Switch Client <LayoutDashboard className="w-3 h-3" />
+                                    </button>
+                                ) : (
+                                    <p className="text-xs opacity-60 flex items-center gap-1" style={{ color: tenant.colors.primary }}>
+                                        CRM Dashboard
+                                    </p>
+                                )}
                             </div>
                         </div>
                     )}
                     {collapsed && (
                         <div className="w-full flex justify-center">
                             <div
-                                className="w-10 h-10 rounded-lg flex items-center justify-center border"
+                                className={`w-10 h-10 rounded-lg flex items-center justify-center border ${isAdmin ? "cursor-pointer hover:bg-white/5" : ""}`}
                                 style={{
                                     backgroundColor: `${tenant.colors.primary}20`,
                                     color: tenant.colors.primary,
                                     borderColor: `${tenant.colors.primary}20`
                                 }}
+                                onClick={isAdmin ? () => router.push(pathname + "?tenant=" + (tenant.id === "coalcreek" ? "saranda" : "coalcreek")) : undefined}
+                                title={isAdmin ? "Switch Tenant" : undefined}
                             >
                                 <span className="text-lg font-bold">{tenant.logoChar}</span>
                             </div>
@@ -239,7 +257,7 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                         {/* Reception Phone */}
                         <div className="hidden md:flex items-center gap-2 text-sm text-gray-600">
                             <Phone className="w-4 h-4" />
-                            <span>(03) 5726 1788</span>
+                            <span>{tenant.contact_phone}</span>
                         </div>
 
                         {/* System Health Alerts */}

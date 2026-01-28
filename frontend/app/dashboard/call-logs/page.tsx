@@ -35,7 +35,7 @@ export default function CallLogsPage() {
                 params.append("tenant_id", user.prefs['tenant_id'] as string);
             }
 
-            const res = await fetch(`${API_URL}/api/motel/call-logs?${params.toString()}`);
+            const res = await fetch(`${API_URL}/api/dashboard/call-logs?${params.toString()}`);
             const data = await res.json();
 
             if (data.success) {

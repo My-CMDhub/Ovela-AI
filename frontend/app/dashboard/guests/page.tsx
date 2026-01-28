@@ -34,7 +34,7 @@ export default function GuestsPage() {
 
     const fetchGuests = async () => {
         try {
-            const res = await fetch(`/api/motel/guests?tenant_id=${tenant.id}`);
+            const res = await fetch(`/api/dashboard/guests?tenant_id=${tenant.id}`);
             const data = await res.json();
             if (data.success) {
                 setGuests(data.guests);

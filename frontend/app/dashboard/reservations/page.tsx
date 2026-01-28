@@ -57,7 +57,7 @@ export default function ReservationsPage() {
 
     const fetchReservations = async () => {
         try {
-            const res = await fetch(`/api/motel/reservations?limit=100&tenant_id=${tenant.id}`);
+            const res = await fetch(`/api/dashboard/reservations?limit=100&tenant_id=${tenant.id}`);
             const data = await res.json();
             if (data.success) {
                 setReservations(data.reservations);
@@ -73,7 +73,7 @@ export default function ReservationsPage() {
         if (!confirm("Approve this booking and send payment link?")) return;
         setActionLoading(true);
         try {
-            const res = await fetch(`/api/motel/bookings/${id}/approve`, { method: "POST" });
+            const res = await fetch(`/api/dashboard/bookings/${id}/approve`, { method: "POST" });
             const data = await res.json();
             if (data.success) {
                 alert("Booking approved and payment link sent!");
@@ -93,7 +93,7 @@ export default function ReservationsPage() {
         if (!confirm("Reject this booking?")) return;
         setActionLoading(true);
         try {
-            const res = await fetch(`/api/motel/bookings/${id}/reject`, { method: "POST" });
+            const res = await fetch(`/api/dashboard/bookings/${id}/reject`, { method: "POST" });
             const data = await res.json();
             if (data.success) {
                 fetchReservations();
@@ -111,7 +111,7 @@ export default function ReservationsPage() {
     const handleResendLink = async (id: string) => {
         setActionLoading(true);
         try {
-            const res = await fetch(`/api/motel/bookings/${id}/payment-link`, { method: "POST" });
+            const res = await fetch(`/api/dashboard/bookings/${id}/payment-link`, { method: "POST" });
             const data = await res.json();
             if (data.success) {
                 if (data.payment_link) {
@@ -305,7 +305,7 @@ function WalkInModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClose:
         setLoading(true);
 
         try {
-            const res = await fetch("/api/motel/reservations/manual", {
+            const res = await fetch("/api/dashboard/reservations/manual", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(formData),

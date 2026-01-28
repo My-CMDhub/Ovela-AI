@@ -1306,6 +1306,65 @@ class AppwriteService:
             logger.error(f"Error fetching tenant call logs: {e}")
             return []
 
+    def get_tenant_settings(self, tenant_id: str) -> dict:
+        """
+        Get tenant settings from the 'tenants' collection.
+        Returns a dictionary with business info.
+        """
+        try:
+            # Try to fetch by document ID (assuming slug is doc ID per setup script)
+            # If slug != doc ID in reality, we might need a query, but setup script sets doc_id=slug
+            
+            # Note: doc ID must be valid chars. If tenant_id has special chars, might need query.
+            # Assuming tenant_id is the slug/doc_id.
+            
+            # Fetch directly by ID first
+            path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
+            
+            # We don't have a direct 'get_document' in _make_request easily without try/catch logic 
+            # if we use the generic helper, but let's try.
+            # Actually _make_request handles http verbs.
+            
+            result = self._make_request("GET", path)
+            
+            if not result:
+                # Fallback: Query by slug if doc ID lookup failed
+                params = {
+                    "queries[]": [f'equal("slug", ["{tenant_id}"])']
+                }
+                list_result = self._make_request(
+                    "GET", 
+                    f"/databases/{self.motel_db_id}/collections/tenants/documents",
+                    params=params
+                )
+                if list_result and list_result.get("documents"):
+                    result = list_result["documents"][0]
+            
+            if not result:
+                return None
+                
+            # Parse 'config' JSON string
+            import json
+            config = {}
+            if result.get("config"):
+                try:
+                    config = json.loads(result["config"])
+                except:
+                    config = {}
+            
+            # Map to settings schema
+            return {
+                "business_name": result.get("name", ""),
+                "business_hours": config.get("business_hours", ""), # Might not exist in config yet
+                "location": config.get("location", ""),
+                "business_phone": result.get("twilio_phone", ""),
+                "owner_email": result.get("owner_email", "")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching tenant settings for {tenant_id}: {e}")
+            return None
+
 
 db_service = AppwriteService()
 

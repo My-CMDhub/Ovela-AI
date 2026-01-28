@@ -37,7 +37,7 @@ export default function RestaurantDashboard() {
         // Ideally we fetch from /api/motel/call-logs
         const fetchCalls = async () => {
             try {
-                const res = await fetch(`/api/motel/call-logs?limit=5`);
+                const res = await fetch(`/api/dashboard/call-logs?limit=5`);
                 if (res.ok) {
                     const data = await res.json();
                     if (data.success) {
@@ -177,7 +177,7 @@ export default function RestaurantDashboard() {
             >
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center">
                     <h3 className="font-semibold text-gray-900">Recent Customer Calls</h3>
-                    <Link href="/motel/call-logs" className="text-sm font-medium text-blue-500 hover:text-blue-600 flex items-center gap-1">
+                    <Link href="/dashboard/call-logs" className="text-sm font-medium text-blue-500 hover:text-blue-600 flex items-center gap-1">
                         View All <ArrowRight className="w-4 h-4" />
                     </Link>
                 </div>

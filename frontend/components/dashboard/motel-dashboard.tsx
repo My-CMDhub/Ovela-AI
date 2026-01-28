@@ -53,8 +53,8 @@ export default function MotelDashboard() {
     const fetchDashboardData = async () => {
         try {
             const [statsRes, reservationsRes] = await Promise.all([
-                fetch("/api/motel/stats"),
-                fetch("/api/motel/reservations?limit=5"),
+                fetch("/api/dashboard/stats"),
+                fetch("/api/dashboard/reservations?limit=5"),
             ]);
 
             if (statsRes.ok) {
@@ -200,7 +200,7 @@ export default function MotelDashboard() {
                                 Recent Reservations
                             </h2>
                             <a
-                                href="/motel/reservations"
+                                href="/dashboard/reservations"
                                 className="text-sm hover:underline font-medium"
                                 style={{ color: tenant.colors.primary }}
                             >

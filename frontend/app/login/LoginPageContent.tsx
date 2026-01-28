@@ -28,7 +28,7 @@ export default function LoginPageContent() {
 
             if (tenantId) {
                 // Client: Strict redirect to their dashboard
-                router.push(`/motel?tenant=${tenantId}`);
+                router.push(`/dashboard?tenant=${tenantId}`);
             } else {
                 // Admin/Owner: Redirect to Command Center
                 router.push("/admin");

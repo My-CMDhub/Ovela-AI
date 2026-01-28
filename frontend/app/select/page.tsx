@@ -9,7 +9,7 @@ export default function SelectDashboard() {
     const router = useRouter();
 
     useEffect(() => {
-        router.replace("/motel");
+        router.replace("/dashboard");
     }, [router]);
 
     return (

@@ -972,8 +972,21 @@ async def get_settings(
 ):
     """
     Get business settings (Profile, Hours, etc).
-    Currently returns static/mock data until 'Business_Info' collection is fully migrated.
+    Fetches real data from 'Tenants' collection in Appwrite.
     """
+    from services.appwrite import db_service
+    
+    # 1. Try to get from Appwrite
+    real_settings = db_service.get_tenant_settings(tenant_id)
+    
+    if real_settings:
+        # Ensure fallback defaults for missing fields if needed
+        return {
+            "success": True,
+            "settings": real_settings
+        }
+
+    # 2. Fallbacks for safety (if DB record missing)
     if tenant_id == "saranda":
         return {
             "success": True,

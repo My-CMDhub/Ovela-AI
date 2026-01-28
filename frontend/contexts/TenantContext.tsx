@@ -15,6 +15,7 @@ interface TenantConfig {
     };
     logoChar: string; // Fallback logo
     industry: "hospitality" | "food"; // Niche-specific UI
+    contact_phone: string;
 }
 
 // Tenant Registry
@@ -28,6 +29,7 @@ export const TENANTS: Record<string, TenantConfig> = {
         },
         logoChar: "C",
         industry: "hospitality",
+        contact_phone: "(03) 5726 1788"
     },
     saranda: {
         id: "saranda",
@@ -38,6 +40,7 @@ export const TENANTS: Record<string, TenantConfig> = {
         },
         logoChar: "S",
         industry: "food",
+        contact_phone: "0452 557 167"
     },
 };
 

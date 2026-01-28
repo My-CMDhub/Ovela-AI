@@ -83,7 +83,7 @@ export default function AdminPage() {
                     <h2 className="text-lg font-semibold text-slate-200">Your Clients</h2>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {/* Coal Creek */}
-                        <Link href="/motel?tenant=coalcreek" className="group relative overflow-hidden bg-slate-900 border border-slate-800 hover:border-amber-500/30 p-6 rounded-2xl transition-all hover:shadow-2xl hover:shadow-amber-500/10">
+                        <Link href="/dashboard?tenant=coalcreek" className="group relative overflow-hidden bg-slate-900 border border-slate-800 hover:border-amber-500/30 p-6 rounded-2xl transition-all hover:shadow-2xl hover:shadow-amber-500/10">
                             <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                             <div className="flex justify-between items-center relative z-10">
                                 <div>
@@ -95,7 +95,7 @@ export default function AdminPage() {
                         </Link>
 
                         {/* Saranda */}
-                        <Link href="/motel?tenant=saranda" className="group relative overflow-hidden bg-slate-900 border border-slate-800 hover:border-sky-500/30 p-6 rounded-2xl transition-all hover:shadow-2xl hover:shadow-sky-500/10">
+                        <Link href="/dashboard?tenant=saranda" className="group relative overflow-hidden bg-slate-900 border border-slate-800 hover:border-sky-500/30 p-6 rounded-2xl transition-all hover:shadow-2xl hover:shadow-sky-500/10">
                             <div className="absolute inset-0 bg-gradient-to-br from-sky-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
                             <div className="flex justify-between items-center relative z-10">
                                 <div>

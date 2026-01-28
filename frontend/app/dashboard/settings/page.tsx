@@ -7,7 +7,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useTenant } from "@/contexts/TenantContext";
 import { account } from "@/lib/appwrite";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://ovela-12c561a30285.herokuapp.com";
+// Use localhost for development if env var is missing
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 interface BusinessSettings {
     business_name: string;
@@ -18,7 +19,7 @@ interface BusinessSettings {
 }
 
 const DEFAULT_SETTINGS: BusinessSettings = {
-    business_name: "Loading...",
+    business_name: "",
     business_hours: "",
     location: "",
     business_phone: "",
@@ -48,13 +49,16 @@ export default function MotelSettingsPage() {
 
     const fetchSettings = async () => {
         try {
-            const res = await fetch(`${API_URL}/api/motel/settings?tenant_id=${tenant.id}`);
+            const res = await fetch(`${API_URL}/api/dashboard/settings?tenant_id=${tenant.id}`);
+            if (!res.ok) throw new Error("Failed to fetch settings");
+
             const data = await res.json();
             if (data.success && data.settings) {
                 setSettings(data.settings);
             }
         } catch (error) {
             console.error("Error fetching settings:", error);
+            // Don't leave it as "Loading...", just show empty form which is better than broken state
         } finally {
             setLoading(false);
         }
@@ -64,7 +68,7 @@ export default function MotelSettingsPage() {
         setSaving(true);
         setSaved(false);
         try {
-            const res = await fetch(`${API_URL}/api/motel/settings?tenant_id=${tenant.id}`, {
+            const res = await fetch(`${API_URL}/api/dashboard/settings?tenant_id=${tenant.id}`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(settings)
