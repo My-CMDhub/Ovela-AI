@@ -269,6 +269,8 @@ Reply with:
             logger.error(f"❌ Critical: All WhatsApp delivery methods failed for {request_id}: {e}")
             return False
     
+import re
+
     async def send_customer_order_confirmation(
         self,
         customer_phone: str,
@@ -294,29 +296,37 @@ Reply with:
             else:  # rejected
                 message = f"Sorry, we couldn't process your order #{order_id} right now. Please call us or order via Uber Eats/DoorDash. Apologies for the inconvenience!"
             
-            # Ensure proper phone format
-            phone = customer_phone
-            if not phone.startswith("+"):
-                phone = f"+61{phone.lstrip('0')}"
+            # Ensure proper phone format (E.164, no spaces/dashes)
+            if not customer_phone:
+                logger.warning(f"Aborting SMS: No phone number provided for order #{order_id}")
+                return False
+                
+            clean_phone = re.sub(r'[^\d+]', '', customer_phone)
+            if not clean_phone.startswith("+"):
+                clean_phone = f"+61{clean_phone.lstrip('0')}"
             
             # ASYNC TWILIO CALL via httpx
             auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
             url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Messages.json"
             data = {
-                "To": phone,
+                "To": clean_phone,
                 "From": settings.TWILIO_PHONE_NUMBER,
                 "Body": message
             }
             
+            logger.info(f"🚀 Sending SMS to {mask_phone(clean_phone)} via {settings.TWILIO_PHONE_NUMBER}")
+            
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, data=data, auth=auth)
-                response.raise_for_status()
+                if response.status_code != 201:
+                    logger.error(f"❌ Twilio Error ({response.status_code}): {response.text}")
+                    return False
             
-            logger.info(f"Customer SMS sent to {mask_phone(phone)} for order #{order_id} ({status})")
+            logger.info(f"✅ Customer SMS sent to {mask_phone(clean_phone)} for order #{order_id} ({status})")
             return True
             
         except Exception as e:
-            logger.error(f"Customer SMS failed for {order_id}: {e}")
+            logger.error(f"❌ Customer SMS exception for {order_id}: {e}")
             return False
 
 staff_notification_service = StaffNotificationService()
