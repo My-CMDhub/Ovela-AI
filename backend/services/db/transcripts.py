@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from appwrite.id import ID
-from appwrite.query import Query
+from appwrite.query import Query as AppwriteQuery
 import logging
 from core.utils import mask_phone
 
@@ -92,14 +92,14 @@ class TranscriptsMixin:
         """Get call transcripts with optional filters (DEMO calls)."""
         try:
             path = f"/databases/{self.db_id}/collections/demo_transcripts/documents"
-            queries = [Query.order_desc("created_at"), Query.limit(limit)]
+            queries = [AppwriteQuery.order_desc("created_at"), AppwriteQuery.limit(limit)]
             
             if start_date:
-                queries.append(Query.greater_than_equal("created_at", start_date))
+                queries.append(AppwriteQuery.greater_than_equal("created_at", start_date))
             if end_date:
-                queries.append(Query.less_than_equal("created_at", end_date))
+                queries.append(AppwriteQuery.less_than_equal("created_at", end_date))
             if phone:
-                queries.append(Query.equal("phone", phone))
+                queries.append(AppwriteQuery.equal("phone", phone))
                 
             result = await self._make_request("GET", path, params={'queries': queries})
             return result.get("documents", []) if result else []
@@ -126,35 +126,24 @@ class TranscriptsMixin:
             doc_id = ID.unique()
             now = datetime.now(MELBOURNE_TZ).isoformat()
             
-            # SCHEMA MAPPING (Saranda vs Motel)
-            # Saranda uses a modernized schema with different keys
-            if tenant_id == "saranda":
-                data = {
-                    "call_sid": call_sid,
-                    "caller_phone": caller_phone or "",
-                    "transcript_json": transcript, # Modern naming
-                    "duration_seconds": duration or 0,
-                    "outcome": status or "completed",
-                    "pms_reference": booking_ref or "",
-                    "metadata_json": json.dumps(metadata) if metadata else "{}",
-                    "created_at": now
-                }
-                # Optional: Add exchange_count if present in metadata
-                if metadata and "exchange_count" in metadata:
-                    data["exchange_count"] = metadata["exchange_count"]
-            else:
-                # Default Motel Schema (Coal Creek)
-                data = {
-                    "call_sid": call_sid,
-                    "caller_phone": caller_phone or "",
-                    "transcript": transcript[:10000] if transcript else "",
-                    "duration": duration or 0,
-                    "booking_ref": booking_ref or "",
-                    "status": status or "",
-                    "room_type": room_type or "",
-                    "metadata_json": json.dumps(metadata) if metadata else "{}",
-                    "created_at": now
-                }
+            # STANDARDIZED SCHEMA (Consistent across all tenants)
+            data = {
+                "call_sid": call_sid,
+                "caller_phone": caller_phone or "",
+                "transcript_json": transcript, 
+                "duration_seconds": duration or 0,
+                "outcome": status or "completed",
+                "pms_reference": booking_ref or "",
+                "metadata_json": json.dumps(metadata) if metadata else "{}",
+                "created_at": now
+            }
+
+            # BACKWARD COMPATIBILITY for Coal Creek (until pms_reference is added to Appwrite)
+            if tenant_id == "coalcreek":
+                data["transcript"] = transcript[:10000] if transcript else ""
+                data["duration"] = duration or 0
+                data["booking_ref"] = booking_ref or ""
+                data["status"] = status or ""
             
             result = await self._make_request(
                 "POST",
@@ -167,13 +156,21 @@ class TranscriptsMixin:
             logger.error(f"❌ Error saving transcript for {tenant_id}: {e}")
             return None
 
-    async def get_tenant_call_logs(self, tenant_id: str, limit: int = 50, start_date: str = None) -> list:
+    async def get_tenant_call_logs(self, tenant_id: str, limit: int = 50, start_date: str = None, end_date: str = None, phone: str = None) -> list:
         """Get call logs for a specific tenant."""
         try:
             collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
-            queries = [Query.order_desc("created_at"), Query.limit(limit)]
+            queries = [AppwriteQuery.order_desc("created_at"), AppwriteQuery.limit(limit)]
             if start_date:
-                queries.append(Query.greater_than_equal("created_at", start_date))
+                queries.append(AppwriteQuery.greater_than_equal("created_at", start_date))
+            if end_date:
+                queries.append(AppwriteQuery.less_than_equal("created_at", end_date))
+            
+            # Tenant specific field names
+            phone_field = "caller_phone" # Both schemas use this or similar?
+            # saranda: caller_phone / motel: caller_phone. It matches.
+            if phone:
+                queries.append(AppwriteQuery.equal("caller_phone", phone))
                 
             result = await self._make_request("GET", f"/databases/{self.motel_db_id}/collections/{collection_id}/documents", params={'queries': queries})
             return result.get("documents", []) if result else []

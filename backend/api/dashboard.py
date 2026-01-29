@@ -31,7 +31,7 @@ APPWRITE_PROJECT_ID = settings.APPWRITE_PROJECT_ID
 APPWRITE_API_KEY = settings.APPWRITE_API_KEY
 
 
-from appwrite.query import Query
+from appwrite.query import Query as AppwriteQuery
 
 def get_appwrite_headers() -> dict:
     """Get headers for Appwrite API requests."""
@@ -52,7 +52,7 @@ async def appwrite_request(method: str, endpoint: str, data: dict = None, params
         query_list = params.pop('queries')
         new_params = params.copy()
         for i, q in enumerate(query_list):
-            new_params[f'queries[{i}]'] = q
+            new_params[f'queries[{i}]'] = str(q)
         params = new_params
 
     async with httpx.AsyncClient() as client:
@@ -252,7 +252,7 @@ async def get_guests(
         # Let's use manual filtering for reliability as we did in get_reservations
         
         # Use params for queries
-        params = {"queries": [Query.limit(limit)]}
+        params = {"queries": [AppwriteQuery.limit(limit)]}
         result = await appwrite_request("GET", endpoint, params=params)
         
         if "error" in result:
@@ -344,7 +344,7 @@ async def get_call_logs(
         import json
         
         # Fetch transcripts using the TENANT-SPECIFIC method
-        transcripts = db_service.get_tenant_call_logs(
+        transcripts = await db_service.get_tenant_call_logs(
             tenant_id=tenant_id,
             start_date=start_date,
             end_date=end_date,
@@ -408,10 +408,11 @@ async def get_call_logs(
                 "phone": caller_phone,
                 "created_at": t.get("created_at"),
                 "duration_seconds": duration,
-                "exchange_count": t.get("exchange_count", 0), # Might be missing in new schema
+                "exchange_count": t.get("exchange_count", 0),
                 "outcome": outcome,
                 "transcript": transcript_data,
                 "call_sid": t.get("call_sid", ""),
+                "booking_reference": t.get("pms_reference") or t.get("booking_ref") or "",
             })
         
         return {
@@ -1002,7 +1003,7 @@ async def get_settings(
     from services.appwrite import db_service
     
     # 1. Try to get from Appwrite
-    real_settings = db_service.get_tenant_settings(tenant_id)
+    real_settings = await db_service.get_tenant_settings(tenant_id)
     
     if real_settings:
         # Ensure fallback defaults for missing fields if needed
@@ -1046,7 +1047,7 @@ async def update_settings(
     """
     from services.appwrite import db_service
     
-    success = db_service.update_tenant_settings(tenant_id, settings_data)
+    success = await db_service.update_tenant_settings(tenant_id, settings_data)
     
     return {
         "success": success,

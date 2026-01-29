@@ -5,6 +5,8 @@ from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
+from appwrite.query import Query as AppwriteQuery
+
 class AppwriteBase:
     def __init__(self):
         self.endpoint = settings.APPWRITE_ENDPOINT
@@ -30,12 +32,14 @@ class AppwriteBase:
         }
         url = f"{self.endpoint}{path}"
         
-        # For queries, convert to proper format for Appwrite (queries[0], queries[1]...)
+        # Robust serialization for indexed queries
         if params and 'queries' in params:
             query_list = params.pop('queries')
             new_params = params.copy()
             for i, q in enumerate(query_list):
-                new_params[f'queries[{i}]'] = q
+                # Appwrite SDK Query objects have a to_json() or are already strings
+                # Converting to string explicitly handles both
+                new_params[f'queries[{i}]'] = str(q)
             params = new_params
         
         try:

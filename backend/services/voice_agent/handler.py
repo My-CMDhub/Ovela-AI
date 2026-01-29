@@ -126,6 +126,7 @@ class VoiceAgentHandler:
         # Transcript for analytics
         self.transcript = []
         self.call_outcome = "completed"
+        self.call_reference = None # Unified reference for bookings/orders
         
         # Environment detection (demo vs production call)
         self.is_demo_call = False  # Set in _handle_twilio_start based on custom parameters
@@ -1032,7 +1033,13 @@ class VoiceAgentHandler:
         # Check for order completion (Saranda)
         if function_name == "submit_order" and result.get("success"):
             self.order_id = result.get("order_id")
+            self.call_reference = self.order_id
             logger.info(f"🛒 Order captured: {self.order_id}")
+        
+        # Check for booking completion (Motel)
+        if function_name == "create_booking_request" and result.get("success"):
+            self.call_reference = result.get("booking_reference")
+            logger.info(f"🏨 Booking captured: {self.call_reference}")
         
         # Send response back to Deepgram
         await self._send_function_response(call_id, function_name, result)
@@ -1489,6 +1496,7 @@ class VoiceAgentHandler:
                         caller_phone=self.user_phone,
                         transcript=json.dumps(self.transcript), # save_call_transcript expects string
                         duration=duration,
+                        booking_ref=self.call_reference,
                         status=self.call_outcome,
                         metadata={
                             "exchange_count": self.exchange_count,

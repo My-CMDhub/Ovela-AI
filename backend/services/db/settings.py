@@ -3,7 +3,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from appwrite.query import Query
+from appwrite.query import Query as AppwriteQuery
 class SettingsMixin:
     """
     Handles Business/Tenant Settings.
@@ -12,7 +12,7 @@ class SettingsMixin:
     async def get_business(self, whatsapp_business_id: str):
         """Fetch business settings by WhatsApp Business ID."""
         try:
-            queries = [Query.equal("whatsapp_business_id", whatsapp_business_id)]
+            queries = [AppwriteQuery.equal("whatsapp_business_id", whatsapp_business_id)]
             params = {'queries': queries}
             
             result = await self._make_request(
@@ -106,7 +106,7 @@ class SettingsMixin:
             if not result:
                 # Fallback: Query by slug if doc ID lookup failed
                 params = {
-                    "queries": [Query.equal("slug", tenant_id)]
+                    "queries": [AppwriteQuery.equal("slug", tenant_id)]
                 }
                 list_result = await self._make_request(
                     "GET", 
@@ -131,7 +131,7 @@ class SettingsMixin:
                 "business_hours": result.get("business_hours") or config.get("business_hours", ""),
                 "location": result.get("location") or config.get("location", ""),
                 "business_phone": result.get("business_phone") or result.get("twilio_phone", ""),
-                "owner_email": result.get("owner_email", ""),
+                "owner_email": result.get("owner_email") or result.get("staff_email") or config.get("staff_email", ""),
                 "staff_email": result.get("staff_email") or config.get("staff_email", "")
             }
             
@@ -171,7 +171,7 @@ class SettingsMixin:
             result = await self._make_request("GET", path)
             
             if not result:
-                params = {"queries": [Query.equal("slug", tenant_id)]}
+                params = {"queries": [AppwriteQuery.equal("slug", tenant_id)]}
                 list_result = await self._make_request("GET", f"/databases/{self.motel_db_id}/collections/tenants/documents", params=params)
                 if list_result and list_result.get("documents"):
                     result = list_result["documents"][0]
