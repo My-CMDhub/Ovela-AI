@@ -125,27 +125,45 @@ class TranscriptsMixin:
             doc_id = ID.unique()
             now = datetime.now(MELBOURNE_TZ).isoformat()
             
-            data = {
-                "call_sid": call_sid,
-                "caller_phone": caller_phone or "",
-                "transcript": transcript[:10000] if transcript else "",
-                "duration": duration or 0,
-                "booking_ref": booking_ref or "",
-                "status": status or "",
-                "room_type": room_type or "",
-                "metadata_json": json.dumps(metadata) if metadata else "{}",
-                "created_at": now
-            }
+            # SCHEMA MAPPING (Saranda vs Motel)
+            # Saranda uses a modernized schema with different keys
+            if tenant_id == "saranda":
+                data = {
+                    "call_sid": call_sid,
+                    "caller_phone": caller_phone or "",
+                    "transcript_json": transcript, # Modern naming
+                    "duration_seconds": duration or 0,
+                    "outcome": status or "completed",
+                    "pms_reference": booking_ref or "",
+                    "metadata_json": json.dumps(metadata) if metadata else "{}",
+                    "created_at": now
+                }
+                # Optional: Add exchange_count if present in metadata
+                if metadata and "exchange_count" in metadata:
+                    data["exchange_count"] = metadata["exchange_count"]
+            else:
+                # Default Motel Schema (Coal Creek)
+                data = {
+                    "call_sid": call_sid,
+                    "caller_phone": caller_phone or "",
+                    "transcript": transcript[:10000] if transcript else "",
+                    "duration": duration or 0,
+                    "booking_ref": booking_ref or "",
+                    "status": status or "",
+                    "room_type": room_type or "",
+                    "metadata_json": json.dumps(metadata) if metadata else "{}",
+                    "created_at": now
+                }
             
             result = await self._make_request(
                 "POST",
                 f"/databases/{self.motel_db_id}/collections/{collection_id}/documents",
                 data={"documentId": doc_id, "data": data}
             )
-            logger.info(f"Saved transcript for {tenant_id}: {doc_id} {mask_phone(caller_phone)}")
+            logger.info(f"✅ Saved transcript for {tenant_id}: {doc_id} {mask_phone(caller_phone)}")
             return result
         except Exception as e:
-            logger.error(f"Error saving transcript for {tenant_id}: {e}")
+            logger.error(f"❌ Error saving transcript for {tenant_id}: {e}")
             return None
 
     async def get_tenant_call_logs(self, tenant_id: str, limit: int = 50, start_date: str = None) -> list:

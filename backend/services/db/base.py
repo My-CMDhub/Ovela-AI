@@ -30,13 +30,12 @@ class AppwriteBase:
         }
         url = f"{self.endpoint}{path}"
         
-        # For queries, convert to proper format for Appwrite (repeated 'queries' parameter)
+        # For queries, convert to proper format for Appwrite (queries[0], queries[1]...)
         if params and 'queries' in params:
             query_list = params.pop('queries')
-            # Use tuple of tuples for repeated keys in httpx
-            new_params = list(params.items())
-            for q in query_list:
-                new_params.append(('queries', q))
+            new_params = params.copy()
+            for i, q in enumerate(query_list):
+                new_params[f'queries[{i}]'] = q
             params = new_params
         
         try:
