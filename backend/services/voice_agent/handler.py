@@ -141,6 +141,9 @@ class VoiceAgentHandler:
             "order_summary": None,
             "pickup_time": None
         }
+        
+        # Tenant Configuration (Database Driven)
+        self.tenant_config = {}
     
     # =========================================================================
     # DEEPGRAM SETTINGS
@@ -183,6 +186,9 @@ class VoiceAgentHandler:
             # Better approach: Append to history immediately so model sees it
             # self.conversation_history.append({"role": "system", "content": system_context})
             
+        # Extract voice settings from DB config
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        
         return {
             "type": "Settings",
             "audio": {
@@ -201,8 +207,8 @@ class VoiceAgentHandler:
                 "listen": {
                     "provider": {
                         "type": "deepgram",
-                        "model": "nova-3",
-                        "endpointing": 350,  
+                        "model": voice_settings.get("model", "nova-3"),
+                        "endpointing": voice_settings.get("endpointing", 350),  
                         "smart_format": True
                     }
                 },
@@ -288,14 +294,18 @@ class VoiceAgentHandler:
         Get TTS configuration.
         Uses Cartesia Sonic-3 for ultra-low latency (~200ms).
         """
-        logger.info("🎤 Using Cartesia Sonic-3 TTS")
+        # Look for custom voice ID in DB config
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        voice_id = voice_settings.get("voice_id", CARTESIA_VOICE_ID)
+        
+        logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id})")
         return {
             "provider": {
                 "type": "cartesia",
                 "model_id": "sonic-3",
                 "voice": {
                     "mode": "id",
-                    "id": CARTESIA_VOICE_ID
+                    "id": voice_id
                 }
             }
         }
@@ -388,11 +398,30 @@ class VoiceAgentHandler:
             # Fallback to configured tenant or coalcreek
             self.tenant_id = settings.TENANT_ID or "coalcreek" 
             
+        # =====================================================================
+        # CONFIG-DRIVEN ARCHITECTURE: Load settings from DB
+        # =====================================================================
+        try:
+            logger.info(f"📥 Loading config for tenant: {self.tenant_id}")
+            self.tenant_config = db_service.get_tenant_config(self.tenant_id)
+            if not self.tenant_config:
+                logger.warning(f"⚠️ No config found for {self.tenant_id}, using defaults")
+        except Exception as e:
+            logger.error(f"❌ Failed to load tenant config: {e}")
+            self.tenant_config = {}
+            
         # Set context for knowledge base so tool calls use correct data
         set_tenant_context(self.tenant_id)
         
         # Initialize abuse protection with tenant context
-        self.abuse_protection = AbuseProtection(tenant_id=self.tenant_id)
+        # FEATURE FLAG: Check if harsher abuse protection is enabled
+        flags = self.tenant_config.get("feature_flags", {})
+        use_harsh_protection = flags.get("harsh_abuse_protection", False)
+        
+        self.abuse_protection = AbuseProtection(
+            tenant_id=self.tenant_id
+            # TODO: Pass use_harsh_protection when we update AbuseProtection class
+        )
         
         logger.info(f"🟢 Twilio stream started: {self.stream_sid} for {self.user_name} [{call_type}] tenant={self.tenant_id}")
         
@@ -400,15 +429,25 @@ class VoiceAgentHandler:
         self.call_start_time = time.time()
         self.abuse_protection.set_call_start_time(self.call_start_time)
         
-        # Initialize function dispatcher with user context
-        # Use SarandaFunctionDispatcher for restaurant tenant
-        if self.tenant_id == "saranda":
+        # =====================================================================
+        # STRATEGY PATTERN: Select Dispatcher based on Config
+        # =====================================================================
+        # 1. Check 'integrations.pms_provider' or 'type' in config
+        # 2. Fallback to hardcoded tenant checks for backward compatibility
+        
+        pms_provider = self.tenant_config.get("integrations", {}).get("pms_provider")
+        tenant_type = self.tenant_config.get("type", "motel") # motel vs restaurant
+        
+        logger.info(f"🧩 Configuring Dispatcher | PMS: {pms_provider} | Type: {tenant_type}")
+
+        if self.tenant_id == "saranda" or tenant_type == "restaurant":
             self.function_dispatcher = SarandaFunctionDispatcher(
                 user_phone=self.user_phone,
                 abuse_protection=self.abuse_protection
             )
-            logger.info("Using Saranda restaurant function dispatcher")
-        elif self.tenant_id == "coalcreek":
+            logger.info("✅ Using Saranda/Restaurant Dispatcher")
+            
+        elif self.tenant_id == "coalcreek" or pms_provider == "update 247":
             from .functions import CoalCreekFunctionDispatcher
             self.function_dispatcher = CoalCreekFunctionDispatcher(
                 db_service=db_service,
@@ -416,8 +455,10 @@ class VoiceAgentHandler:
                 save_reservation_fn=self._save_motel_reservation,
                 abuse_protection=self.abuse_protection
             )
-            logger.info("Using Coal Creek specific function dispatcher")
+            logger.info("✅ Using Coal Creek/update 247 Dispatcher")
+            
         else:
+            # Default/Generic Dispatcher
             self.function_dispatcher = FunctionDispatcher(
                 db_service=db_service,
                 user_phone=self.user_phone,
@@ -425,6 +466,7 @@ class VoiceAgentHandler:
                 abuse_protection=self.abuse_protection,
                 tenant_id=self.tenant_id
             )
+
         
         # Connect to Deepgram Voice Agent API
         try:

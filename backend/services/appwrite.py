@@ -1397,6 +1397,55 @@ class AppwriteService:
         except Exception as e:
             logger.error(f"Error updating tenant settings for {tenant_id}: {e}")
             return False
+    def get_tenant_config(self, tenant_id: str) -> dict:
+        """
+        Get full tenant configuration for Voice Agent.
+        Returns parsed config JSON + base attributes.
+        """
+        try:
+            path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
+            result = self._make_request("GET", path)
+            
+            if not result:
+                # Fallback query
+                params = {"queries": [f'equal("slug", "{tenant_id}")']}
+                list_result = self._make_request("GET", f"/databases/{self.motel_db_id}/collections/tenants/documents", params=params)
+                if list_result and list_result.get("documents"):
+                    result = list_result["documents"][0]
+            
+            if not result:
+                return {}
+
+            # Parse config JSON
+            import json
+            config = {}
+            if result.get("config"):
+                try:
+                    config = json.loads(result["config"])
+                except:
+                    config = {}
+            
+            # Merge base attributes into config for easy access
+            config["tenant_id"] = tenant_id
+            config["business_name"] = result.get("name")
+            config["twilio_phone"] = result.get("twilio_phone")
+            config["staff_email"] = result.get("staff_email")
+            
+            # Map top-level columns to config structure for consistency
+            if "integrations" not in config:
+                config["integrations"] = {}
+            
+            # If pms_provider exists as a column, use it (User has this column)
+            if result.get("pms_provider"):
+                config["integrations"]["pms_provider"] = result.get("pms_provider")
+                # Also set top-level for convenience
+                config["pms_provider"] = result.get("pms_provider")
+            
+            return config
+            
+        except Exception as e:
+            logger.error(f"Error fetching tenant config for {tenant_id}: {e}")
+            return {}
 
 
 db_service = AppwriteService()
