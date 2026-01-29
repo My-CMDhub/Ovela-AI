@@ -533,6 +533,9 @@ class VoiceAgentHandler:
             # Forward raw audio to Deepgram
             await self.deepgram_ws.send(audio_bytes)
             
+        except websockets.exceptions.ConnectionClosed:
+            # Connection closed, stop trying to send
+            return
         except Exception as e:
             logger.warning(f"Error forwarding audio to Deepgram: {e}")
     
@@ -562,8 +565,8 @@ class VoiceAgentHandler:
                     # JSON event
                     await self._handle_deepgram_event(json.loads(message))
                     
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("🔌 Deepgram connection closed")
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.info(f"🔌 Deepgram connection closed. Code: {e.code}, Reason: {e.reason}")
         except Exception as e:
             logger.error(f"Error receiving from Deepgram: {e}")
     
