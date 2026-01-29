@@ -17,15 +17,15 @@ logger = logging.getLogger(__name__)
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
 
-async def execute_tool(tool_name: str, tool_args: dict, customer_id: str = None, whatsapp_id: str = None) -> str:
+async def execute_tool(tool_name: str, tool_args: dict, customer_id: str = None, whatsapp_id: str = None, tenant_id: str = None) -> str:
     """Execute a tool call and return the result as a string."""
     logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
     
     if tool_name == "check_availability":
-        return await _handle_check_availability(tool_args)
+        return await _handle_check_availability(tool_args, tenant_id)
     
     elif tool_name == "submit_booking_request":
-        return await _handle_submit_booking_request(tool_args, whatsapp_id)
+        return await _handle_submit_booking_request(tool_args, whatsapp_id, tenant_id)
     
     elif tool_name == "get_my_bookings":
         return await _handle_get_my_bookings(whatsapp_id)
@@ -47,7 +47,7 @@ async def execute_tool(tool_name: str, tool_args: dict, customer_id: str = None,
 
 # ============ TOOL HANDLERS ============
 
-async def _handle_check_availability(tool_args: dict) -> str:
+async def _handle_check_availability(tool_args: dict, tenant_id: str = None) -> str:
     """Check available appointment slots for a specific date."""
     date_str = tool_args.get("date")
     
@@ -60,7 +60,8 @@ async def _handle_check_availability(tool_args: dict) -> str:
         date=date_str,
         start_hour=9,
         end_hour=18,
-        slot_duration=60
+        slot_duration=60,
+        tenant_id=tenant_id
     )
     
     if available_slots:
@@ -82,7 +83,7 @@ async def _handle_check_availability(tool_args: dict) -> str:
     return json.dumps({"available": False, "date": date_str, "message": "No slots available on this date."})
 
 
-async def _handle_submit_booking_request(tool_args: dict, whatsapp_id: str) -> str:
+async def _handle_submit_booking_request(tool_args: dict, whatsapp_id: str, tenant_id: str = None) -> str:
     """Create a pending booking request for owner approval."""
     customer_name = tool_args.get("customer_name")
     customer_email = tool_args.get("customer_email")
@@ -95,7 +96,7 @@ async def _handle_submit_booking_request(tool_args: dict, whatsapp_id: str) -> s
         return json.dumps({"submitted": False, "error": "Customer name is required."})
     
     request_data = {
-        "business_id": "default_business",
+        "business_id": tenant_id or "default_business",
         "customer_name": customer_name,
         "customer_phone": whatsapp_id or "unknown",
         "customer_email": customer_email,

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
 
-async def generate_response(history: list, customer_context: str = "", customer_id: str = None, whatsapp_id: str = None) -> str:
+async def generate_response(history: list, customer_context: str = "", customer_id: str = None, whatsapp_id: str = None, tenant_id: str = None) -> str:
     """
     Generates a response from OpenAI with tool calling support.
     Uses business settings from dashboard if configured.
@@ -68,7 +68,7 @@ async def generate_response(history: list, customer_context: str = "", customer_
         if assistant_message.tool_calls:
             return await _handle_tool_calls(
                 client, messages, assistant_message,
-                customer_id, whatsapp_id
+                customer_id, whatsapp_id, tenant_id
             )
         else:
             logger.info(f"AI direct response (no tools)")
@@ -80,7 +80,7 @@ async def generate_response(history: list, customer_context: str = "", customer_
         return "I'm having a little trouble right now. Please try again in a moment."
 
 
-async def _handle_tool_calls(client, messages: list, assistant_message, customer_id: str, whatsapp_id: str) -> str:
+async def _handle_tool_calls(client, messages: list, assistant_message, customer_id: str, whatsapp_id: str, tenant_id: str = None) -> str:
     """Handle initial and follow-up tool calls."""
     
     logger.info(f"AI is calling {len(assistant_message.tool_calls)} tool(s)")
@@ -105,7 +105,7 @@ async def _handle_tool_calls(client, messages: list, assistant_message, customer
         tool_args = json.loads(tool_call.function.arguments)
         
         logger.info(f"Executing tool: {tool_name}")
-        tool_result = await execute_tool(tool_name, tool_args, customer_id, whatsapp_id)
+        tool_result = await execute_tool(tool_name, tool_args, customer_id, whatsapp_id, tenant_id)
         
         messages.append({
             "role": "tool",
@@ -147,7 +147,7 @@ async def _handle_tool_calls(client, messages: list, assistant_message, customer
                 tool_name = tool_call.function.name
                 tool_args = json.loads(tool_call.function.arguments)
                 
-                tool_result = await execute_tool(tool_name, tool_args, customer_id, whatsapp_id)
+                tool_result = await execute_tool(tool_name, tool_args, customer_id, whatsapp_id, tenant_id)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,

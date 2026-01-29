@@ -141,7 +141,7 @@ async def handle_check_availability(args: dict, db_service, tenant_id: str = "co
         }
 
 
-async def handle_create_booking_request(args: dict, user_phone: str, save_reservation_fn) -> dict:
+async def handle_create_booking_request(args: dict, user_phone: str, save_reservation_fn, tenant_id: str = "coalcreek") -> dict:
     """
     Create a SOFT HOLD booking request (Coal Creek style).
     Status: pending_confirmation
@@ -213,6 +213,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         "booking_reference": booking_ref,
         "notes": notes or "Soft Hold Request via AI",
         "arrival_time": "",
+        "tenant_id": tenant_id,
         "created_at": now,
         "updated_at": now,
         "created_by": "ovela_ai"
@@ -659,7 +660,7 @@ class FunctionDispatcher:
                 return await handle_check_availability(args, self.db_service, self.tenant_id)
             
             elif function_name == "create_booking_request":
-                return await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn)
+                return await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn, self.tenant_id)
             
             elif function_name == "get_room_pricing":
                 return await handle_get_room_pricing(args)

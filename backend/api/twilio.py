@@ -196,7 +196,13 @@ async def handle_call_status(
             business_phone = business_settings.get("business_phone", "0475 921 152") if business_settings else "0475 921 152"
             
             # Check if this customer has a recently rejected request
-            existing_requests = db_service.get_booking_requests_by_phone(caller_phone)
+            # Resolve tenant_id to enable strict filtering
+            tenant_id = settings.TENANT_ID or "coalcreek"
+            cleaned_to = To.replace(" ", "").strip() if To else ""
+            if cleaned_to in settings.PHONE_TO_TENANT_MAP:
+                tenant_id = settings.PHONE_TO_TENANT_MAP[cleaned_to]
+            
+            existing_requests = db_service.get_booking_requests_by_phone(caller_phone, tenant_id=tenant_id)
             has_recent_rejection = False
             
             if existing_requests:

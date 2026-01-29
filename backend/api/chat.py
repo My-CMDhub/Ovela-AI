@@ -99,7 +99,8 @@ async def handle_webhook(request: Request):
             current_history, 
             customer_context=customer_context,
             customer_id=customer_id,
-            whatsapp_id=whatsapp_id
+            whatsapp_id=whatsapp_id,
+            tenant_id=business_id
         )
         
         # 4.5 Update Token Usage (estimate: input + output tokens)
