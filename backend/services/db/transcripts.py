@@ -117,7 +117,8 @@ class TranscriptsMixin:
         booking_ref: str = None,
         status: str = None,
         room_type: str = None,
-        metadata: dict = None
+        metadata: dict = None,
+        call_summary: str = None
     ) -> dict:
         """Save a call transcript to tenant-specific collection."""
         try:
@@ -134,6 +135,7 @@ class TranscriptsMixin:
                 "duration_seconds": duration or 0,
                 "outcome": status or "completed",
                 "pms_reference": booking_ref or "",
+                "call_summary": call_summary or "",
                 "metadata_json": json.dumps(metadata) if metadata else "{}",
                 "created_at": now
             }

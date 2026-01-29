@@ -29,6 +29,7 @@ export type CallLog = {
     outcome: string
     transcript: TranscriptMessage[]
     booking_reference?: string
+    call_summary?: string
 }
 
 export const columns: ColumnDef<CallLog>[] = [
@@ -126,11 +127,14 @@ export const columns: ColumnDef<CallLog>[] = [
         accessorKey: "transcript",
         header: "Summary",
         cell: ({ row }) => {
+            const summary = row.original.call_summary
             const msgs = row.original.transcript
-            const lastMsg = msgs.length > 0 ? msgs[msgs.length - 1].text : "No transcript"
+            const fallback = msgs.length > 0 ? msgs[msgs.length - 1].text : "No transcript"
+            const display = summary || fallback
+
             return (
-                <div className="max-w-[300px] truncate text-sm text-gray-500" title={lastMsg}>
-                    {lastMsg}
+                <div className="max-w-[300px] truncate text-sm text-gray-500" title={display}>
+                    {display}
                 </div>
             )
         }

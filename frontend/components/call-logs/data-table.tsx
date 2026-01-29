@@ -47,6 +47,7 @@ export function DataTable<TData, TValue>({
     const [sorting, setSorting] = React.useState<SortingState>([])
     const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([])
     const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({})
+    const [expandedRowId, setExpandedRowId] = React.useState<string | null>(null)
 
     // Custom filter logic could go here if needed, but default column logic works for strict string matches.
     // For "Status", we might want "includes" check if we allow updating the column definition filterFn.
@@ -191,18 +192,87 @@ export function DataTable<TData, TValue>({
                     <TableBody>
                         {table.getRowModel().rows?.length ? (
                             table.getRowModel().rows.map((row) => (
-                                <TableRow
-                                    key={row.id}
-                                    data-state={row.getIsSelected() && "selected"}
-                                    onClick={() => onRowClick && onRowClick(row.original)}
-                                    className={`cursor-pointer transition-colors hover:bg-gray-50 ${loading ? 'opacity-50 pointer-events-none' : ''}`}
-                                >
-                                    {row.getVisibleCells().map((cell) => (
-                                        <TableCell key={cell.id} className="py-3 px-4">
-                                            {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                                        </TableCell>
-                                    ))}
-                                </TableRow>
+                                <React.Fragment key={row.id}>
+                                    <TableRow
+                                        data-state={row.getIsSelected() && "selected"}
+                                        onClick={() => {
+                                            setExpandedRowId(expandedRowId === row.id ? null : row.id)
+                                            onRowClick && onRowClick(row.original)
+                                        }}
+                                        className={`cursor-pointer transition-colors hover:bg-gray-50 ${loading ? 'opacity-50 pointer-events-none' : ''} ${expandedRowId === row.id ? 'bg-blue-50/30' : ''}`}
+                                    >
+                                        {row.getVisibleCells().map((cell) => (
+                                            <TableCell key={cell.id} className="py-3 px-4">
+                                                {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                                            </TableCell>
+                                        ))}
+                                    </TableRow>
+                                    {expandedRowId === row.id && (
+                                        <TableRow className="bg-slate-50/50 hover:bg-slate-50/50">
+                                            <TableCell colSpan={columns.length} className="p-0 border-t-0">
+                                                <div className="p-6 space-y-6 animate-in slide-in-from-top-1 duration-200">
+                                                    {/* AI Summary Section */}
+                                                    <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm">
+                                                        <h4 className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-2 flex items-center gap-2">
+                                                            <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                                                            AI Summary
+                                                        </h4>
+                                                        <p className="text-slate-700 text-sm leading-relaxed">
+                                                            {(row.original as any).call_summary || "Summarizing call details..."}
+                                                        </p>
+                                                    </div>
+
+                                                    {/* Transcript Section */}
+                                                    <div className="space-y-4">
+                                                        <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-2">
+                                                            Call Transcript
+                                                        </h4>
+                                                        <div className="space-y-3 max-h-[400px] overflow-y-auto px-2 py-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+                                                            {((row.original as any).transcript || []).map((msg: any, idx: number) => {
+                                                                const isAi = msg.role === "ai" || msg.role === "assistant";
+                                                                return (
+                                                                    <div
+                                                                        key={idx}
+                                                                        className={`flex flex-col ${isAi ? 'items-start' : 'items-end'}`}
+                                                                    >
+                                                                        <div className={`
+                                                                            max-w-[85%] md:max-w-[70%] rounded-2xl px-4 py-2 text-sm shadow-sm
+                                                                            ${isAi
+                                                                                ? 'bg-white text-slate-800 rounded-tl-none border border-slate-100'
+                                                                                : 'bg-blue-600 text-white rounded-tr-none'}
+                                                                        `}>
+                                                                            {msg.text}
+                                                                        </div>
+                                                                        <span className="text-[10px] text-slate-400 mt-1 px-1">
+                                                                            {isAi ? "Voice AI" : "Customer"}
+                                                                        </span>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                            {(!row.original as any).transcript?.length && (
+                                                                <div className="text-center py-8 text-slate-400 text-sm italic">
+                                                                    Transcript not available for this call.
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Metadata Footer */}
+                                                    <div className="flex flex-wrap gap-4 pt-4 border-t border-slate-200/60 text-xs text-slate-500">
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="font-medium">Call ID:</span>
+                                                            <span className="font-mono">{(row.original as any).call_sid || "N/A"}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="font-medium">Ref:</span>
+                                                            <span className="font-mono">{(row.original as any).booking_reference || "None"}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </TableCell>
+                                        </TableRow>
+                                    )}
+                                </React.Fragment>
                             ))
                         ) : (
                             <TableRow>

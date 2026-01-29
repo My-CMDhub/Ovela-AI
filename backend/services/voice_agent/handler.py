@@ -1498,6 +1498,7 @@ class VoiceAgentHandler:
                         duration=duration,
                         booking_ref=self.call_reference,
                         status=self.call_outcome,
+                        call_summary=await self._generate_call_summary(),
                         metadata={
                             "exchange_count": self.exchange_count,
                             "outcome": self.call_outcome,
@@ -1514,6 +1515,39 @@ class VoiceAgentHandler:
         except Exception as e:
             logger.warning(f"Error closing Twilio WS: {e}")
 
+
+    async def _generate_call_summary(self) -> str:
+        """
+        Generates a concise 1-sentence summary of the call transcript 
+        using a dedicated model after the call ends.
+        """
+        if not self.transcript or len(self.transcript) < 2:
+            return ""
+
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            
+            # Format transcript for the summarizer
+            transcript_text = "\n".join([f"{m['role'].upper()}: {m['text']}" for m in self.transcript])
+            
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini", # Dedicated efficient model for summarizing
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that summarizes customer service calls. Provide a ultra-concise, 1-sentence summary of what happened in the call (e.g. 'Customer ordered 2 large pepperoni pizzas for 7:30pm pickup'). Focus on the intent and result."},
+                    {"role": "user", "content": f"Summarize this call transcript:\n\n{transcript_text}"}
+                ],
+                max_tokens=60,
+                temperature=0.3
+            )
+            
+            summary = response.choices[0].message.content.strip()
+            logger.info(f"📝 Generated call summary: {summary}")
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Failed to generate call summary: {e}")
+            return ""
 
 # Backwards compatibility alias
 DeepgramAgentHandler = VoiceAgentHandler

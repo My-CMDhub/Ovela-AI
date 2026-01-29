@@ -603,7 +603,7 @@ async def handle_get_restaurant_info(args: dict) -> dict:
 # CUSTOMER LOOKUP HANDLERS
 # =============================================================================
 
-async def handle_lookup_customer(args: dict, user_phone: str) -> dict:
+async def lookup_customer(args: dict, user_phone: str) -> dict:
     """
     Lookup customer by name to disambiguate or find previous orders.
     """
