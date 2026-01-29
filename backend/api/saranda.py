@@ -84,7 +84,7 @@ async def handle_whatsapp_reply(
         # Notify ghosts (Anti-Ghosting here too)
         for exp_req in expired_list:
             try:
-                await staff_notification_service.send_whatsapp_customer_confirmation(
+                await staff_notification_service.send_customer_order_confirmation(
                     customer_phone=exp_req.customer_phone,
                     order_id=exp_req.id,
                     status="expired",
@@ -115,7 +115,7 @@ async def handle_whatsapp_reply(
     
     # Send SMS confirmation to customer
     try:
-        await staff_notification_service.send_whatsapp_customer_confirmation(
+        await staff_notification_service.send_customer_order_confirmation(
             customer_phone=customer_phone,
             order_id=request_id,
             status=status,
@@ -129,36 +129,37 @@ async def handle_whatsapp_reply(
     # Check if there's a next request that needs WhatsApp notification
     next_request = saranda_queue.get_active()
     if next_request:
-        # Send WhatsApp notification for the next order
-        try:
-            # Determine request type label
-            type_label = "order"
-            if hasattr(next_request, 'request_type'):
-                type_label = next_request.request_type.value
+        # User Request: Disable WhatsApp flow.
+        logger.info(f"⏭️ Next request {next_request.id} is active (WhatsApp notification frozen)")
+        # try:
+        #     # Determine request type label
+        #     type_label = "order"
+        #     if hasattr(next_request, 'request_type'):
+        #         type_label = next_request.request_type.value
             
-            # Get order summary
-            order_summary = next_request.format_for_whatsapp()
+        #     # Get order summary
+        #     order_summary = next_request.format_for_whatsapp()
             
-            # Determine pickup time for next request
-            next_pickup = None
-            total_amount = 0.0
-            if hasattr(next_request, 'pickup_time'):
-                next_pickup = next_request.pickup_time
-                total_amount = next_request.total_amount
-            elif hasattr(next_request, 'time'):
-                next_pickup = f"{next_request.date} at {next_request.time}"
+        #     # Determine pickup time for next request
+        #     next_pickup = None
+        #     total_amount = 0.0
+        #     if hasattr(next_request, 'pickup_time'):
+        #         next_pickup = next_request.pickup_time
+        #         total_amount = next_request.total_amount
+        #     elif hasattr(next_request, 'time'):
+        #         next_pickup = f"{next_request.date} at {next_request.time}"
             
-            await staff_notification_service.send_whatsapp_order_approval(
-                request_id=next_request.id,
-                request_type=type_label,
-                customer_name=next_request.customer_name,
-                order_summary=order_summary,
-                pickup_time=next_pickup or "ASAP",
-                total_amount=total_amount
-            )
-            logger.info(f"📱 Next request {next_request.id} sent to staff for approval")
-        except Exception as e:
-            logger.error(f"❌ Failed to send WhatsApp for next request: {e}")
+        #     await staff_notification_service.send_whatsapp_order_approval(
+        #         request_id=next_request.id,
+        #         request_type=type_label,
+        #         customer_name=next_request.customer_name,
+        #         order_summary=order_summary,
+        #         pickup_time=next_pickup or "ASAP",
+        #         total_amount=total_amount
+        #     )
+        #     logger.info(f"📱 Next request {next_request.id} sent to staff for approval")
+        # except Exception as e:
+        #     logger.error(f"❌ Failed to send WhatsApp for next request: {e}")
     
     # Return empty response (Twilio expects 200 OK)
     return Response(content="", media_type="text/plain")

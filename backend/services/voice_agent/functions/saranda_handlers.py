@@ -493,17 +493,19 @@ async def handle_request_reservation(args: dict, user_phone: str, business_phone
     
     # Send WhatsApp if active
     if saranda_queue.get_active() and saranda_queue.get_active().id == request_id:
-        try:
-            await staff_notification_service.send_whatsapp_order_approval(
-                request_id=request_id,
-                request_type="reservation",
-                customer_name=customer_name,
-                order_summary=summary,
-                pickup_time=time,
-                total_amount=0
-            )
-        except Exception as e:
-            logger.error(f"Failed to send reservation WhatsApp: {e}")
+        # FROZEN : WhatsApp notifications disabled for now.
+        # Direct Square integration handles kitchen flow.
+        # try:
+        #     await staff_notification_service.send_whatsapp_order_approval(
+        #         request_id=request_id,
+        #         request_type="reservation",
+        #         customer_name=customer_name,
+        #         order_summary=summary,
+        #         pickup_time=time,
+        #         total_amount=0
+        #     )
+        # except Exception as e:
+        #     logger.error(f"Failed to send reservation WhatsApp: {e}")
     
     return {
         "success": True,

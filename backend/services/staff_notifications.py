@@ -6,6 +6,7 @@ import logging
 from services.email import email_service
 from services.appwrite import db_service
 from core.config import settings
+from core.utils import mask_phone
 import httpx
 from twilio.rest import Client
 
@@ -50,7 +51,7 @@ class StaffNotificationService:
             )
             
             if success:
-                logger.info(f"Callback request sent for {customer_name} ({customer_phone})")
+                logger.info(f"Callback request sent for {customer_name} ({mask_phone(customer_phone)})")
             else:
                 logger.error(f"Failed to send callback email for {customer_name}")
                 
@@ -134,7 +135,15 @@ class StaffNotificationService:
     # SARANDA RESTAURANT - WhatsApp HITL Notifications
     # =========================================================================
     
-    async def send_whatsapp_order_approval(
+    async def send_whatsapp_order_approval(self, *args, **kwargs) -> bool:
+        """
+        STUB: WhatsApp notifications are currently FROZEN/DISABLED.
+        Always returns True to avoid breaking callers.
+        """
+        logger.info("❄️ WhatsApp notification suppressed (Feature Frozen)")
+        return True
+
+    async def _frozen_send_whatsapp_order_approval(
         self,
         request_id: str,
         request_type: str,  # "order", "change", "cancel", "reservation"
@@ -144,7 +153,7 @@ class StaffNotificationService:
         total_amount: float = 0,
     ) -> bool:
         """
-        Send structured approval request to staff WhatsApp for Saranda.
+        [FROZEN] Send structured approval request to staff WhatsApp for Saranda.
         Staff replies with: YES, NO, or LATE
         
         Uses Twilio WhatsApp API (outbound from your Twilio number).
@@ -260,7 +269,7 @@ Reply with:
             logger.error(f"❌ Critical: All WhatsApp delivery methods failed for {request_id}: {e}")
             return False
     
-    async def send_whatsapp_customer_confirmation(
+    async def send_customer_order_confirmation(
         self,
         customer_phone: str,
         order_id: str,
@@ -269,9 +278,9 @@ Reply with:
         message_override: str = None,
     ) -> bool:
         """
-        Send confirmation/rejection to customer via SMS after staff responds.
+        Send confirmation/rejection to customer via SMS.
         
-        Note: Customer gets SMS, not WhatsApp (they called via voice).
+        Note: Customer gets SMS (they called via voice).
         """
         
         try:
@@ -303,7 +312,7 @@ Reply with:
                 response = await client.post(url, data=data, auth=auth)
                 response.raise_for_status()
             
-            logger.info(f"Customer SMS sent to {phone} for order #{order_id} ({status})")
+            logger.info(f"Customer SMS sent to {mask_phone(phone)} for order #{order_id} ({status})")
             return True
             
         except Exception as e:

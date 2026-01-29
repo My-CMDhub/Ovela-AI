@@ -39,6 +39,8 @@ class BookingsMixin:
         ENFORCED: Server-side filtering by tenant_id.
         """
         try:
+            if not tenant_id:
+                logger.warning("⚠️ SECURITY: get_booking_requests called without tenant_id! Returning all tenants.")
             path = f"/databases/{self.db_id}/collections/booking_requests/documents"
             
             queries = []
@@ -129,6 +131,8 @@ class BookingsMixin:
         Get bookings with server-side filters.
         """
         try:
+            if not tenant_id:
+                logger.warning("⚠️ SECURITY: get_bookings called without tenant_id! Returning all tenants.")
             path = f"/databases/{self.db_id}/collections/bookings/documents"
             
             queries = []
@@ -185,6 +189,8 @@ class BookingsMixin:
         Returns list of available slot times (HH:MM format).
         """
         try:
+            if not tenant_id:
+                logger.warning("⚠️ SECURITY: get_availability called without tenant_id!")
             # Get existing bookings for the date
             existing = await self.get_bookings(date=date, status="confirmed", tenant_id=tenant_id)
             

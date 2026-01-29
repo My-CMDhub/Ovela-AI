@@ -1,5 +1,7 @@
 import logging
+import httpx
 from core.config import settings
+from core.utils import mask_phone
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,7 @@ class SmsService:
                 response.raise_for_status()
                 msg_data = response.json()
                 
-            logger.info(f"SMS sent to {clean_number}: {msg_data.get('sid')}")
+            logger.info(f"SMS sent to {mask_phone(clean_number)}: {msg_data.get('sid')}")
             return True
         except Exception as e:
             logger.error(f"Failed to send SMS to {to_number}: {e}")
