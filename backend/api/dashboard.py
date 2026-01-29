@@ -367,7 +367,9 @@ async def get_call_logs(
             
             # Logic for filtering
             if status == "completed":
-                if outcome in COMPLETED_OUTCOMES and duration >= 10:
+                is_completed = outcome in COMPLETED_OUTCOMES
+                is_long_enough = duration >= 3
+                if is_completed or (outcome not in ISSUE_OUTCOMES and is_long_enough):
                     filtered.append(t)
             elif status == "issues":
                 if outcome in ISSUE_OUTCOMES:
