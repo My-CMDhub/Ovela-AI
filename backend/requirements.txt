@@ -15,5 +15,5 @@ websockets
 aiohttp
 PyJWT
 newrelic>=11.0.0
-square-python
+squareup
 stripe
