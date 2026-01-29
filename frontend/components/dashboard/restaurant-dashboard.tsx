@@ -12,6 +12,7 @@ import {
     ExternalLink
 } from "lucide-react";
 import { useTenant } from "@/contexts/TenantContext";
+import { client, DATABASE_ID } from "@/lib/appwrite";
 import Link from "next/link";
 
 interface CallLog {
@@ -27,38 +28,56 @@ export default function RestaurantDashboard() {
     const [stats, setStats] = useState({
         totalCalls: 0,
         missedCalls: 0,
-        avgDuration: 0,
+        avgDuration: "0s",
     });
     const [recentCalls, setRecentCalls] = useState<CallLog[]>([]);
     const [loading, setLoading] = useState(true);
 
-    useEffect(() => {
-        // Mock data or simple fetch for now
-        // Ideally we fetch from /api/motel/call-logs
-        const fetchCalls = async () => {
-            try {
-                const res = await fetch(`/api/dashboard/call-logs?limit=5&tenant_id=${tenant.id}`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.success) {
-                        setRecentCalls(data.logs);
-                        // Calculate basic stats from logs
-                        setStats({
-                            totalCalls: data.counts?.all || 0,
-                            missedCalls: data.counts?.issues || 0, // Using 'issues' as proxy for missed/problems
-                            avgDuration: 0 // TODO: Calculate
-                        });
-                    }
-                }
-            } catch (e) {
-                console.error(e);
-            } finally {
-                setLoading(false);
-            }
-        };
+    const fetchCalls = async (silent = false) => {
+        if (!silent) setLoading(true);
+        try {
+            const res = await fetch(`/api/dashboard/call-logs?limit=5&tenant_id=${tenant.id}`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success) {
+                    setRecentCalls(data.logs);
 
+                    const avgSecs = data.counts?.avg_duration || 0;
+                    const mins = Math.floor(avgSecs / 60);
+                    const secs = Math.round(avgSecs % 60);
+                    const avgStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+
+                    setStats({
+                        totalCalls: data.counts?.all || 0,
+                        missedCalls: data.counts?.issues || 0,
+                        avgDuration: avgStr
+                    });
+                }
+            }
+        } catch (e) {
+            console.error(e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
         fetchCalls();
-    }, []);
+
+        const collectionId = `call_transcripts_${tenant.id}`;
+        console.log(`📡 Subscribing to: ${collectionId}`);
+
+        const unsubscribe = client.subscribe(
+            `databases.${DATABASE_ID}.collections.${collectionId}.documents`,
+            (response) => {
+                if (response.events.some(e => e.includes(".create") || e.includes(".update"))) {
+                    fetchCalls(true);
+                }
+            }
+        );
+
+        return () => unsubscribe();
+    }, [tenant.id]);
 
     const kpiCards = [
         {
@@ -77,7 +96,7 @@ export default function RestaurantDashboard() {
         },
         {
             title: "Avg Call Time",
-            value: "1m 20s", // Mock for now
+            value: stats.avgDuration,
             icon: Clock,
             color: "text-emerald-500",
             bg: "bg-emerald-50",
@@ -104,9 +123,8 @@ export default function RestaurantDashboard() {
                 </div>
             </div>
 
-            {/* Quick Actions Grid (The "Big Companies" look) */}
+            {/* Quick Actions Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* 1. Square POS Card */}
                 <motion.a
                     href="https://squareup.com/dashboard"
                     target="_blank"
@@ -133,7 +151,6 @@ export default function RestaurantDashboard() {
                     </div>
                 </motion.a>
 
-                {/* 2. Voice AI Stats Card */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -150,7 +167,7 @@ export default function RestaurantDashboard() {
                                 <p className="text-sm text-gray-500">Today's metrics</p>
                             </div>
                         </div>
-                        <span className="flex h-3 w-3">
+                        <span className="flex h-3 w-3 relative">
                             <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-green-400 opacity-75"></span>
                             <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
                         </span>
@@ -198,7 +215,9 @@ export default function RestaurantDashboard() {
                                         </p>
                                     </div>
                                 </div>
-                                <span className={`text-xs px-2 py-1 rounded-full ${call.outcome === 'completed' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                                <span className={`text-xs px-2 py-1 rounded-full ${call.outcome === 'completed' || call.outcome === 'transferred'
+                                        ? 'bg-green-100 text-green-700'
+                                        : 'bg-red-100 text-red-700'
                                     }`}>
                                     {call.outcome}
                                 </span>

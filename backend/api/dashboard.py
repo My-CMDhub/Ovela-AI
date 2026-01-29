@@ -423,13 +423,11 @@ async def get_call_logs(
             "success": True,
             "logs": formatted,
             "total": len(formatted),
-            # Counts are tricky with pagination + filtering, removing 'counts' implies 
-            # we might break frontend if it relies on them.
-            # Let's return simple counts of current page or 0 to be safe.
             "counts": {
-                "completed": 0,
-                "issues": 0,
-                "all": 0
+                "completed": len([t for t in transcripts if (t.get("status") or t.get("outcome")) in COMPLETED_OUTCOMES]),
+                "issues": len([t for t in transcripts if (t.get("status") or t.get("outcome")) in ISSUE_OUTCOMES]),
+                "all": len(transcripts),
+                "avg_duration": sum([t.get("duration") or t.get("duration_seconds", 0) for t in transcripts]) / len(transcripts) if transcripts else 0
             }
         }
         
