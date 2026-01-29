@@ -416,6 +416,7 @@ async def get_call_logs(
                 "call_sid": t.get("call_sid", ""),
                 "booking_reference": t.get("pms_reference") or t.get("booking_ref") or "",
                 "call_summary": t.get("call_summary") or "",
+                "customer_name": t.get("customer_name") or "Not provided",
             })
         
         return {

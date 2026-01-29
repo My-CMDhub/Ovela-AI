@@ -30,6 +30,7 @@ export type CallLog = {
     transcript: TranscriptMessage[]
     booking_reference?: string
     call_summary?: string
+    customer_name?: string
 }
 
 export const columns: ColumnDef<CallLog>[] = [
@@ -66,12 +67,16 @@ export const columns: ColumnDef<CallLog>[] = [
         header: "Phone",
         cell: ({ row }) => {
             const phone = row.getValue("phone") as string
+            const name = row.original.customer_name || "Not provided"
             return (
-                <div className="flex items-center gap-2 font-mono text-sm">
-                    <Phone className="w-3 h-3 text-gray-400" />
-                    <a href={`tel:${phone}`} className="hover:text-blue-600 transition-colors">
-                        {phone}
-                    </a>
+                <div className="flex flex-col gap-0.5">
+                    <span className="font-semibold text-slate-800 text-sm">{name}</span>
+                    <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
+                        <Phone className="w-2.5 h-2.5" />
+                        <a href={`tel:${phone}`} className="hover:text-blue-600 transition-colors">
+                            {phone}
+                        </a>
+                    </div>
                 </div>
             )
         },

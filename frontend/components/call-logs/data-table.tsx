@@ -208,26 +208,45 @@ export function DataTable<TData, TValue>({
                                         ))}
                                     </TableRow>
                                     {expandedRowId === row.id && (
-                                        <TableRow className="bg-slate-50/50 hover:bg-slate-50/50">
-                                            <TableCell colSpan={columns.length} className="p-0 border-t-0">
-                                                <div className="p-6 space-y-6 animate-in slide-in-from-top-1 duration-200">
-                                                    {/* AI Summary Section */}
-                                                    <div className="bg-white rounded-lg p-4 border border-blue-100 shadow-sm">
-                                                        <h4 className="text-xs font-semibold text-blue-600 uppercase tracking-wider mb-2 flex items-center gap-2">
-                                                            <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-                                                            AI Summary
+                                        <TableRow className="bg-slate-50/50 hover:bg-slate-50/50 border-t border-slate-100">
+                                            <TableCell colSpan={columns.length} className="p-0">
+                                                <div className="p-4 md:p-8 space-y-8 animate-in transition-all duration-300 slide-in-from-top-2">
+                                                    {/* Premium AI Summary Section */}
+                                                    <div className="relative overflow-hidden bg-white rounded-2xl p-5 md:p-6 border border-blue-100 shadow-sm group">
+                                                        <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                                                            <svg className="w-12 h-12 text-blue-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" /></svg>
+                                                        </div>
+                                                        <h4 className="text-[10px] font-bold text-blue-600 uppercase tracking-[0.2em] mb-3 flex items-center gap-2">
+                                                            <span className="relative flex h-2 w-2">
+                                                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                                                                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                                                            </span>
+                                                            AI Analysis
                                                         </h4>
-                                                        <p className="text-slate-700 text-sm leading-relaxed">
-                                                            {(row.original as any).call_summary || "Summarizing call details..."}
+                                                        <p className="text-slate-700 text-sm md:text-base font-medium leading-relaxed max-w-2xl">
+                                                            {(row.original as any).call_summary || (
+                                                                <span className="text-slate-400 italic">Processing high-level summary...</span>
+                                                            )}
                                                         </p>
                                                     </div>
 
-                                                    {/* Transcript Section */}
-                                                    <div className="space-y-4">
-                                                        <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-2">
-                                                            Call Transcript
-                                                        </h4>
-                                                        <div className="space-y-3 max-h-[400px] overflow-y-auto px-2 py-1 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
+                                                    {/* Chat Transcript Section */}
+                                                    <div className="space-y-5">
+                                                        <div className="flex items-center justify-between px-2">
+                                                            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
+                                                                Call Conversation
+                                                            </h4>
+                                                            <div className="flex items-center gap-3 text-[10px] font-medium text-slate-400">
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <div className="w-2 h-2 rounded-full bg-blue-600" /> AI
+                                                                </div>
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <div className="w-2 h-2 rounded-full bg-slate-200" /> Customer
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="space-y-4 max-h-[500px] overflow-y-auto px-1 py-4 scrollbar-thin scrollbar-thumb-slate-200 scrollbar-track-transparent">
                                                             {((row.original as any).transcript || []).map((msg: any, idx: number) => {
                                                                 const isAi = msg.role === "ai" || msg.role === "assistant";
                                                                 return (
@@ -236,36 +255,42 @@ export function DataTable<TData, TValue>({
                                                                         className={`flex flex-col ${isAi ? 'items-start' : 'items-end'}`}
                                                                     >
                                                                         <div className={`
-                                                                            max-w-[85%] md:max-w-[70%] rounded-2xl px-4 py-2 text-sm shadow-sm
+                                                                            relative max-w-[90%] md:max-w-[75%] rounded-[20px] px-5 py-3 text-sm leading-relaxed
                                                                             ${isAi
-                                                                                ? 'bg-white text-slate-800 rounded-tl-none border border-slate-100'
-                                                                                : 'bg-blue-600 text-white rounded-tr-none'}
+                                                                                ? 'bg-white text-slate-700 rounded-tl-none border border-slate-100 shadow-sm'
+                                                                                : 'bg-slate-900 text-white rounded-tr-none shadow-md'}
                                                                         `}>
                                                                             {msg.text}
                                                                         </div>
-                                                                        <span className="text-[10px] text-slate-400 mt-1 px-1">
-                                                                            {isAi ? "Voice AI" : "Customer"}
+                                                                        <span className="text-[9px] font-bold text-slate-300 uppercase tracking-tighter mt-1.5 px-2">
+                                                                            {isAi ? "Ovela AI" : "Customer"}
                                                                         </span>
                                                                     </div>
                                                                 );
                                                             })}
                                                             {(!row.original as any).transcript?.length && (
-                                                                <div className="text-center py-8 text-slate-400 text-sm italic">
-                                                                    Transcript not available for this call.
+                                                                <div className="text-center py-12 rounded-2xl border-2 border-dashed border-slate-100">
+                                                                    <p className="text-slate-400 text-sm font-medium italic">
+                                                                        No transcript data recorded for this duration.
+                                                                    </p>
                                                                 </div>
                                                             )}
                                                         </div>
                                                     </div>
 
-                                                    {/* Metadata Footer */}
-                                                    <div className="flex flex-wrap gap-4 pt-4 border-t border-slate-200/60 text-xs text-slate-500">
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="font-medium">Call ID:</span>
-                                                            <span className="font-mono">{(row.original as any).call_sid || "N/A"}</span>
+                                                    {/* Technical Context Footer */}
+                                                    <div className="flex flex-wrap items-center gap-6 pt-6 border-t border-slate-100 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-slate-300">Customer</span>
+                                                            <span className="font-mono text-slate-500">{(row.original as any).customer_name || "Not provided"}</span>
                                                         </div>
-                                                        <div className="flex items-center gap-1.5">
-                                                            <span className="font-medium">Ref:</span>
-                                                            <span className="font-mono">{(row.original as any).booking_reference || "None"}</span>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-slate-300">SID</span>
+                                                            <span className="font-mono text-slate-500">{(row.original as any).call_sid || "N/A"}</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-2">
+                                                            <span className="text-slate-300">Reference</span>
+                                                            <span className="font-mono text-slate-500">{(row.original as any).booking_reference || "None"}</span>
                                                         </div>
                                                     </div>
                                                 </div>

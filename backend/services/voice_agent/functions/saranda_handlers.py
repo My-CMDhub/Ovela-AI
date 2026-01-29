@@ -12,6 +12,7 @@ Key Design:
 
 import logging
 import asyncio
+import json
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -753,6 +754,10 @@ class SarandaFunctionDispatcher:
         
         elif function_name == "get_restaurant_info":
             return await handle_get_restaurant_info(args)
+        
+        # Customer lookup
+        elif function_name == "lookup_customer":
+            return await lookup_customer(args, self.user_phone)
         
         # Call control
         elif function_name == "end_call":

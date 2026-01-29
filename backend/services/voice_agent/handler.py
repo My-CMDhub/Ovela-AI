@@ -914,6 +914,9 @@ class VoiceAgentHandler:
         if "customer_name" in function_args and function_args["customer_name"]:
             self.memory["name"] = function_args["customer_name"]
             logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
+        elif "name" in function_args and function_args["name"]:
+            self.memory["name"] = function_args["name"]
+            logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
         
         if "items" in function_args:
              # Summarize items
@@ -1499,6 +1502,7 @@ class VoiceAgentHandler:
                         booking_ref=self.call_reference,
                         status=self.call_outcome,
                         call_summary=await self._generate_call_summary(),
+                        customer_name=self.memory.get("name"),
                         metadata={
                             "exchange_count": self.exchange_count,
                             "outcome": self.call_outcome,

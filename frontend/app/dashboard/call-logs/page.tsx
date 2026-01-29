@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 import { useAuth } from "@/contexts/AuthContext";
+import { client, DATABASE_ID } from "@/lib/appwrite";
 
 const API_URL = "";
 // Force relative path to use Next.js Proxy (route.ts) for auth and routing.
@@ -55,11 +56,30 @@ export default function CallLogsPage() {
             fetchLogs();
         }
 
-        // Auto-refresh every 30 seconds (Silent)
-        const interval = setInterval(() => {
-            if (user) fetchLogs(true);
-        }, 30000);
-        return () => clearInterval(interval);
+        // --- REALTIME SUBSCRIPTION ---
+        if (!user) return;
+
+        const tenantId = ((user.prefs as any)['tenant_id'] as string) || "coalcreek";
+        const collectionId = `call_transcripts_${tenantId}`;
+
+        console.log(`📡 Subscribing to realtime updates for: ${collectionId}`);
+
+        const unsubscribe = client.subscribe(
+            `databases.${DATABASE_ID}.collections.${collectionId}.documents`,
+            (response) => {
+                // When a new transcript record is CREATED
+                if (response.events.some(e => e.includes(".create"))) {
+                    console.log("🆕 New call log detected via Realtime!");
+                    // Re-fetch to get the fully mapped data from backend
+                    fetchLogs(true);
+                }
+            }
+        );
+
+        return () => {
+            console.log("🔌 Unsubscribing from Realtime");
+            unsubscribe();
+        };
     }, [fetchLogs, user]);
 
     const exportToCSV = () => {
