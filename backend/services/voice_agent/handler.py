@@ -241,12 +241,12 @@ class VoiceAgentHandler:
             else:
                 logger.error("❌ ANTHROPIC_API_KEY not set - falling back to GPT-4.1-mini")
         
-        # Fallback/Default to OpenAI gpt-4.1-mini (aliased as 4.1 in user comments)
-        logger.info("🧠 Using OpenAI gpt-4.1-mini (Primary)")
+        # Fallback/Default to OpenAI gpt-4o-mini (Primary)
+        logger.info("🧠 Using OpenAI gpt-4o-mini (Primary)")
         return {
             "provider": {
                 "type": "open_ai",
-                "model": "gpt-4.1-mini",
+                "model": "gpt-4o-mini",
                 "temperature": 0.45
             },
             "prompt": self._get_active_prompt(),
