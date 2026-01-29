@@ -141,6 +141,9 @@ class VoiceAgentHandler:
             "pickup_time": None
         }
         
+        # Order Tracking
+        self.order_id = None
+        
         # Tenant Configuration (Database Driven)
         self.tenant_config = {}
     
@@ -1026,6 +1029,11 @@ class VoiceAgentHandler:
         if function_name == "create_booking" and result.get("success"):
             self.booking_completed = True
         
+        # Check for order completion (Saranda)
+        if function_name == "submit_order" and result.get("success"):
+            self.order_id = result.get("order_id")
+            logger.info(f"🛒 Order captured: {self.order_id}")
+        
         # Send response back to Deepgram
         await self._send_function_response(call_id, function_name, result)
     
@@ -1484,7 +1492,8 @@ class VoiceAgentHandler:
                         status=self.call_outcome,
                         metadata={
                             "exchange_count": self.exchange_count,
-                            "outcome": self.call_outcome
+                            "outcome": self.call_outcome,
+                            "order_id": self.order_id
                         }
                     )
                 logger.info(f"📝 Saved transcript: {len(self.transcript)} entries, {duration}s")

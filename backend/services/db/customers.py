@@ -34,6 +34,27 @@ class CustomersMixin:
             logger.error(f"Error finding customer {mask_phone(phone)}: {e}")
             return None
 
+    async def find_customers_by_name(self, name_query: str, tenant_id: str, limit: int = 5):
+        """
+        Find customers by partial name match.
+        ENFORCED: Scoped to tenant_id.
+        """
+        try:
+            path = f"/databases/{self.db_id}/collections/customers/documents"
+            
+            # Use search if fulltext index exists, otherwise matching might be limited
+            queries = [
+                f'search("name", "{name_query}")',
+                f'equal("tenant_id", "{tenant_id}")',
+                f'limit({limit})'
+            ]
+            
+            result = await self._make_request("GET", path, params={"queries": queries})
+            return result.get("documents", []) if result else []
+        except Exception as e:
+            logger.error(f"Error searching customer by name '{name_query}': {e}")
+            return []
+
     async def create_customer(self, phone: str, name: str = None, tenant_id: str = "saranda"):
         """Create a new customer profile."""
         try:

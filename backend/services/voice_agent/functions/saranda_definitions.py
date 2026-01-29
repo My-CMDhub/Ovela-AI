@@ -186,6 +186,24 @@ def get_saranda_functions() -> list:
         },
         
         # =================================================================
+        # CUSTOMER LOOKUP
+        # =================================================================
+        {
+            "name": "lookup_customer",
+            "description": "Look up a customer by name to find their profile or previous orders. Use when user says 'It's John' or asks 'Do you have my details?'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Name or partial name to search for (e.g. 'John', 'Sarah Smith')"
+                    }
+                },
+                "required": ["name"]
+            }
+        },
+        
+        # =================================================================
         # CALL CONTROL
         # =================================================================
         {

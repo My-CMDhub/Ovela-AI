@@ -187,6 +187,7 @@ DO NOT promise later delivery."""
         return {
             "success": True,
             "request_id": call_id,
+            "order_id": order.order_id,
             "status": "pending_approval",
             "customer_name": customer_name,
             "total_amount": order.total_dollars,
@@ -596,8 +597,76 @@ async def handle_get_restaurant_info(args: dict) -> dict:
     return {
         "name": info["name"],
         "address": info["address"],
-        "phone": info["phone"],
-        "message": f"Saranda Cafe and Pizzeria, we're at {info['address']}. Phone is {info['phone']}. Pickup only from the restaurant, pay when you collect."
+from services.db import db_service
+
+# =============================================================================
+# CUSTOMER LOOKUP HANDLERS
+# =============================================================================
+
+async def handle_lookup_customer(args: dict, user_phone: str) -> dict:
+    """
+    Lookup customer by name to disambiguate or find previous orders.
+    """
+    name_query = args.get("name", "").strip()
+    if not name_query:
+        return {
+            "found": False,
+            "message": "I didn't catch the name. Could you repeat it?"
+        }
+    
+    # Use global db_service
+    # Tenant ID is implicitly Saranda for this module
+    tenant_id = "saranda" 
+    
+    customers = await db_service.find_customers_by_name(name_query, tenant_id)
+    
+    if not customers:
+        return {
+            "found": False,
+            "message": f"I couldn't find anyone named '{name_query}'. Is this your first time ordering with us?"
+        }
+    
+    if len(customers) == 1:
+        cust = customers[0]
+        # Mask phone: ...123
+        phone = cust.get("phone", "")
+        masked = phone[-3:] if len(phone) >= 3 else phone
+        
+        # Check last order?
+        last_order = ""
+        prefs = {}
+        try:
+             prefs = json.loads(cust.get("preferences_json", "{}"))
+        except: pass
+        
+        if "last_call_at" in prefs:
+             last_order = " (ordered previously)"
+             
+        return {
+            "found": True,
+            "count": 1,
+            "customer": {
+                "name": cust.get("name"),
+                "phone_masked": masked,
+                "id": cust.get("$id")
+            },
+            "message": f"I found {cust.get('name')} ending in {masked}{last_order}. Is that you?"
+        }
+        
+    # Multiple matches
+    options = []
+    for cust in customers[:3]:
+        phone = cust.get("phone", "")
+        masked = phone[-3:] if len(phone) >= 3 else phone
+        options.append(f"{cust.get('name')} (...{masked})")
+        
+    options_str = " or ".join(options)
+    
+    return {
+        "found": True,
+        "count": len(customers),
+        "message": f"I found a few people with that name: {options_str}. Which one is you? or what is your phone number?"
+    }
     }
 
 
