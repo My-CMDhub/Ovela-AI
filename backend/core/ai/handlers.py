@@ -31,16 +31,16 @@ async def execute_tool(tool_name: str, tool_args: dict, customer_id: str = None,
         return await _handle_get_my_bookings(whatsapp_id)
     
     elif tool_name == "submit_reschedule_request":
-        return await _handle_submit_reschedule_request(tool_args, whatsapp_id)
+        return await _handle_submit_reschedule_request(tool_args, whatsapp_id, tenant_id)
     
     elif tool_name == "cancel_appointment":
-        return await _handle_cancel_appointment(tool_args, whatsapp_id)
+        return await _handle_cancel_appointment(tool_args, whatsapp_id, tenant_id)
     
     elif tool_name == "report_violation":
         return await _handle_report_violation(tool_args, customer_id)
     
     elif tool_name == "request_human_callback":
-        return await _handle_request_human_callback(tool_args, whatsapp_id)
+        return await _handle_request_human_callback(tool_args, whatsapp_id, tenant_id)
     
     return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
@@ -124,7 +124,7 @@ async def _handle_submit_booking_request(tool_args: dict, whatsapp_id: str, tena
         
         # Notify owner
         try:
-            business_settings = db_service.get_all_settings()
+            business_settings = db_service.get_tenant_settings(tenant_id or "coalcreek")
             owner_email = business_settings.get("owner_email") if business_settings else None
             business_name = business_settings.get("business_name", "Your Business") if business_settings else "Your Business"
             
@@ -190,7 +190,7 @@ async def _handle_get_my_bookings(whatsapp_id: str) -> str:
     return json.dumps({"found": False, "message": "No upcoming bookings found."})
 
 
-async def _handle_submit_reschedule_request(tool_args: dict, whatsapp_id: str) -> str:
+async def _handle_submit_reschedule_request(tool_args: dict, whatsapp_id: str, tenant_id: str = None) -> str:
     """Create a reschedule request for owner approval."""
     booking_id = tool_args.get("booking_id")
     new_date = tool_args.get("new_date")
@@ -244,7 +244,7 @@ async def _handle_submit_reschedule_request(tool_args: dict, whatsapp_id: str) -
         
         # Notify owner
         try:
-            business_settings = db_service.get_all_settings()
+            business_settings = db_service.get_tenant_settings(tenant_id or "coalcreek")
             owner_email = business_settings.get("owner_email") if business_settings else None
             business_name = business_settings.get("business_name", "Your Business") if business_settings else "Your Business"
             
@@ -267,7 +267,7 @@ async def _handle_submit_reschedule_request(tool_args: dict, whatsapp_id: str) -
     return json.dumps({"submitted": False, "error": "Failed to submit request. Please try again."})
 
 
-async def _handle_cancel_appointment(tool_args: dict, whatsapp_id: str) -> str:
+async def _handle_cancel_appointment(tool_args: dict, whatsapp_id: str, tenant_id: str = None) -> str:
     """Cancel an existing appointment."""
     booking_id = tool_args.get("booking_id")
     reason = tool_args.get("reason", "Customer requested")
@@ -291,7 +291,7 @@ async def _handle_cancel_appointment(tool_args: dict, whatsapp_id: str) -> str:
         booking_time = result.get("booking_time", "")
         
         # Get business settings
-        business_settings = db_service.get_all_settings()
+        business_settings = db_service.get_tenant_settings(tenant_id or "coalcreek")
         business_name = (business_settings.get("business_name") if business_settings else None) or "Your Business"
         owner_email = business_settings.get("owner_email") if business_settings else None
         
@@ -361,7 +361,7 @@ async def _handle_report_violation(tool_args: dict, customer_id: str) -> str:
 # In-memory store for callback request cooldowns (in production, use Redis or DB)
 _callback_cooldowns = {}
 
-async def _handle_request_human_callback(tool_args: dict, whatsapp_id: str) -> str:
+async def _handle_request_human_callback(tool_args: dict, whatsapp_id: str, tenant_id: str = None) -> str:
     """Handle customer request to speak to a human. Sends email notification with 30-min cooldown."""
     reason = tool_args.get("reason", "Customer prefers human support")
     urgency = tool_args.get("urgency", "medium")
@@ -390,7 +390,7 @@ async def _handle_request_human_callback(tool_args: dict, whatsapp_id: str) -> s
             })
     
     # Get business settings
-    business_settings = db_service.get_all_settings()
+    business_settings = db_service.get_tenant_settings(tenant_id or "coalcreek")
     owner_email = business_settings.get("owner_email") if business_settings else None
     business_name = (business_settings.get("business_name") if business_settings else None) or "Your Business"
     business_phone = business_settings.get("business_phone") if business_settings else None

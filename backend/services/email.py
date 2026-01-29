@@ -349,12 +349,12 @@ class EmailService:
     <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
         <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
             <div style="padding: 40px 30px 30px; text-align: center; background: #ffffff; border-bottom: 1px solid #f0f0f0;">
-                <div style="font-size: 32px; font-weight: 700; color: #8B2332;">The Lydoun</div>
+                <div style="font-size: 32px; font-weight: 700; color: #2C5F2D;">Coal Creek Motel</div>
                 <div style="font-size: 14px; color: #86868b; font-weight: 500;">Staff Notification</div>
             </div>
             
             <div style="padding: 32px 30px;">
-                <div style="display: inline-block; padding: 6px 12px; background: #8B2332; color: #ffffff; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Callback Requested</div>
+                <div style="display: inline-block; padding: 6px 12px; background: #2C5F2D; color: #ffffff; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Callback Requested</div>
                 
                 <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">{customer_name} wants to speak with you</h1>
                 
@@ -367,7 +367,7 @@ class EmailService:
                 </div>
                 
                 <div style="text-align: center; margin: 30px 0;">
-                    <a href="tel:{customer_phone}" style="display: inline-block; padding: 14px 28px; background-color: #8B2332; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call {customer_name} Now</a>
+                    <a href="tel:{customer_phone}" style="display: inline-block; padding: 14px 28px; background-color: #2C5F2D; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call {customer_name} Now</a>
                 </div>
                 
                 {action_buttons_html}
@@ -469,8 +469,8 @@ class EmailService:
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
     <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
         <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
-            <div style="padding: 40px 30px 30px; text-align: center; background: #8B2332;">
-                <div style="font-size: 32px; font-weight: 700; color: #ffffff;">The Lydoun</div>
+            <div style="padding: 40px 30px 30px; text-align: center; background: #2C5F2D;">
+                <div style="font-size: 32px; font-weight: 700; color: #ffffff;">Coal Creek Motel</div>
                 <div style="font-size: 14px; color: #ffffff99; font-weight: 500;">New Booking Request</div>
             </div>
             
@@ -494,7 +494,7 @@ class EmailService:
                 </div>
                 
                 <div style="text-align: center; margin: 30px 0;">
-                    <a href="tel:{guest_phone}" style="display: inline-block; padding: 14px 28px; background-color: #8B2332; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call {guest_name}</a>
+                    <a href="tel:{guest_phone}" style="display: inline-block; padding: 14px 28px; background-color: #2C5F2D; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call {guest_name}</a>
                 </div>
                 
                 {action_buttons_html}
@@ -649,7 +649,7 @@ class EmailService:
             logger.info("No guest email - skipping confirmation")
             return False
         
-        subject = f"✅ Booking Confirmed - The Lydoun Motel ({booking_reference})"
+        subject = f"✅ Booking Confirmed - Coal Creek Motel ({booking_reference})"
         
         # Format dates nicely
         try:
@@ -670,8 +670,8 @@ class EmailService:
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
     <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
         <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
-            <div style="padding: 40px 30px 30px; text-align: center; background: #8B2332;">
-                <div style="font-size: 32px; font-weight: 700; color: #ffffff;">The Lydoun</div>
+            <div style="padding: 40px 30px 30px; text-align: center; background: #2C5F2D;">
+                <div style="font-size: 32px; font-weight: 700; color: #ffffff;">Coal Creek Motel</div>
                 <div style="font-size: 14px; color: #ffffff99; font-weight: 500;">Motel & Function Centre</div>
             </div>
             
@@ -680,7 +680,7 @@ class EmailService:
                 
                 <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">Your booking is confirmed, {guest_name}!</h1>
                 
-                <p style="font-size: 16px; color: #86868b; margin-bottom: 24px;">Thank you for choosing The Lydoun Motel. We look forward to welcoming you!</p>
+                <p style="font-size: 16px; color: #86868b; margin-bottom: 24px;">Thank you for choosing Coal Creek Motel. We look forward to welcoming you!</p>
                 
                 <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
                     <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
@@ -703,11 +703,11 @@ class EmailService:
                 </div>
                 
                 <div style="text-align: center; margin: 30px 0;">
-                    <a href="tel:0357261788" style="display: inline-block; padding: 14px 28px; background-color: #8B2332; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call Us: (03) 5726 1788</a>
+                    <a href="tel:0492897718" style="display: inline-block; padding: 14px 28px; background-color: #2C5F2D; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call Us: 0492 897 718</a>
                 </div>
                 
                 <p style="font-size: 14px; color: #86868b; text-align: center;">
-                    30 High Street, Nagambie VIC 3608
+                    8444 South Gippsland Highway, Korumburra VIC 3950
                 </p>
             </div>
             
@@ -719,7 +719,7 @@ class EmailService:
 </body>
 </html>'''
         
-        sender = "The Lydoun Motel <notifications@ovela.dev>"
+        sender = "Coal Creek Motel <notifications@ovela.dev>"
         success = await self.send_email(guest_email, subject, html, from_email=sender)
         
         if success:

@@ -653,7 +653,7 @@ async def approve_booking(booking_id: str):
             action_text = "Secure your booking here" if mode == "setup" else "Complete payment here"
             sms_body = f"Hi {booking.get('guest_name', 'Guest').split(' ')[0]}, your booking at Coal Creek Motel is approved! {action_text}: {payment_link}"
             
-            sms_sent = sms_service.send_sms(guest_phone, sms_body)
+            sms_sent = await sms_service.send_sms(guest_phone, sms_body)
             if sms_sent:
                 messages.append("SMS sent")
             else:

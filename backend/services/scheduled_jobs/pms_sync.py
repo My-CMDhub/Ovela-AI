@@ -53,8 +53,8 @@ async def pms_sync_job():
             logger.info("✅ No bookings to sync from PMS")
             return
         
-        # 2. Get existing Ovela reservations
-        ovela_reservations = db_service.get_reservations(limit=500)
+        # 2. Get existing Ovela reservations (ASYNC)
+        ovela_reservations = await db_service.get_reservations(limit=500)
         existing_refs = {r.get("booking_reference") for r in ovela_reservations if r.get("booking_reference")}
         existing_pms_ids = {r.get("pms_id") for r in ovela_reservations if r.get("pms_id")}
         
@@ -73,7 +73,8 @@ async def pms_sync_job():
             
             # Import external booking
             try:
-                db_service.create_reservation({
+                # ASYNC create
+                await db_service.create_reservation({
                     "booking_reference": booking.reference,
                     "guest_name": booking.guest_name,
                     "guest_phone": booking.guest_phone,
@@ -106,24 +107,7 @@ async def pms_sync_job():
         logger.error(f"❌ PMS sync job failed: {e}", exc_info=True)
 
 
-def sync_pms_sync_job():
-    """
-    Synchronous wrapper for the PMS sync job.
-    Required for APScheduler which doesn't support async by default.
-    """
-    import asyncio
-    
-    try:
-        # Get or create event loop
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        loop.run_until_complete(pms_sync_job())
-    except Exception as e:
-        logger.error(f"❌ PMS sync wrapper error: {e}")
+    pass # Removed sync wrapper
 
 
 if __name__ == "__main__":

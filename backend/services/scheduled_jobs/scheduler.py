@@ -5,14 +5,14 @@ Manages background scheduled jobs for Coal Creek CRM.
 """
 
 import logging
-from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 # Create scheduler instance
-scheduler = BackgroundScheduler(timezone=ZoneInfo("Australia/Melbourne"))
+scheduler = AsyncIOScheduler(timezone=ZoneInfo("Australia/Melbourne"))
 
 
 def start_scheduler():
@@ -23,7 +23,7 @@ def start_scheduler():
     try:
         # Import jobs
         from .pending_nag import pending_nag_job
-        from .pms_sync import sync_pms_sync_job
+        from .pms_sync import pms_sync_job
         
         # Register pending nag job (every 15 minutes)
         scheduler.add_job(
@@ -36,8 +36,8 @@ def start_scheduler():
         
         # Register PMS sync job (every 30 minutes)
         scheduler.add_job(
-            sync_pms_sync_job,
-            trigger=CronTrigger(minute="*/30"),  # Every 30 minutes
+            pms_sync_job,
+            trigger=CronTrigger(minute="*/30"),
             id="pms_sync_job",
             name="PMS Sync (Update247)",
             replace_existing=True

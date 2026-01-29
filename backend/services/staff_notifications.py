@@ -26,7 +26,7 @@ class StaffNotificationService:
         """
         try:
             # 1. Save to database first (for tracking)
-            db_result = db_service.create_staff_notification(
+            db_result = await db_service.create_staff_notification(
                 notification_type="callback_request",
                 customer_name=customer_name,
                 customer_phone=customer_phone,
@@ -91,7 +91,7 @@ class StaffNotificationService:
             }
             
             # 1. Save to database with extra_data
-            db_result = db_service.create_staff_notification(
+            db_result = await db_service.create_staff_notification(
                 notification_type="booking_approval",
                 customer_name=guest_name,
                 customer_phone=guest_phone,
@@ -221,16 +221,14 @@ class StaffNotificationService:
             logger.info(f"🔄 Attempting Twilio Fallback for {request_id}...")
             
             staff_whatsapp = settings.SARANDA_STAFF_WHATSAPP
-            # Ensure number starts with + for Twilio
             if not staff_whatsapp.startswith("+"):
                 staff_whatsapp = f"+61{staff_whatsapp.lstrip('0')}"
             
-            # Choose emoji for request type
             emoji_map = {"order": "🧾", "change": "🔄", "cancel": "❌", "reservation": "📅"}
             emoji = emoji_map.get(request_type, "🧾")
             
             amount_line = f"\nTotal: ${total_amount:.2f}" if total_amount > 0 else ""
-            message = f"""{emoji} {request_type.upper()} #{request_id}
+            message_body = f"""{emoji} {request_type.upper()} #{request_id}
 ━━━━━━━━━━━━━━━━
 Customer: {customer_name}
 Items: {order_summary}{amount_line}
@@ -242,13 +240,21 @@ Reply with:
 ❌ NO
 ⏳ LATE"""
 
-            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            from_whatsapp = f"whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}"
-            to_whatsapp = f"whatsapp:{staff_whatsapp}"
+            # ASYNC TWILIO CALL via httpx
+            auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Messages.json"
+            data = {
+                "To": f"whatsapp:{staff_whatsapp}",
+                "From": f"whatsapp:{settings.TWILIO_WHATSAPP_NUMBER}",
+                "Body": message_body
+            }
             
-            msg = client.messages.create(body=message, from_=from_whatsapp, to=to_whatsapp)
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=data, auth=auth)
+                response.raise_for_status()
+                msg_data = response.json()
             
-            logger.info(f"✅ Twilio Fallback sent to {staff_whatsapp} (SID: {msg.sid})")
+            logger.info(f"✅ Twilio Fallback sent to {staff_whatsapp} (SID: {msg_data.get('sid')})")
             return True
         except Exception as e:
             logger.error(f"❌ Critical: All WhatsApp delivery methods failed for {request_id}: {e}")
@@ -284,14 +290,18 @@ Reply with:
             if not phone.startswith("+"):
                 phone = f"+61{phone.lstrip('0')}"
             
-            # Send SMS via Twilio
-            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            # ASYNC TWILIO CALL via httpx
+            auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Messages.json"
+            data = {
+                "To": phone,
+                "From": settings.TWILIO_PHONE_NUMBER,
+                "Body": message
+            }
             
-            msg = client.messages.create(
-                body=message,
-                from_=settings.TWILIO_PHONE_NUMBER,
-                to=phone
-            )
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=data, auth=auth)
+                response.raise_for_status()
             
             logger.info(f"Customer SMS sent to {phone} for order #{order_id} ({status})")
             return True

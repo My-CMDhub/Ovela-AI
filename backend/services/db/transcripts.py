@@ -3,6 +3,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from appwrite.id import ID
 import logging
+from core.utils import mask_phone
 
 logger = logging.getLogger(__name__)
 
@@ -15,20 +16,20 @@ class TranscriptsMixin:
     TENANT_TRANSCRIPT_COLLECTIONS = {
         "coalcreek": "call_transcripts_coalcreek",
         "saranda": "call_transcripts_saranda",
-        # Future tenants:
-        # "lydoun": "call_transcripts_lydoun",
     }
     
-    def get_transcript_collection_for_tenant(self, tenant_id: str) -> str:
+    async def get_transcript_collection_for_tenant(self, tenant_id: str) -> str:
         """
         Get the transcript collection ID for a specific tenant.
-        Raises ValueError if tenant is not configured (strict isolation).
         """
         if tenant_id not in self.TENANT_TRANSCRIPT_COLLECTIONS:
+            # Check if it's already a collection ID or log warning
+            if tenant_id.startswith("call_transcripts_"):
+                return tenant_id
             raise ValueError(f"Unknown tenant for transcript storage: {tenant_id}")
         return self.TENANT_TRANSCRIPT_COLLECTIONS[tenant_id]
 
-    def create_demo_transcript(self, phone: str, transcript: list, 
+    async def create_demo_transcript(self, phone: str, transcript: list, 
                                 exchange_count: int = 0, duration_seconds: int = 0,
                                 outcome: str = "completed", call_sid: str = None,
                                 demo_lead_id: str = None, tenant_id: str = "ovela_demo") -> dict:
@@ -48,24 +49,24 @@ class TranscriptsMixin:
                 "outcome": outcome,
                 "call_sid": call_sid or "",
                 "demo_lead_id": demo_lead_id or "",
-                "tenant_id": tenant_id,  # Multi-tenant support
+                "tenant_id": tenant_id,
                 "created_at": now
             }
             
-            result = self._make_request(
+            result = await self._make_request(
                 "POST",
                 f"/databases/{self.db_id}/collections/demo_transcripts/documents",
                 data={"documentId": doc_id, "data": data}
             )
-            logger.info(f"Created demo transcript: {doc_id} ({exchange_count} exchanges)")
+            logger.info(f"Created demo transcript: {doc_id} for {mask_phone(phone)}")
             return result
         except Exception as e:
             logger.error(f"Error creating demo transcript: {e}")
             return None
     
-    def update_transcript_feedback(self, transcript_id: str, feedback: str, 
+    async def update_transcript_feedback(self, transcript_id: str, feedback: str, 
                                     score: int = None, issues: list = None):
-        """Update transcript with Mistral's AI feedback."""
+        """Update transcript with AI feedback."""
         try:
             data = {
                 "ai_feedback": feedback
@@ -75,43 +76,22 @@ class TranscriptsMixin:
             if issues:
                 data["issues_found"] = json.dumps(issues)
             
-            result = self._make_request(
+            result = await self._make_request(
                 "PATCH",
                 f"/databases/{self.db_id}/collections/demo_transcripts/documents/{transcript_id}",
                 data={"data": data}
             )
-            logger.info(f"Updated transcript feedback: {transcript_id}")
             return result
         except Exception as e:
             logger.error(f"Error updating transcript feedback: {e}")
             return None
     
-    def get_transcripts_for_review(self, limit: int = 20):
-        """Get transcripts that haven't been reviewed yet (no AI feedback)."""
-        try:
-            result = self._make_request(
-                "GET",
-                f"/databases/{self.db_id}/collections/demo_transcripts/documents"
-            )
-            if result and result.get("documents"):
-                return [t for t in result["documents"] if not t.get("ai_feedback")][:limit]
-            return []
-        except Exception as e:
-            logger.error(f"Error fetching transcripts for review: {e}")
-            return []
-    
-    def get_call_transcripts(self, start_date: str = None, end_date: str = None, 
+    async def get_call_transcripts(self, start_date: str = None, end_date: str = None, 
                              phone: str = None, limit: int = 100) -> list:
-        """
-        Get call transcripts with optional filters (DEMO calls).
-        """
+        """Get call transcripts with optional filters (DEMO calls)."""
         try:
             path = f"/databases/{self.db_id}/collections/demo_transcripts/documents"
-            
-            queries = [
-                'orderDesc("created_at")',
-                f'limit({limit})'
-            ]
+            queries = ['orderDesc("created_at")', f'limit({limit})']
             
             if start_date:
                 queries.append(f'greaterThanEqual("created_at", "{start_date}")')
@@ -120,15 +100,13 @@ class TranscriptsMixin:
             if phone:
                 queries.append(f'equal("phone", "{phone}")')
                 
-            params = {'queries': queries}
-            
-            result = self._make_request("GET", path, params=params)
+            result = await self._make_request("GET", path, params={'queries': queries})
             return result.get("documents", []) if result else []
         except Exception as e:
             logger.error(f"Error fetching transcripts: {e}")
             return []
     
-    def save_call_transcript(
+    async def save_call_transcript(
         self,
         tenant_id: str,
         call_sid: str,
@@ -140,20 +118,17 @@ class TranscriptsMixin:
         room_type: str = None,
         metadata: dict = None
     ) -> dict:
-        """
-        Save a call transcript to tenant-specific collection.
-        Enforces strict tenant isolation.
-        """
+        """Save a call transcript to tenant-specific collection."""
         try:
             MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
-            collection_id = self.get_transcript_collection_for_tenant(tenant_id)
+            collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
             doc_id = ID.unique()
             now = datetime.now(MELBOURNE_TZ).isoformat()
             
             data = {
                 "call_sid": call_sid,
                 "caller_phone": caller_phone or "",
-                "transcript": transcript[:10000] if transcript else "",  # Max 10k chars
+                "transcript": transcript[:10000] if transcript else "",
                 "duration": duration or 0,
                 "booking_ref": booking_ref or "",
                 "status": status or "",
@@ -162,59 +137,27 @@ class TranscriptsMixin:
                 "created_at": now
             }
             
-            result = self._make_request(
+            result = await self._make_request(
                 "POST",
                 f"/databases/{self.motel_db_id}/collections/{collection_id}/documents",
                 data={"documentId": doc_id, "data": data}
             )
-            logger.info(f"Saved transcript for {tenant_id}: {doc_id}")
+            logger.info(f"Saved transcript for {tenant_id}: {doc_id} {mask_phone(caller_phone)}")
             return result
-        except ValueError as e:
-            logger.error(f"Tenant isolation error: {e}")
-            return None
         except Exception as e:
-            logger.error(f"Error saving call transcript: {e}")
+            logger.error(f"Error saving transcript for {tenant_id}: {e}")
             return None
 
-    def get_tenant_call_logs(
-        self,
-        tenant_id: str,
-        limit: int = 50,
-        start_date: str = None,
-        end_date: str = None,
-        phone: str = None
-    ) -> list:
-        """
-        Get call logs for a specific tenant.
-        Returns newest first.
-        """
+    async def get_tenant_call_logs(self, tenant_id: str, limit: int = 50, start_date: str = None) -> list:
+        """Get call logs for a specific tenant."""
         try:
-            collection_id = self.get_transcript_collection_for_tenant(tenant_id)
-            
-            result = self._make_request(
-                "GET",
-                f"/databases/{self.motel_db_id}/collections/{collection_id}/documents"
-            )
-            
-            logs = result.get("documents", []) if result else []
-            
-            # Filter by date if provided
+            collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
+            queries = ['orderDesc("created_at")', f'limit({limit})']
             if start_date:
-                logs = [l for l in logs if l.get("created_at", "") >= start_date]
-            if end_date:
-                logs = [l for l in logs if l.get("created_at", "") <= end_date]
-
-            # Filter by phone if provided (Search)
-            if phone:
-                logs = [l for l in logs if phone in l.get("caller_phone", "")]
-            
-            # Sort by created_at descending (newest first)
-            logs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-            
-            return logs[:limit]
-        except ValueError as e:
-            logger.error(f"Tenant isolation error: {e}")
-            return []
+                queries.append(f'greaterThanEqual("created_at", "{start_date}")')
+                
+            result = await self._make_request("GET", f"/databases/{self.motel_db_id}/collections/{collection_id}/documents", params={'queries': queries})
+            return result.get("documents", []) if result else []
         except Exception as e:
-            logger.error(f"Error fetching tenant call logs: {e}")
+            logger.error(f"Error fetching logs for {tenant_id}: {e}")
             return []

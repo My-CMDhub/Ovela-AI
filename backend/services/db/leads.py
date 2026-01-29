@@ -1,126 +1,104 @@
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-from appwrite.id import ID
-from rules.whitelist import is_whitelisted
 import logging
+from appwrite.id import ID
+from core.utils import mask_phone
 
 logger = logging.getLogger(__name__)
 
 class LeadsMixin:
     """
-    Handles Demo Leads and rate limiting for them.
+    Handles Demo Leads and CRM Contacts.
+    ENFORCED: Multi-tenant isolation at DB level.
     """
-    
-    DEMO_LIMIT_HOURS = 24 # One demo per day
 
-    def create_demo_lead(self, name: str, business_name: str, phone: str, source: str = "website") -> dict:
-        """Create a new demo lead when form is submitted."""
+    async def create_demo_lead(self, phone: str, name: str = None, tenant_id: str = "saranda"):
+        """Create a new lead from a demo request."""
         try:
-            MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
             doc_id = ID.unique()
-            now = datetime.now(MELBOURNE_TZ).isoformat()
-            
             data = {
-                "name": name,
-                "business_name": business_name,
                 "phone": phone,
-                "status": "pending",
-                "source": source,
-                "created_at": now,
-                "updated_at": now
+                "name": name or "Anonymous",
+                "tenant_id": tenant_id,
+                "created_at": datetime.now().isoformat(),
+                "status": "new"
             }
             
-            result = self._make_request(
+            result = await self._make_request(
                 "POST",
                 f"/databases/{self.db_id}/collections/demo_leads/documents",
-                data={"documentId": doc_id, "data": data}
+                data={
+                    "documentId": doc_id,
+                    "data": data
+                }
             )
-            logger.info(f"Created demo lead: {doc_id} for {phone}")
+            
+            logger.info(f"Created demo lead: {doc_id} for {mask_phone(phone)} (Tenant: {tenant_id})")
             return result
         except Exception as e:
-            logger.error(f"Error creating demo lead: {e}")
+            logger.error(f"Error creating lead: {e}")
             return None
-    
-    def get_demo_lead(self, lead_id: str) -> dict:
-        """Get a single demo lead by ID."""
+
+    async def check_demo_limit(self, phone: str, tenant_id: str, limit_per_hour: int = 3) -> bool:
+        """
+        Check if a phone number has exceeded demo limits.
+        ENFORCED: Server-side filtering by phone and tenant.
+        """
         try:
-            result = self._make_request(
-                "GET",
-                f"/databases/{self.db_id}/collections/demo_leads/documents/{lead_id}"
-            )
-            return result
+            path = f"/databases/{self.db_id}/collections/demo_leads/documents"
+            
+            # Use Appwrite queries for server-side filtering
+            queries = [
+                f'equal("phone", "{phone}")',
+                f'equal("tenant_id", "{tenant_id}")',
+                'orderDesc("created_at")',
+                'limit(10)'
+            ]
+            
+            result = await self._make_request("GET", path, params={"queries": queries})
+            leads = result.get("documents", []) if result else []
+            
+            if not leads:
+                return True # No prior leads, ok to proceed
+            
+            # Check recent leads within the last hour
+            hour_ago = datetime.now() - timedelta(hours=1)
+            recent_count = 0
+            for lead in leads:
+                created_at_str = lead.get("created_at")
+                if created_at_str:
+                    created_at = datetime.fromisoformat(created_at_str)
+                    if created_at > hour_ago:
+                        recent_count += 1
+            
+            return recent_count < limit_per_hour
+            
         except Exception as e:
-            logger.error(f"Error getting demo lead {lead_id}: {e}")
-            return None
-    
-    def update_demo_lead(self, lead_id: str = None, phone: str = None, data: dict = None):
-        """Update a demo lead by ID or phone."""
+            logger.error(f"Error checking demo limit for {mask_phone(phone)}: {e}")
+            return True # Allow on error to avoid blocking users, but log it
+
+    async def get_recent_leads(self, tenant_id: str, limit: int = 10):
+        """Get recent leads for a tenant."""
         try:
-            MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
-            # Find by phone if ID not provided
-            if not lead_id and phone:
-                result = self._make_request(
-                    "GET",
-                    f"/databases/{self.db_id}/collections/demo_leads/documents"
-                )
-                if result and result.get("documents"):
-                    for doc in result["documents"]:
-                        if doc.get("phone") == phone:
-                            lead_id = doc.get("$id")
-                            break
-            
-            if not lead_id:
-                logger.warning(f"Demo lead not found for phone: {phone}")
-                return None
-            
-            data["updated_at"] = datetime.now(MELBOURNE_TZ).isoformat()
-            
-            result = self._make_request(
+            path = f"/databases/{self.db_id}/collections/demo_leads/documents"
+            queries = [
+                f'equal("tenant_id", "{tenant_id}")',
+                'orderDesc("created_at")',
+                f'limit({limit})'
+            ]
+            result = await self._make_request("GET", path, params={"queries": queries})
+            return result.get("documents", []) if result else []
+        except Exception as e:
+            logger.error(f"Error fetching leads: {e}")
+            return []
+
+    async def update_lead_status(self, lead_id: str, status: str):
+        """Update a lead's status (e.g. called, converted)."""
+        try:
+            return await self._make_request(
                 "PATCH",
                 f"/databases/{self.db_id}/collections/demo_leads/documents/{lead_id}",
-                data={"data": data}
+                data={"data": {"status": status}}
             )
-            return result
         except Exception as e:
-            # Handle 404 gracefully (document already deleted or not found)
-            if "404" in str(e):
-                logger.warning(f"Demo lead not found for update: {lead_id or phone}")
-                return None
-            logger.error(f"Error updating demo lead: {e}")
+            logger.error(f"Error updating lead status: {e}")
             return None
-    
-    def check_demo_limit(self, phone: str) -> bool:
-        """
-        Check if phone number has already requested a demo in the last 24 hours.
-        Returns: True if allowed, False if blocked.
-        """
-        try:
-            MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
-            
-            # Check whitelist first
-            if is_whitelisted(phone):
-                return True
-                
-            # Calculate time threshold
-            now = datetime.now(MELBOURNE_TZ)
-            threshold = now - timedelta(hours=self.DEMO_LIMIT_HOURS)
-            threshold_str = threshold.isoformat()
-            
-            # Fetch all demo leads and filter in-memory for reliability
-            result = self._make_request(
-                "GET",
-                f"/databases/{self.db_id}/collections/demo_leads/documents"
-            )
-            
-            if result and result.get("documents"):
-                for doc in result["documents"]:
-                    if doc.get("phone") == phone:
-                        created_at = doc.get("created_at", "")
-                        if created_at > threshold_str:
-                            logger.info(f"Rate limit: {phone} already requested demo at {created_at}")
-                            return False
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error checking demo limit: {e}")
-            return True # Fail open

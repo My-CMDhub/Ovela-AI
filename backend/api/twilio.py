@@ -13,8 +13,15 @@ import logging
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+
 # Default business ID for now (single tenant)
 DEFAULT_BUSINESS_ID = "default_business"
+
+def mask_phone(phone: str) -> str:
+    """Mask phone number for logging (e.g. +614...123)."""
+    if not phone or len(phone) < 8:
+        return "..."
+    return f"{phone[:4]}...{phone[-3:]}"
 
 
 @router.post("/voice")
@@ -33,7 +40,9 @@ async def handle_voice_webhook(
     2. 'To' Number Lookup: Fallback to mapping known numbers (future)
     3. Default: Env var or 'coalcreek'
     """
-    logger.info(f"📞 Voice webhook from {From} to {To} (tenant_id={tenant_id}), CallSid: {CallSid}")
+    """
+    logger.info(f"📞 Voice webhook from {mask_phone(From)} to {mask_phone(To)} (tenant_id={tenant_id}), CallSid: {CallSid}")
+
     
     # Resolve tenant_id
     # 1. Check Query Param (override)
@@ -79,15 +88,18 @@ async def handle_incoming_call(
     Forwards the call to the business owner's phone.
     If missed/busy/no-answer, the status callback will trigger WhatsApp automation.
     """
-    logger.info(f"📞 Incoming call from {From} to {To}, CallSid: {CallSid}")
+    logger.info(f"📞 Incoming call from {mask_phone(From)} to {mask_phone(To)}, CallSid: {CallSid}")
     
     try:
-        # Get business phone from Appwrite settings
-        business_settings = db_service.get_all_settings()
+        # Resolve tenant from To number
+        tenant_id = settings.PHONE_TO_TENANT_MAP.get(To.replace(" ", "").strip()) or settings.TENANT_ID or "coalcreek"
+        
+        # Get business phone from Tenant settings
+        business_settings = db_service.get_tenant_settings(tenant_id)
         business_phone = business_settings.get("business_phone") if business_settings else None
         
         if not business_phone:
-            logger.error("❌ Business phone not configured in Appwrite settings")
+            logger.error(f"❌ Business phone not configured for tenant {tenant_id}")
             # Fallback: Play error message and trigger WhatsApp via status callback
             twiml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -100,7 +112,7 @@ async def handle_incoming_call(
         if not business_phone.startswith("+"):
             business_phone = f"+{business_phone}"
         
-        logger.info(f"🔄 Forwarding call to business phone: {business_phone}")
+        logger.info(f"🔄 Forwarding call to business phone: {mask_phone(business_phone)}")
         
         # Return TwiML that forwards the call to business phone
         # timeout: Ring for 30 seconds before giving up
@@ -144,7 +156,8 @@ async def handle_call_status(
     Triggered after the <Dial> attempt completes.
     Only sends WhatsApp if the call was truly missed (not answered).
     """
-    logger.info(f"📞 Call status callback: {CallSid} from {From}")
+    """
+    logger.info(f"📞 Call status callback: {CallSid} from {mask_phone(From)}")
     logger.info(f"   CallStatus: {CallStatus}, CallDuration: {CallDuration}s")
     logger.info(f"   DialCallStatus: {DialCallStatus}, DialCallDuration: {DialCallDuration}s")
     
@@ -190,17 +203,18 @@ async def handle_call_status(
     # Send WhatsApp message if call was missed
     if should_send_whatsapp:
         try:
-            # Get business settings for custom message
-            business_settings = db_service.get_all_settings()
-            business_name = business_settings.get("business_name", "ibrow threading") if business_settings else "ibrow threading"
-            business_phone = business_settings.get("business_phone", "0475 921 152") if business_settings else "0475 921 152"
-            
-            # Check if this customer has a recently rejected request
-            # Resolve tenant_id to enable strict filtering
+            # Resolve tenant_id
             tenant_id = settings.TENANT_ID or "coalcreek"
             cleaned_to = To.replace(" ", "").strip() if To else ""
             if cleaned_to in settings.PHONE_TO_TENANT_MAP:
                 tenant_id = settings.PHONE_TO_TENANT_MAP[cleaned_to]
+
+            # Get business settings for custom message
+            business_settings = db_service.get_tenant_settings(tenant_id)
+            business_name = business_settings.get("business_name", "ibrow threading") if business_settings else "ibrow threading"
+            business_phone = business_settings.get("business_phone", "0475 921 152") if business_settings else "0475 921 152"
+            
+            # Check if this customer has a recently rejected request
             
             existing_requests = db_service.get_booking_requests_by_phone(caller_phone, tenant_id=tenant_id)
             has_recent_rejection = False
@@ -234,11 +248,11 @@ I'm the virtual assistant here to help you book an appointment. Just let me know
 I'll forward your request to the team and they'll confirm your booking! 💅"""
 
             await meta_service.send_text_message(caller_phone, message)
-            logger.info(f"✅ Sent WhatsApp intro to {caller_phone} (rejection_context: {has_recent_rejection})")
+            logger.info(f"✅ Sent WhatsApp intro to {mask_phone(caller_phone)} (rejection_context: {has_recent_rejection})")
             
         except Exception as e:
             import traceback
-            logger.error(f"❌ Error sending WhatsApp to {caller_phone}: {e}")
+            logger.error(f"❌ Error sending WhatsApp to {mask_phone(caller_phone)}: {e}")
             logger.error(f"Traceback: {traceback.format_exc()}")
     else:
         logger.info(f"ℹ️ Call was answered - no WhatsApp message sent")
@@ -266,11 +280,11 @@ async def handle_transfer_status(
     
     if DialCallStatus == "completed":
         # Transfer succeeded, call ended normally
-        logger.info(f"✅ Transfer completed successfully for {From}")
+        logger.info(f"✅ Transfer completed successfully for {mask_phone(From)}")
         return Response(content="<Response><Hangup/></Response>", media_type="application/xml")
     
     # Transfer failed - return caller to AI
-    logger.info(f"⚠️ Transfer failed ({DialCallStatus}) - returning to AI for {From}")
+    logger.info(f"⚠️ Transfer failed ({DialCallStatus}) - returning to AI for {mask_phone(From)}")
     
     twiml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>

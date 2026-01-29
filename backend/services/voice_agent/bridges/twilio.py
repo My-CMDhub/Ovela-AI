@@ -8,7 +8,7 @@ import json
 import logging
 import base64
 
-from twilio.rest import Client
+import httpx
 from core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -112,19 +112,20 @@ class TwilioBridge:
             logger.warning(f"Failed to send clear to Twilio: {e}")
     
     async def hangup(self):
-        """
-        Terminate the Twilio call using REST API.
-        
-        Returns:
-            bool: True if hangup succeeded
-        """
+        """Terminate the Twilio call using async httpx."""
         if not self.call_sid:
             logger.warning("Cannot hangup - no call SID")
             return False
         
         try:
-            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            client.calls(self.call_sid).update(status="completed")
+            auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Calls/{self.call_sid}.json"
+            data = {"Status": "completed"}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=data, auth=auth)
+                response.raise_for_status()
+            
             logger.info("✅ Twilio call terminated successfully")
             return True
         except Exception as e:

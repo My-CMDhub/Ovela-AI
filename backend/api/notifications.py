@@ -63,6 +63,7 @@ class NotificationCreate(BaseModel):
     customer_phone: str
     reason: str
     urgency: str = "medium"  # low, medium, high
+    tenant_id: str = "coalcreek"
 
 
 # ============ Endpoints ============
@@ -88,7 +89,8 @@ async def create_notification(data: NotificationCreate):
             customer_name=data.customer_name.strip(),
             customer_phone=data.customer_phone.strip(),
             reason=data.reason.strip(),
-            urgency=data.urgency
+            urgency=data.urgency,
+            tenant_id=data.tenant_id
         )
         
         if not result:
@@ -104,13 +106,13 @@ async def create_notification(data: NotificationCreate):
 
 
 @router.get("/counts")
-async def get_notification_counts():
+async def get_notification_counts(tenant_id: str = "coalcreek"):
     """
     Get notification counts by status for tab badges.
     Returns: {pending: N, in_progress: N, completed: N, dismissed: N, total: N}
     """
     try:
-        notifications = db_service.get_staff_notifications(limit=500)
+        notifications = db_service.get_staff_notifications(limit=500, tenant_id=tenant_id)
         
         # Filter out archived
         active = [n for n in notifications if n.get("status") != "archived"]
@@ -133,7 +135,8 @@ async def list_notifications(
     status: Optional[str] = None,
     type: Optional[str] = None,
     limit: int = 50,
-    include_archived: bool = False
+    include_archived: bool = False,
+    tenant_id: str = "coalcreek"
 ):
     """
     List all staff notifications with optional filters.
@@ -143,7 +146,8 @@ async def list_notifications(
         notifications = db_service.get_staff_notifications(
             status=status,
             notification_type=type,
-            limit=limit
+            limit=limit,
+            tenant_id=tenant_id
         )
         
         # Filter out archived unless explicitly requested
@@ -157,10 +161,10 @@ async def list_notifications(
 
 
 @router.get("/{notification_id}")
-async def get_notification(notification_id: str):
+async def get_notification(notification_id: str, tenant_id: str = "coalcreek"):
     """Get a single notification by ID."""
     try:
-        notifications = db_service.get_staff_notifications()
+        notifications = db_service.get_staff_notifications(tenant_id=tenant_id)
         notification = next((n for n in notifications if n.get("$id") == notification_id), None)
         
         if not notification:
@@ -175,7 +179,7 @@ async def get_notification(notification_id: str):
 
 
 @router.patch("/{notification_id}")
-async def update_notification(notification_id: str, update: NotificationUpdate):
+async def update_notification(notification_id: str, update: NotificationUpdate, tenant_id: str = "coalcreek"):
     """
     Update a notification (change status, add notes).
     Enforces valid status transitions.
@@ -183,7 +187,7 @@ async def update_notification(notification_id: str, update: NotificationUpdate):
     """
     try:
         # Get current notification to check status transition
-        notifications = db_service.get_staff_notifications()
+        notifications = db_service.get_staff_notifications(tenant_id=tenant_id)
         current = next((n for n in notifications if n.get("$id") == notification_id), None)
         
         if not current:
@@ -294,7 +298,7 @@ async def update_notification(notification_id: str, update: NotificationUpdate):
 
 
 @router.delete("/{notification_id}")
-async def delete_notification(notification_id: str):
+async def delete_notification(notification_id: str, tenant_id: str = "coalcreek"):
     """
     Soft delete (archive) a notification.
     Sets status to 'archived' instead of hard deleting.
@@ -302,7 +306,7 @@ async def delete_notification(notification_id: str):
     """
     try:
         # Get current notification
-        notifications = db_service.get_staff_notifications()
+        notifications = db_service.get_staff_notifications(tenant_id=tenant_id)
         current = next((n for n in notifications if n.get("$id") == notification_id), None)
         
         if not current:
@@ -331,12 +335,12 @@ async def delete_notification(notification_id: str):
 
 
 @router.post("/{notification_id}/restore")
-async def restore_notification(notification_id: str):
+async def restore_notification(notification_id: str, tenant_id: str = "coalcreek"):
     """
     Restore an archived notification back to pending status.
     """
     try:
-        notifications = db_service.get_staff_notifications()
+        notifications = db_service.get_staff_notifications(tenant_id=tenant_id)
         current = next((n for n in notifications if n.get("$id") == notification_id), None)
         
         if not current:

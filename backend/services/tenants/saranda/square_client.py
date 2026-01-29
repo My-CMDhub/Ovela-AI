@@ -107,10 +107,11 @@ class SquareClient:
             self._location_id = self.config.square_location_id
             return self._location_id
         
-        # Auto-discover from API
+        # Auto-discover from API (using to_thread for sync SDK)
+        import asyncio
         logger.info("Auto-discovering Square location ID...")
         try:
-            response = self.client.locations.list()
+            response = await asyncio.to_thread(self.client.locations.list)
             
             # Response has a .locations attribute with the list of location objects
             locations = response.locations if hasattr(response, 'locations') else []
@@ -215,9 +216,11 @@ class SquareClient:
         logger.info(f"Creating Square order for {customer_name} (call: {call_id})")
         
         try:
-            response = self.client.orders.create(
+            import asyncio
+            response = await asyncio.to_thread(
+                self.client.orders.create,
                 order=order_body["order"],
-                idempotency_key=order_body["idempotency_key"],
+                idempotency_key=order_body["idempotency_key"]
             )
             
             order_data = response.order
@@ -251,7 +254,8 @@ class SquareClient:
         Returns the raw Square order data, or None if not found.
         """
         try:
-            response = self.client.orders.get(order_id=order_id)
+            import asyncio
+            response = await asyncio.to_thread(self.client.orders.get, order_id=order_id)
             return response.order
         except Exception as e:
             logger.error(f"Failed to fetch order {order_id}: {e}")
@@ -280,7 +284,9 @@ class SquareClient:
             # SearchOrders query support exact match on strict fields.
             # Workaround: Search all OPEN/recent orders and filter. Low volume assumption.
             
-            result = self.client.orders.search(
+            import asyncio
+            result = await asyncio.to_thread(
+                self.client.orders.search,
                 location_ids=[location_id],
                 query={
                     "filter": {
@@ -364,9 +370,11 @@ class SquareClient:
         location_id = await self.get_location_id()
         
         try:
-            response = self.client.orders.batch_get(
+            import asyncio
+            response = await asyncio.to_thread(
+                self.client.orders.batch_get,
                 location_id=location_id,
-                order_ids=order_ids,
+                order_ids=order_ids
             )
             
             orders = response.orders if hasattr(response, 'orders') else []

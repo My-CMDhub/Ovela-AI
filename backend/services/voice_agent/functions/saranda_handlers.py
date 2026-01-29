@@ -131,7 +131,7 @@ DO NOT promise later delivery."""
                 modifier_cost += SARANDA_DATA["modifiers"].get(mod_key, 0)
             
             price_inc_mods = base_price + modifier_cost
-            price_cents = int(price_inc_mods * 100)
+            price_cents = int(round(price_inc_mods * 100))
             
             total_cents += price_cents * quantity
             
@@ -385,7 +385,7 @@ async def handle_check_order_status(args: dict, user_phone: str) -> dict:
 # RESERVATION HANDLERS
 # =============================================================================
 
-async def handle_request_reservation(args: dict, user_phone: str) -> dict:
+async def handle_request_reservation(args: dict, user_phone: str, business_phone: str = None) -> dict:
     """
     Request a table reservation via HITL.
     
@@ -439,9 +439,10 @@ async def handle_request_reservation(args: dict, user_phone: str) -> dict:
     # Check capacity
     max_group = SARANDA_DATA["info"]["max_group_size"]
     if party_size > max_group:
+        phone_display = business_phone or "(08) 6401 6397"
         return {
             "success": False,
-            "message": f"For groups larger than {max_group}, please call us directly on (08) 6401 6397 so we can work something out."
+            "message": f"For groups larger than {max_group}, please call us directly on {phone_display} so we can work something out."
         }
     
     # Large group warning
@@ -669,7 +670,7 @@ class SarandaFunctionDispatcher:
         
         # Reservations
         elif function_name == "request_reservation":
-            return await handle_request_reservation(args, self.user_phone)
+            return await handle_request_reservation(args, self.user_phone, business_phone=self.transfer_number)
         
         # Status
         elif function_name == "check_order_status":

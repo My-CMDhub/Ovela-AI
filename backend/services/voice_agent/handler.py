@@ -22,9 +22,8 @@ import time
 import random
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import requests
+import httpx
 import websockets
-from twilio.rest import Client
 from fastapi import WebSocket
 from appwrite.id import ID
 
@@ -386,42 +385,30 @@ class VoiceAgentHandler:
         call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
         
         # Multi-tenant: Resolve tenant_id
-        # 1. Explicit tenant_id from custom_params
-        # 2. Demo flag -> "ovela_demo"
-        # 3. Default -> settings.TENANT_ID (coalcreek)
-        
         explicit_tenant = custom_params.get("tenant_id")
         
         if explicit_tenant:
             self.tenant_id = explicit_tenant
         else:
-            # Fallback to configured tenant or coalcreek
             self.tenant_id = settings.TENANT_ID or "coalcreek" 
             
         # =====================================================================
-        # CONFIG-DRIVEN ARCHITECTURE: Load settings from DB
+        # CONFIG-DRIVEN ARCHITECTURE: Load settings from DB (ASYNC)
         # =====================================================================
         try:
             logger.info(f"📥 Loading config for tenant: {self.tenant_id}")
-            self.tenant_config = db_service.get_tenant_config(self.tenant_id)
+            self.tenant_config = await db_service.get_tenant_config(self.tenant_id)
             if not self.tenant_config:
                 logger.warning(f"⚠️ No config found for {self.tenant_id}, using defaults")
         except Exception as e:
             logger.error(f"❌ Failed to load tenant config: {e}")
             self.tenant_config = {}
             
-        # Set context for knowledge base so tool calls use correct data
+        # Set context for knowledge base
         set_tenant_context(self.tenant_id)
         
-        # Initialize abuse protection with tenant context
-        # FEATURE FLAG: Check if harsher abuse protection is enabled
-        flags = self.tenant_config.get("feature_flags", {})
-        use_harsh_protection = flags.get("harsh_abuse_protection", False)
-        
-        self.abuse_protection = AbuseProtection(
-            tenant_id=self.tenant_id
-            # TODO: Pass use_harsh_protection when we update AbuseProtection class
-        )
+        # Initialize abuse protection
+        self.abuse_protection = AbuseProtection(tenant_id=self.tenant_id)
         
         logger.info(f"🟢 Twilio stream started: {self.stream_sid} for {self.user_name} [{call_type}] tenant={self.tenant_id}")
         
@@ -432,14 +419,11 @@ class VoiceAgentHandler:
         # =====================================================================
         # STRATEGY PATTERN: Select Dispatcher based on Config
         # =====================================================================
-        # 1. Check 'integrations.pms_provider' or 'type' in config
-        # 2. Fallback to hardcoded tenant checks for backward compatibility
-        
         pms_provider = self.tenant_config.get("integrations", {}).get("pms_provider")
-        tenant_type = self.tenant_config.get("type", "motel") # motel vs restaurant
+        tenant_type = self.tenant_config.get("type", "motel")
         
         logger.info(f"🧩 Configuring Dispatcher | PMS: {pms_provider} | Type: {tenant_type}")
-
+    
         if self.tenant_id == "saranda" or tenant_type == "restaurant":
             self.function_dispatcher = SarandaFunctionDispatcher(
                 user_phone=self.user_phone,
@@ -459,12 +443,14 @@ class VoiceAgentHandler:
             logger.info("✅ Using Coal Creek/update 247 Dispatcher")
             
         else:
-            # Default/Generic Dispatcher
             self.function_dispatcher = FunctionDispatcher(
                 db_service=db_service,
                 user_phone=self.user_phone,
                 save_reservation_fn=self._save_motel_reservation,
                 abuse_protection=self.abuse_protection,
+                tenant_id=self.tenant_id
+            )
+            logger.info("✅ Using Generic Dispatcher")
                 tenant_id=self.tenant_id
             )
 
@@ -971,7 +957,7 @@ class VoiceAgentHandler:
                     
                     # Create visible System Alert (Notification Center)
                     if result["outcome_override"] == "system_failure":
-                        db_service.create_system_alert(
+                        await db_service.create_system_alert(
                             title=f"Voice Agent Error: {function_name}",
                             message=result['error_details'],
                             severity="error",
@@ -1272,8 +1258,15 @@ class VoiceAgentHandler:
         logger.info(f"📵 Hanging up call: {self.call_sid}")
         
         try:
-            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            client.calls(self.call_sid).update(status="completed")
+            # ASYNC TWILIO CALL via httpx
+            auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Calls/{self.call_sid}.json"
+            data = {"Status": "completed"}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=data, auth=auth)
+                response.raise_for_status()
+            
             logger.info("✅ Call terminated successfully")
             self.is_running = False
         except Exception as e:
@@ -1398,9 +1391,14 @@ class VoiceAgentHandler:
             twiml.say("Our staff are currently unavailable. Let me see how else I can help you.")
             twiml.redirect(f"{settings.BACKEND_URL}/twilio/voice")  # Return to AI
             
-            # Update the live call with new TwiML
-            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            client.calls(self.call_sid).update(twiml=str(twiml))
+            # Update the live call with new TwiML via ASYNC httpx
+            auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Calls/{self.call_sid}.json"
+            data = {"Twiml": str(twiml)}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=data, auth=auth)
+                response.raise_for_status()
             
             logger.info(f"✅ Call transfer initiated to {transfer_to}")
             self.call_outcome = "transferred"
@@ -1415,33 +1413,23 @@ class VoiceAgentHandler:
     # DATABASE & CLEANUP
     # =========================================================================
     
-    def _save_motel_reservation(self, data: dict) -> dict:
-        """Save reservation to motel_reservations collection."""
+    async def _save_motel_reservation(self, data: dict) -> dict:
+        """Save reservation to motel_reservations collection using async httpx."""
         try:
             doc_id = ID.unique()
-            
             headers = {
                 "Content-Type": "application/json",
                 "X-Appwrite-Project": settings.APPWRITE_PROJECT_ID,
                 "X-Appwrite-Key": settings.APPWRITE_API_KEY
             }
-            
-            # Add tenant_id to reservation data
             data["tenant_id"] = self.tenant_id
-            
             url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
-            payload = {
-                "documentId": doc_id,
-                "data": data
-            }
+            payload = {"documentId": doc_id, "data": data}
             
-            response = requests.post(url, headers=headers, json=payload)
-            
-            if response.status_code in [200, 201]:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
                 return response.json()
-            else:
-                logger.warning(f"Reservation save failed: {response.status_code} - {response.text}")
-                return None
                 
         except Exception as e:
             logger.error(f"Error saving reservation: {e}")
@@ -1466,7 +1454,7 @@ class VoiceAgentHandler:
             if self.transcript:
                 # ISOLATION: Check if this is a demo or a real tenant
                 if self.tenant_id == "ovela_demo":
-                     db_service.create_demo_transcript(
+                     await db_service.create_demo_transcript(
                         phone=self.user_phone,
                         transcript=self.transcript,
                         exchange_count=self.exchange_count,
@@ -1477,7 +1465,7 @@ class VoiceAgentHandler:
                     )
                 else:
                     # Tenant-Specific Storage
-                    db_service.save_call_transcript(
+                    await db_service.save_call_transcript(
                         tenant_id=self.tenant_id,
                         call_sid=self.call_sid,
                         caller_phone=self.user_phone,

@@ -8,13 +8,13 @@ class SettingsMixin:
     Handles Business/Tenant Settings.
     """
 
-    def get_business(self, whatsapp_business_id: str):
+    async def get_business(self, whatsapp_business_id: str):
         """Fetch business settings by WhatsApp Business ID."""
         try:
             queries = [f'equal("whatsapp_business_id", "{whatsapp_business_id}")']
             params = {'queries': queries}
             
-            result = self._make_request(
+            result = await self._make_request(
                 "GET",
                 f"/databases/{self.db_id}/collections/businesses/documents",
                 params=params
@@ -27,10 +27,10 @@ class SettingsMixin:
             logger.error(f"Error fetching business: {e}")
             return None
 
-    def get_business_by_id(self, business_id: str):
+    async def get_business_by_id(self, business_id: str):
         """Get business settings by document ID."""
         try:
-            result = self._make_request(
+            result = await self._make_request(
                 "GET",
                 f"/databases/{self.db_id}/collections/businesses/documents/{business_id}"
             )
@@ -39,11 +39,11 @@ class SettingsMixin:
             logger.error(f"Error fetching business by ID: {e}")
             return None
 
-    def upsert_business(self, business_id: str, name: str, industry: str, settings_json: str = "{}", owner_email: str = "", business_phone: str = ""):
+    async def upsert_business(self, business_id: str, name: str, industry: str, settings_json: str = "{}", owner_email: str = "", business_phone: str = ""):
         """Create or update business settings."""
         try:
             # Try to get existing business
-            existing = self.get_business_by_id(business_id)
+            existing = await self.get_business_by_id(business_id)
             
             data = {
                 "name": name,
@@ -56,14 +56,14 @@ class SettingsMixin:
             
             if existing:
                 # Update existing
-                result = self._make_request(
+                result = await self._make_request(
                     "PATCH",
                     f"/databases/{self.db_id}/collections/businesses/documents/{business_id}",
                     data={"data": data}
                 )
             else:
                 # Create new
-                result = self._make_request(
+                result = await self._make_request(
                     "POST",
                     f"/databases/{self.db_id}/collections/businesses/documents",
                     data={
@@ -77,11 +77,10 @@ class SettingsMixin:
             logger.error(f"Error upserting business: {e}")
             return None
 
-    def get_all_settings(self):
+    async def get_all_settings(self):
         """Get settings for the default business (for AI prompt building)."""
-        business = self.get_business_by_id("default_business")
+        business = await self.get_business_by_id("default_business")
         if business:
-            # Parse the system_prompt_override as JSON settings
             try:
                 settings = json.loads(business.get("system_prompt_override", "{}"))
                 return {
@@ -93,7 +92,7 @@ class SettingsMixin:
                 return {"business_name": business.get("name", ""), "industry": business.get("industry", "beauty")}
         return None
 
-    def get_tenant_settings(self, tenant_id: str) -> dict:
+    async def get_tenant_settings(self, tenant_id: str) -> dict:
         """
         Get tenant settings from the 'tenants' collection.
         Returns a dictionary with business info.
@@ -101,14 +100,14 @@ class SettingsMixin:
         try:
             path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
             
-            result = self._make_request("GET", path)
+            result = await self._make_request("GET", path)
             
             if not result:
                 # Fallback: Query by slug if doc ID lookup failed
                 params = {
                     "queries": [f'equal("slug", "{tenant_id}")']
                 }
-                list_result = self._make_request(
+                list_result = await self._make_request(
                     "GET", 
                     f"/databases/{self.motel_db_id}/collections/tenants/documents",
                     params=params
@@ -139,7 +138,7 @@ class SettingsMixin:
             logger.error(f"Error fetching tenant settings for {tenant_id}: {e}")
             return None
 
-    def update_tenant_settings(self, tenant_id: str, settings_data: dict) -> bool:
+    async def update_tenant_settings(self, tenant_id: str, settings_data: dict) -> bool:
         """
         Update tenant document in 'tenants' collection.
         """
@@ -155,31 +154,30 @@ class SettingsMixin:
             
             body = {"data": payload}
             path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
-            result = self._make_request("PATCH", path, data=body)
+            result = await self._make_request("PATCH", path, data=body)
             
             return result is not None
         except Exception as e:
             logger.error(f"Error updating tenant settings for {tenant_id}: {e}")
             return False
 
-    def get_tenant_config(self, tenant_id: str) -> dict:
+    async def get_tenant_config(self, tenant_id: str) -> dict:
         """
         Get full tenant configuration for Voice Agent.
         """
         try:
             path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
-            result = self._make_request("GET", path)
+            result = await self._make_request("GET", path)
             
             if not result:
                 params = {"queries": [f'equal("slug", "{tenant_id}")']}
-                list_result = self._make_request("GET", f"/databases/{self.motel_db_id}/collections/tenants/documents", params=params)
+                list_result = await self._make_request("GET", f"/databases/{self.motel_db_id}/collections/tenants/documents", params=params)
                 if list_result and list_result.get("documents"):
                     result = list_result["documents"][0]
             
             if not result:
                 return {}
 
-            import json
             config = {}
             if result.get("config"):
                 try:

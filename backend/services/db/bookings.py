@@ -2,22 +2,24 @@ from datetime import datetime
 from appwrite.id import ID
 from zoneinfo import ZoneInfo
 import logging
+import hashlib
+from core.utils import mask_phone
 
 logger = logging.getLogger(__name__)
 
 class BookingsMixin:
     """
     Handles all Booking related operations.
-    Enforces tenant_id isolation where applicable.
+    Enforces tenant_id isolation at the database level.
     """
     
     # ============ APPOINTMENT BOOKINGS (Legacy/Appointment Mode) ============
 
-    def create_booking_request(self, request_data: dict):
+    async def create_booking_request(self, request_data: dict):
         """Create a new booking request (for appointment-only mode)."""
         try:
             doc_id = ID.unique()
-            result = self._make_request(
+            result = await self._make_request(
                 "POST",
                 f"/databases/{self.db_id}/collections/booking_requests/documents",
                 data={
@@ -31,37 +33,34 @@ class BookingsMixin:
             logger.error(f"Error creating booking request: {e}")
             return None
 
-    def get_booking_requests(self, status: str = None, tenant_id: str = None):
+    async def get_booking_requests(self, status: str = None, tenant_id: str = None):
         """
-        Get booking requests, optionally filtered by status.
-        CRITICAL: Now supports filtering by tenant_id via Python filtering.
+        Get booking requests, filtered by tenant and status.
+        ENFORCED: Server-side filtering by tenant_id.
         """
         try:
             path = f"/databases/{self.db_id}/collections/booking_requests/documents"
-            result = self._make_request("GET", path)
-            requests = result.get("documents", []) if result else []
             
-            # Filter by Tenant (Security Fix)
-            # If tenant_id is provided, enforce it.
-            # If not provided, behavior depends on caller (legacy might not pass it), 
-            # but ideally we should warn or default to something safe.
-            # For now, we enforce if passed.
+            queries = []
             if tenant_id:
-                requests = [r for r in requests if r.get("tenant_id") == tenant_id]
-            
-            # Filter by Status
+                queries.append(f'equal("tenant_id", "{tenant_id}")')
             if status:
-                requests = [r for r in requests if r.get("status") == status]
+                queries.append(f'equal("status", "{status}")')
+                
+            params = {"queries": queries} if queries else {}
+            
+            result = await self._make_request("GET", path, params=params)
+            requests = result.get("documents", []) if result else []
             
             return requests
         except Exception as e:
             logger.error(f"Error fetching booking requests: {e}")
             return []
 
-    def update_booking_request(self, request_id: str, data: dict):
+    async def update_booking_request(self, request_id: str, data: dict):
         """Update a booking request (approve/reject)."""
         try:
-            result = self._make_request(
+            result = await self._make_request(
                 "PATCH",
                 f"/databases/{self.db_id}/collections/booking_requests/documents/{request_id}",
                 data={"data": data}
@@ -71,40 +70,44 @@ class BookingsMixin:
             logger.error(f"Error updating booking request: {e}")
             return None
     
-    def get_booking_requests_by_phone(self, customer_phone: str, tenant_id: str = None):
+    async def get_booking_requests_by_phone(self, customer_phone: str, tenant_id: str = None):
         """Get booking requests for a specific customer by phone number."""
         try:
             path = f"/databases/{self.db_id}/collections/booking_requests/documents"
-            result = self._make_request("GET", path)
             
-            if result and result.get("documents"):
-                # Filter in-memory for reliability
-                requests = [
-                    r for r in result["documents"]
-                    if r.get("customer_phone") == customer_phone
-                ]
+            queries = [f'equal("customer_phone", "{customer_phone}")']
+            if tenant_id:
+                queries.append(f'equal("tenant_id", "{tenant_id}")')
                 
-                # Filter by Tenant if provided
-                if tenant_id:
-                     requests = [r for r in requests if r.get("tenant_id") == tenant_id]
-                
-                return requests
-            return []
+            params = {"queries": queries}
+            result = await self._make_request("GET", path, params=params)
+            
+            return result.get("documents", []) if result else []
         except Exception as e:
             logger.error(f"Error fetching requests by phone: {e}")
             return []
 
     # ============ MOTEL BOOKINGS (Confirmed/PMS Mode) ============
     
-    def create_booking(self, booking_data: dict):
-        """Create a confirmed booking."""
+    async def create_booking(self, booking_data: dict):
+        """Create a confirmed booking with deterministic ID to prevent double bookings."""
         try:
-            doc_id = ID.unique()
+            # Generate deterministic ID based on critical slot parameters
+            # Format: {tenant}_{date}_{time}_{room_type}
+            tenant_id = booking_data.get("tenant_id", "coalcreek")
+            booking_date = booking_data.get("booking_date", "")
+            booking_time = booking_data.get("booking_time", "")
+            room_type = booking_data.get("room_type", "queen")
+            
+            # Create a unique but deterministic key for this specific slot
+            raw_id = f"{tenant_id}_{booking_date}_{booking_time}_{room_type}"
+            doc_id = hashlib.md5(raw_id.encode()).hexdigest()
+            
             # Ensure required fields
             booking_data.setdefault("status", "confirmed")
             booking_data.setdefault("created_at", datetime.now().isoformat())
             
-            result = self._make_request(
+            result = await self._make_request(
                 "POST",
                 f"/databases/{self.db_id}/collections/bookings/documents",
                 data={
@@ -112,65 +115,61 @@ class BookingsMixin:
                     "data": booking_data
                 }
             )
-            logger.info(f"Created booking: {doc_id}")
+            logger.info(f"Created booking: {doc_id} for slot {raw_id}")
             return result
         except Exception as e:
+            if "already exists" in str(e).lower() or "conflict" in str(e).lower():
+                logger.warning(f"⚠️ Double booking prevented for slot {raw_id}")
+                return {"error": "already_booked", "message": "This slot has just been taken by another guest."}
             logger.error(f"Error creating booking: {e}")
             return None
     
-    def get_bookings(self, date: str = None, status: str = None, tenant_id: str = None):
+    async def get_bookings(self, date: str = None, status: str = None, tenant_id: str = None):
         """
-        Get bookings with optional filters.
-        CRITICAL: Added tenant_id support.
+        Get bookings with server-side filters.
         """
         try:
             path = f"/databases/{self.db_id}/collections/bookings/documents"
-            result = self._make_request("GET", path)
-            bookings = result.get("documents", []) if result else []
             
-            # Filter by Tenant
+            queries = []
             if tenant_id:
-                bookings = [b for b in bookings if b.get("tenant_id") == tenant_id]
-
-            # Filter in Python for reliability
+                queries.append(f'equal("tenant_id", "{tenant_id}")')
             if date:
-                bookings = [b for b in bookings if b.get("booking_date") == date]
+                queries.append(f'equal("booking_date", "{date}")')
             if status:
-                bookings = [b for b in bookings if b.get("status") == status]
+                queries.append(f'equal("status", "{status}")')
+                
+            params = {"queries": queries} if queries else {}
             
-            return bookings
+            result = await self._make_request("GET", path, params=params)
+            return result.get("documents", []) if result else []
         except Exception as e:
             logger.error(f"Error fetching bookings: {e}")
             return []
     
-    def get_bookings_range(self, start_date: str, end_date: str, tenant_id: str = None):
-        """Get bookings within a date range."""
+    async def get_bookings_range(self, start_date: str, end_date: str, tenant_id: str = None):
+        """Get bookings within a date range with server-side isolation."""
         try:
             path = f"/databases/{self.db_id}/collections/bookings/documents"
-            params = {
-                "queries": [
-                    f'greaterThanEqual("booking_date", "{start_date}")',
-                    f'lessThanEqual("booking_date", "{end_date}")'
-                ]
-            }
-            # Note: Appwrite queries don't support simple AND with local attribute filters if not indexed.
-            # Best to fetch range (which is indexed) and filter tenant locally if index missing.
-            
-            result = self._make_request("GET", path, params=params)
-            bookings = result.get("documents", []) if result else []
-
+            queries = [
+                f'greaterThanEqual("booking_date", "{start_date}")',
+                f'lessThanEqual("booking_date", "{end_date}")'
+            ]
             if tenant_id:
-                bookings = [b for b in bookings if b.get("tenant_id") == tenant_id]
+                queries.append(f'equal("tenant_id", "{tenant_id}")')
                 
-            return bookings
+            params = {"queries": queries}
+            
+            result = await self._make_request("GET", path, params=params)
+            return result.get("documents", []) if result else []
         except Exception as e:
             logger.error(f"Error fetching bookings range: {e}")
             return []
     
-    def update_booking(self, booking_id: str, data: dict):
+    async def update_booking(self, booking_id: str, data: dict):
         """Update a booking (reschedule, cancel, mark complete)."""
         try:
-            result = self._make_request(
+            result = await self._make_request(
                 "PATCH",
                 f"/databases/{self.db_id}/collections/bookings/documents/{booking_id}",
                 data={"data": data}
@@ -180,14 +179,14 @@ class BookingsMixin:
             logger.error(f"Error updating booking: {e}")
             return None
     
-    def get_availability(self, date: str, start_hour: int = 9, end_hour: int = 18, slot_duration: int = 30, tenant_id: str = None):
+    async def get_availability(self, date: str, start_hour: int = 9, end_hour: int = 18, slot_duration: int = 30, tenant_id: str = None):
         """
         Get available time slots for a given date.
         Returns list of available slot times (HH:MM format).
         """
         try:
             # Get existing bookings for the date
-            existing = self.get_bookings(date=date, status="confirmed", tenant_id=tenant_id)
+            existing = await self.get_bookings(date=date, status="confirmed", tenant_id=tenant_id)
             
             # Build list of booked times
             booked_times = set()
@@ -217,7 +216,7 @@ class BookingsMixin:
 
     # ==================== PAYMENT STATUS TRACKING ====================
     
-    def update_booking_payment_status(
+    async def update_booking_payment_status(
         self,
         booking_id: str,
         payment_status: str,
@@ -247,7 +246,7 @@ class BookingsMixin:
                 data["payment_received_at"] = now
                 data["status"] = "confirmed"  # Auto-confirm when paid
             
-            result = self._make_request(
+            result = await self._motel_request(
                 "PATCH",
                 f"/databases/{self.motel_db_id}/collections/motel_reservations/documents/{booking_id}",
                 data={"data": data}
@@ -261,61 +260,62 @@ class BookingsMixin:
             logger.error(f"Error updating payment status: {e}")
             return None
     
-    def get_bookings_by_payment_status(
+    async def get_bookings_by_payment_status(
         self,
         payment_status: str = None,
         tenant_id: str = "coalcreek",
         limit: int = 50
     ) -> list:
         """
-        Get bookings filtered by payment status for CRM dashboard.
+        Get bookings filtered by payment status.
+        ENFORCED: Server-side isolation.
         """
         try:
-            result = self._make_request(
+            queries = [f'equal("tenant_id", "{tenant_id}")']
+            if payment_status:
+                queries.append(f'equal("payment_status", "{payment_status}")')
+            
+            queries.append('orderDesc("created_at")')
+            queries.append(f'limit({limit})')
+            
+            params = {"queries": queries}
+            
+            result = await self._motel_request(
                 "GET",
-                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                params=params
             )
             
-            bookings = result.get("documents", []) if result else []
-            
-            # Filter by tenant
-            bookings = [b for b in bookings if b.get("tenant_id") == tenant_id]
-            
-            # Filter by payment status if specified
-            if payment_status:
-                bookings = [b for b in bookings if b.get("payment_status") == payment_status]
-            
-            # Sort by created_at descending
-            bookings.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-            
-            return bookings[:limit]
+            return result.get("documents", []) if result else []
             
         except Exception as e:
             logger.error(f"Error fetching bookings by payment status: {e}")
             return []
     
-    def get_booking_by_reference(
+    async def get_booking_by_reference(
         self,
         booking_reference: str,
         tenant_id: str = "coalcreek"
     ) -> dict:
         """
         Find a booking by its reference code.
+        ENFORCED: Server-side isolation.
         """
         try:
-            result = self._make_request(
+            queries = [
+                f'equal("booking_reference", "{booking_reference}")',
+                f'equal("tenant_id", "{tenant_id}")'
+            ]
+            params = {"queries": queries}
+            
+            result = await self._motel_request(
                 "GET",
-                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                params=params
             )
             
-            bookings = result.get("documents", []) if result else []
-            
-            for booking in bookings:
-                if (booking.get("booking_reference") == booking_reference and 
-                    booking.get("tenant_id") == tenant_id):
-                    return booking
-            
-            return None
+            docs = result.get("documents", []) if result else []
+            return docs[0] if docs else None
             
         except Exception as e:
             logger.error(f"Error finding booking by reference: {e}")

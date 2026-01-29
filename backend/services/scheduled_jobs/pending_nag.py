@@ -21,7 +21,7 @@ MAX_NAGS_PER_NOTIFICATION = 3
 COALCREEK_TZ = ZoneInfo("Australia/Melbourne")
 
 
-def pending_nag_job():
+async def pending_nag_job():
     """
     Check for pending notifications older than 30 minutes and send SMS nags to staff.
     
@@ -30,8 +30,8 @@ def pending_nag_job():
     try:
         logger.info("🔍 Running pending nag job...")
         
-        # Get all pending notifications
-        notifications = db_service.get_staff_notifications(status="pending", limit=100)
+        # Get all pending notifications (ASYNC)
+        notifications = await db_service.get_staff_notifications(status="pending", limit=100)
         
         if not notifications:
             logger.info("✅ No pending notifications found")
@@ -95,14 +95,15 @@ PENDING FOR {age_str}!
 Please respond immediately.
 """
             
-            # Send SMS to staff
-            success = sms_service.send_sms(STAFF_PHONE, sms_message)
+            # Send SMS to staff (ASYNC)
+            success = await sms_service.send_sms(STAFF_PHONE, sms_message)
             
             if success:
                 # Update notification with nag attempt
                 new_notes = f"{staff_notes}\n[{now.strftime('%Y-%m-%d %H:%M')}] AUTO-NAG: Pending >{int(age_minutes)}min (Attempt #{nag_attempts + 1})".strip()
                 
-                db_service.update_staff_notification(notification_id, {
+                # ASYNC update
+                await db_service.update_staff_notification(notification_id, {
                     "urgency": "critical",
                     "staff_notes": new_notes
                 })
@@ -124,4 +125,5 @@ Please respond immediately.
 if __name__ == "__main__":
     # For manual testing
     logging.basicConfig(level=logging.INFO)
-    pending_nag_job()
+    import asyncio
+    asyncio.run(pending_nag_job())

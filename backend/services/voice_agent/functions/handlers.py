@@ -220,7 +220,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     }
     
     try:
-        result = save_reservation_fn(reservation_data)
+        result = await save_reservation_fn(reservation_data)
         
         if result:
             logger.info(f"✅ Created SOFT HOLD: {booking_ref} for {guest_name}")
@@ -781,9 +781,12 @@ async def handle_update_guest_info(args: dict) -> dict:
     Save guest details to memory/context AND update the latest reservation/notification.
     This ensures guest_email is persisted even if provided after booking.
     """
-    import requests
+    import httpx
+    import json
     from core.config import settings
     from services.voice_agent.text_utils import normalize_phone_number, is_valid_au_phone
+    from core.logger import logger
+    from core.constants import MOTEL_DB_ID
     
     guest_name = args.get("guest_name", "")
     guest_phone = args.get("guest_phone", "")
@@ -806,6 +809,8 @@ async def handle_update_guest_info(args: dict) -> dict:
     # If we have an email, try to update the most recent reservation and notification
     if guest_email and guest_phone:
         try:
+            # ASYNC Appwrite update via httpx
+            url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
             headers = {
                 "Content-Type": "application/json",
                 "X-Appwrite-Project": settings.APPWRITE_PROJECT_ID,
