@@ -40,7 +40,6 @@ async def handle_voice_webhook(
     2. 'To' Number Lookup: Fallback to mapping known numbers (future)
     3. Default: Env var or 'coalcreek'
     """
-    """
     logger.info(f"📞 Voice webhook from {mask_phone(From)} to {mask_phone(To)} (tenant_id={tenant_id}), CallSid: {CallSid}")
 
     
@@ -155,7 +154,6 @@ async def handle_call_status(
     Handle call status callbacks from Twilio.
     Triggered after the <Dial> attempt completes.
     Only sends WhatsApp if the call was truly missed (not answered).
-    """
     """
     logger.info(f"📞 Call status callback: {CallSid} from {mask_phone(From)}")
     logger.info(f"   CallStatus: {CallStatus}, CallDuration: {CallDuration}s")
