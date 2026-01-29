@@ -31,6 +31,8 @@ APPWRITE_PROJECT_ID = settings.APPWRITE_PROJECT_ID
 APPWRITE_API_KEY = settings.APPWRITE_API_KEY
 
 
+from appwrite.query import Query
+
 def get_appwrite_headers() -> dict:
     """Get headers for Appwrite API requests."""
     return {
@@ -40,19 +42,27 @@ def get_appwrite_headers() -> dict:
     }
 
 
-async def appwrite_request(method: str, endpoint: str, data: dict = None) -> dict:
+async def appwrite_request(method: str, endpoint: str, data: dict = None, params: dict = None) -> dict:
     """Make a request to Appwrite API."""
     url = f"{APPWRITE_ENDPOINT}{endpoint}"
     headers = get_appwrite_headers()
     
+    # Handle queries list serialization (JSON format + array indices)
+    if params and 'queries' in params:
+        query_list = params.pop('queries')
+        new_params = params.copy()
+        for i, q in enumerate(query_list):
+            new_params[f'queries[{i}]'] = q
+        params = new_params
+
     async with httpx.AsyncClient() as client:
         try:
             if method == "GET":
-                response = await client.get(url, headers=headers, timeout=30.0)
+                response = await client.get(url, headers=headers, params=params, timeout=30.0)
             elif method == "POST":
-                response = await client.post(url, headers=headers, json=data, timeout=30.0)
+                response = await client.post(url, headers=headers, json=data, params=params, timeout=30.0)
             elif method == "PATCH":
-                response = await client.patch(url, headers=headers, json=data, timeout=30.0)
+                response = await client.patch(url, headers=headers, json=data, params=params, timeout=30.0)
             elif method == "DELETE":
                 response = await client.delete(url, headers=headers, timeout=30.0)
             else:
@@ -241,8 +251,9 @@ async def get_guests(
         # The current helper in motel.py calls appwrite_request which wraps requests.
         # Let's use manual filtering for reliability as we did in get_reservations
         
-        endpoint = f"{endpoint}?queries[]=limit({limit})"
-        result = await appwrite_request("GET", endpoint)
+        # Use params for queries
+        params = {"queries": [Query.limit(limit)]}
+        result = await appwrite_request("GET", endpoint, params=params)
         
         if "error" in result:
              return {"success": False, "error": result["error"]}

@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from appwrite.id import ID
+from appwrite.query import Query
 import logging
 
 logger = logging.getLogger(__name__)
@@ -19,8 +20,8 @@ class ConversationsMixin:
         """Get existing conversation or create a new one."""
         try:
             queries = [
-                f'equal("whatsapp_id", "{whatsapp_id}")',
-                f'equal("business_id", "{business_id}")'
+                Query.equal("whatsapp_id", whatsapp_id),
+                Query.equal("business_id", business_id)
             ]
             params = {'queries': queries}
             

@@ -1,6 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from appwrite.id import ID
+from appwrite.query import Query
 import json
 import logging
 from core.utils import mask_phone
@@ -54,14 +55,14 @@ class NotificationsMixin:
     async def get_staff_notifications(self, status: str = None, notification_type: str = None, limit: int = 50, tenant_id: str = "coalcreek") -> list:
         """Get staff notifications with server-side tenant isolation."""
         try:
-            queries = [f'equal("tenant_id", "{tenant_id}")']
+            queries = [Query.equal("tenant_id", tenant_id)]
             if status:
-                queries.append(f'equal("status", "{status}")')
+                queries.append(Query.equal("status", status))
             if notification_type:
-                queries.append(f'equal("type", "{notification_type}")')
+                queries.append(Query.equal("type", notification_type))
             
-            queries.append('orderDesc("created_at")')
-            queries.append(f'limit({limit})')
+            queries.append(Query.order_desc("created_at"))
+            queries.append(Query.limit(limit))
             
             params = {"queries": queries}
             

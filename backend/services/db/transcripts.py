@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from appwrite.id import ID
+from appwrite.query import Query
 import logging
 from core.utils import mask_phone
 
@@ -91,14 +92,14 @@ class TranscriptsMixin:
         """Get call transcripts with optional filters (DEMO calls)."""
         try:
             path = f"/databases/{self.db_id}/collections/demo_transcripts/documents"
-            queries = ['orderDesc("created_at")', f'limit({limit})']
+            queries = [Query.order_desc("created_at"), Query.limit(limit)]
             
             if start_date:
-                queries.append(f'greaterThanEqual("created_at", "{start_date}")')
+                queries.append(Query.greater_than_equal("created_at", start_date))
             if end_date:
-                queries.append(f'lessThanEqual("created_at", "{end_date}")')
+                queries.append(Query.less_than_equal("created_at", end_date))
             if phone:
-                queries.append(f'equal("phone", "{phone}")')
+                queries.append(Query.equal("phone", phone))
                 
             result = await self._make_request("GET", path, params={'queries': queries})
             return result.get("documents", []) if result else []
@@ -170,9 +171,9 @@ class TranscriptsMixin:
         """Get call logs for a specific tenant."""
         try:
             collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
-            queries = ['orderDesc("created_at")', f'limit({limit})']
+            queries = [Query.order_desc("created_at"), Query.limit(limit)]
             if start_date:
-                queries.append(f'greaterThanEqual("created_at", "{start_date}")')
+                queries.append(Query.greater_than_equal("created_at", start_date))
                 
             result = await self._make_request("GET", f"/databases/{self.motel_db_id}/collections/{collection_id}/documents", params={'queries': queries})
             return result.get("documents", []) if result else []

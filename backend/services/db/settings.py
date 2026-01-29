@@ -3,6 +3,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from appwrite.query import Query
 class SettingsMixin:
     """
     Handles Business/Tenant Settings.
@@ -11,7 +12,7 @@ class SettingsMixin:
     async def get_business(self, whatsapp_business_id: str):
         """Fetch business settings by WhatsApp Business ID."""
         try:
-            queries = [f'equal("whatsapp_business_id", "{whatsapp_business_id}")']
+            queries = [Query.equal("whatsapp_business_id", whatsapp_business_id)]
             params = {'queries': queries}
             
             result = await self._make_request(
@@ -105,7 +106,7 @@ class SettingsMixin:
             if not result:
                 # Fallback: Query by slug if doc ID lookup failed
                 params = {
-                    "queries": [f'equal("slug", "{tenant_id}")']
+                    "queries": [Query.equal("slug", tenant_id)]
                 }
                 list_result = await self._make_request(
                     "GET", 
@@ -170,7 +171,7 @@ class SettingsMixin:
             result = await self._make_request("GET", path)
             
             if not result:
-                params = {"queries": [f'equal("slug", "{tenant_id}")']}
+                params = {"queries": [Query.equal("slug", tenant_id)]}
                 list_result = await self._make_request("GET", f"/databases/{self.motel_db_id}/collections/tenants/documents", params=params)
                 if list_result and list_result.get("documents"):
                     result = list_result["documents"][0]
