@@ -17,8 +17,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import asyncio
 from core.config import settings
-
-
+from services.appwrite import db_service
 
 
 from services.saranda_flows import (
@@ -596,8 +595,9 @@ async def handle_get_restaurant_info(args: dict) -> dict:
     # General
     return {
         "name": info["name"],
-        "address": info["address"],
-from services.db import db_service
+        "address": info["address"]
+    }
+
 
 # =============================================================================
 # CUSTOMER LOOKUP HANDLERS
@@ -666,7 +666,6 @@ async def handle_lookup_customer(args: dict, user_phone: str) -> dict:
         "found": True,
         "count": len(customers),
         "message": f"I found a few people with that name: {options_str}. Which one is you? or what is your phone number?"
-    }
     }
 
 
