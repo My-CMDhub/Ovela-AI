@@ -451,8 +451,7 @@ class VoiceAgentHandler:
                 tenant_id=self.tenant_id
             )
             logger.info("✅ Using Generic Dispatcher")
-                tenant_id=self.tenant_id
-            )
+        
 
         
         # Connect to Deepgram Voice Agent API
