@@ -9,6 +9,7 @@ from core.config import settings
 from core.utils import mask_phone
 import httpx
 from twilio.rest import Client
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +270,6 @@ Reply with:
             logger.error(f"❌ Critical: All WhatsApp delivery methods failed for {request_id}: {e}")
             return False
     
-import re
 
     async def send_customer_order_confirmation(
         self,
