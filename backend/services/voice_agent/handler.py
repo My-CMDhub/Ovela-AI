@@ -242,11 +242,11 @@ class VoiceAgentHandler:
                 logger.error("❌ ANTHROPIC_API_KEY not set - falling back to GPT-4.1-mini")
         
         # Fallback/Default to OpenAI gpt-4o-mini (Primary)
-        logger.info("🧠 Using OpenAI gpt-4o-mini (Primary)")
+        logger.info("🧠 Using OpenAI gpt-4.1-mini (Primary)")
         return {
             "provider": {
                 "type": "open_ai",
-                "model": "gpt-4o-mini",
+                "model": "gpt-4.1-mini",
                 "temperature": 0.45
             },
             "prompt": self._get_active_prompt(),
@@ -768,11 +768,11 @@ class VoiceAgentHandler:
                 # Explicit farewells
                 "goodbye", "bye now", "bye bye", "bye!",
                 # Time-based farewells (day/night/evening)
-                "have a great day", "have a wonderful day", "have a lovely day",
-                "have a great night", "have a wonderful night", "have a lovely night",  
-                "have a great evening", "have a wonderful evening", "have a lovely evening",
+                "have a great day", "have a wonderful day", "have a lovely day", "enjoy your day",
+                "have a great night", "have a wonderful night", "have a lovely night", "enjoy your night",
+                "have a great evening", "have a wonderful evening", "have a lovely evening", "enjoy your evening",
                 # Casual farewells
-                "take care", "see you", "cheers", "catch you later",
+                "take care", "see you", "cheers", "catch you later", "thanks for calling", "thank you for calling",
                 # Australian-style
                 "have a good one", "all the best",
             ]
