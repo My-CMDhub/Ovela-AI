@@ -1201,9 +1201,9 @@ class AppwriteService:
     # Tenant isolation: Each client gets their own transcript collection
     TENANT_TRANSCRIPT_COLLECTIONS = {
         "coalcreek": "call_transcripts_coalcreek",
+        "saranda": "call_transcripts_saranda",
         # Future tenants:
         # "lydoun": "call_transcripts_lydoun",
-        # "paddlesteamer": "call_transcripts_paddlesteamer",
     }
     
     def get_transcript_collection_for_tenant(self, tenant_id: str) -> str:
@@ -1362,7 +1362,8 @@ class AppwriteService:
                 "business_name": result.get("name") or result.get("business_name", ""),
                 "business_hours": result.get("business_hours") or config.get("business_hours", ""),
                 "location": result.get("location") or config.get("location", ""),
-                "business_phone": result.get("twilio_phone") or result.get("business_phone", ""),
+                # FIX: Prioritize 'business_phone' column (Real/Egress) over legacy 'twilio_phone'
+                "business_phone": result.get("business_phone") or result.get("twilio_phone", ""),
                 "owner_email": result.get("owner_email", ""),
                 "staff_email": result.get("staff_email", "") or config.get("staff_email", "")
             }
@@ -1382,7 +1383,9 @@ class AppwriteService:
                 "name": settings_data.get("business_name"),
                 "business_hours": settings_data.get("business_hours"),
                 "location": settings_data.get("location"),
-                "twilio_phone": settings_data.get("business_phone"),
+                # FIX: Map 'business_phone' (Reception Phone) to 'business_phone' column (Real/Egress)
+                # 'twilio_phone' (Virtual/Ingress) is managed manually/separately
+                "business_phone": settings_data.get("business_phone"),
                 "owner_email": settings_data.get("owner_email"),
                 "staff_email": settings_data.get("staff_email")
             }
@@ -1429,6 +1432,7 @@ class AppwriteService:
             config["tenant_id"] = tenant_id
             config["business_name"] = result.get("name")
             config["twilio_phone"] = result.get("twilio_phone")
+            config["business_phone"] = result.get("business_phone") # Real Business Number (Egress)
             config["staff_email"] = result.get("staff_email")
             
             # Map top-level columns to config structure for consistency

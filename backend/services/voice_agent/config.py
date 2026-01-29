@@ -119,12 +119,11 @@ def get_random_greeting(tenant_id: str = "coalcreek") -> str:
     # Saranda Restaurant
     if tenant_id == "saranda":
         greetings = [
-            "Good day! You've reached Saranda Cafe and Pizzeria. How can I help you today?",
-            "Hello! Thanks for calling Saranda. What can I get for you?",
-            "Hi there! Saranda Cafe speaking. Are you after a pickup order or a reservation?",
-            "Welcome to Saranda! How may I assist you today?",
-            "Good to hear from you! This is Saranda Cafe. What can I do for you?",
-            "Hello! Saranda Cafe and Pizzeria here. How can we help?",
+            "Good day! You've reached Saranda Cafe and Pizzeria. Calls are recorded for quality assurance. How can I help you today?",
+            "Hello! Thanks for calling Saranda. Just letting you know this call is recorded. What can I get for you?",
+            "Hi there! Saranda Cafe speaking. Please note calls are recorded for quality. Are you after a pickup order or a reservation?",
+            "Welcome to Saranda! This call is recorded for quality training. How may I assist you today?",
+            "Good to hear from you! This is Saranda Cafe. Calls are recorded. What can I do for you?",
         ]
         return random.choice(greetings)
     

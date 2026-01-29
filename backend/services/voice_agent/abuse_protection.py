@@ -64,23 +64,39 @@ class AbuseProtection:
         """Set when the call started for duration monitoring."""
         self.call_start_time = start_time
     
-    def flag_off_topic(self, reason: str) -> dict:
+    def report_violation(self, category: str, reason: str) -> dict:
         """
-        Increment off-topic counter and return escalation response.
+        Report a user violation (off-topic, abusive, illegal, etc.).
         
         Args:
-            reason: Why this is off-topic (e.g., 'flirting', 'personal', 'why chain')
+            category: 'off_topic', 'abusive', 'harassment'
+            reason: Description of the behavior
             
         Returns:
-            dict with count, stage, action, and message for AI to follow
+            dict with escalation instructions
         """
+        # Distinguish between "soft" (off-topic) and "hard" (abuse) violations
+        if category in ["abusive", "harassment", "sexual"]:
+            self.violation_count += 1
+            is_severe = True
+        else:
+            self.off_topic_count += 1
+            is_severe = False
+            
         limit = ABUSE_CONFIG["off_topic_limit"]
+        count = self.violation_count if is_severe else self.off_topic_count
         
-        self.off_topic_count += 1
-        count = self.off_topic_count
+        logger.warning(f"🚨 Abuse Report [{category}]: {reason} (Count: {count})")
         
-        logger.info(f"⚠️ Off-topic flag #{count}/{limit}: {reason}")
-        
+        # IMMEDIATE ACTION for Severe Abuse
+        if is_severe and count >= 1:
+             return {
+                "action": "hangup",
+                "should_hangup": True,
+                "farewell": "I am not comfortable with this conversation. I am acting to protect our staff and systems. Goodbye.",
+                "message": "ABUSE DETECTED. End the call immediately."
+            }
+
         # Stage 1: Gentle redirect (1-2 flags)
         if count <= 2:
             return {
@@ -88,20 +104,21 @@ class AbuseProtection:
                 "limit": limit,
                 "stage": 1,
                 "action": "redirect_gently",
-                "message": "This seems off-topic. Briefly acknowledge, then ask: 'Is there anything about the motel or booking I can help you with?'"
+                "message": f"VIOLATION #{count}: This is off-topic. Briefly acknowledge, then ask: 'Is there anything about the motel or booking I can help you with?'"
             }
         
-        # Stage 2: Firm redirect (3 to limit-1 flags)
+        # Stage 2: Firm redirect + Transparency (3 to limit-1 flags)
         elif count < limit:
+            remaining = limit - count
             return {
                 "count": count,
                 "limit": limit,
                 "stage": 2,
                 "action": "redirect_firmly",
-                "message": f"This is off-topic comment #{count}. Say: 'I'm really here to help with motel or booking. If there's nothing else I can help with, we should wrap up our call.'"
+                "message": f"VIOLATION #{count} (Escalation imminent). INSTRUCTION: You must strictly warn the user. Say: 'I want to help you, but this is the {count}th time we've gone off-topic. I can only discuss motel business. If this continues, I will have to end the call and report this interaction to staff.' Then ask: 'blocking question related to booking?'"
             }
         
-        # Stage 3: Auto-hangup (limit+ flags)
+        # Stage 3: Auto-hangup (limit+ flags) with Transparency
         else:
             logger.info(f"🚫 Off-topic limit reached ({count}/{limit} flags) - requesting hangup")
             return {
@@ -110,8 +127,8 @@ class AbuseProtection:
                 "stage": 3,
                 "action": "hangup",
                 "should_hangup": True,
-                "farewell": "I've really enjoyed chatting, but I need to free up the line for other callers. If you ever need help with motel or booking, give us a call back anytime. Take care!",
-                "message": "LIMIT REACHED. The system is ending the call. Say your farewell - the call will end shortly."
+                "farewell": f"As I mentioned, I need to keep this line professional. I am terminating this call now and sending a summary to our management team. Goodbye.",
+                "message": "LIMIT REACHED. The system is ending the call. Say the farewell strictly."
             }
     
     def check_duration(self) -> dict:

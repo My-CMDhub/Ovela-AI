@@ -36,9 +36,17 @@ async def handle_voice_webhook(
     logger.info(f"📞 Voice webhook from {From} to {To} (tenant_id={tenant_id}), CallSid: {CallSid}")
     
     # Resolve tenant_id
+    # 1. Check Query Param (override)
     if not tenant_id:
-        # Check settings or default
-        tenant_id = settings.TENANT_ID or "coalcreek"
+        # 2. Check Phone Mapping (Ingress Number)
+        cleaned_to = To.replace(" ", "").strip() if To else ""
+        if cleaned_to in settings.PHONE_TO_TENANT_MAP:
+            tenant_id = settings.PHONE_TO_TENANT_MAP[cleaned_to]
+            logger.info(f"📍 Mapped Ingress Number {cleaned_to} -> {tenant_id}")
+        else:
+            # 3. Default Fallback
+            tenant_id = settings.TENANT_ID or "coalcreek"
+            logger.info(f"⚠️ Unknown Ingress Number {cleaned_to} -> Fallback to {tenant_id}")
         
     # Return TwiML that connects to the AI stream
     # Pass tenant_id to the WebSocket via Parameter

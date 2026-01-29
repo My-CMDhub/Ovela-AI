@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     # Demo Settings
     TENANT_ID: str = "coalcreek"  # Default tenant (coalcreek is production)
     TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
+    
+    # Phone to Tenant Mapping (Ingress)
+    # Maps Twilio 'To' number -> Tenant ID
+    PHONE_TO_TENANT_MAP: dict = {
+        "+61348236219": "coalcreek",  # Production Twilio Number
+        "+61400000000": "saranda"     # Mock Number for Testing
+    }
 
     class Config:
         case_sensitive = True

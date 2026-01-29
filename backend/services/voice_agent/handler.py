@@ -443,7 +443,8 @@ class VoiceAgentHandler:
         if self.tenant_id == "saranda" or tenant_type == "restaurant":
             self.function_dispatcher = SarandaFunctionDispatcher(
                 user_phone=self.user_phone,
-                abuse_protection=self.abuse_protection
+                abuse_protection=self.abuse_protection,
+                tenant_config=self.tenant_config
             )
             logger.info("✅ Using Saranda/Restaurant Dispatcher")
             
@@ -672,6 +673,11 @@ class VoiceAgentHandler:
             # - If they said "wait", "add X", etc. -> CANCEL HANGUP (resume chat)
             # ─────────────────────────────────────────────────────────────────
             if getattr(self, '_is_hanging_up', False):
+                # STRICT ABUSE PROTECTION: If hanging up due to abuse, IGNORE ALL INPUT
+                if getattr(self, 'call_outcome', '') == "abuse_timeout":
+                    logger.info(f"🚫 Abuse termination in progress - ignoring user speech: '{content}'")
+                    return
+
                 content_lower = content.lower().strip()
                 # Phrases that mean "I'm done too" - we should IGNORE these and let hangup finish
                 reciprocal_farewells = [
@@ -1458,14 +1464,31 @@ class VoiceAgentHandler:
             duration = int(time.time() - self.call_start_time) if self.call_start_time else 0
             
             if self.transcript:
-                db_service.create_demo_transcript(
-                    phone=self.user_phone,
-                    transcript=self.transcript,
-                    exchange_count=self.exchange_count,
-                    duration_seconds=duration,
-                    outcome=self.call_outcome,
-                    tenant_id=self.tenant_id  # Multi-tenant support
-                )
+                # ISOLATION: Check if this is a demo or a real tenant
+                if self.tenant_id == "ovela_demo":
+                     db_service.create_demo_transcript(
+                        phone=self.user_phone,
+                        transcript=self.transcript,
+                        exchange_count=self.exchange_count,
+                        duration_seconds=duration,
+                        outcome=self.call_outcome,
+                        tenant_id=self.tenant_id,
+                        call_sid=self.call_sid
+                    )
+                else:
+                    # Tenant-Specific Storage
+                    db_service.save_call_transcript(
+                        tenant_id=self.tenant_id,
+                        call_sid=self.call_sid,
+                        caller_phone=self.user_phone,
+                        transcript=json.dumps(self.transcript), # save_call_transcript expects string
+                        duration=duration,
+                        status=self.call_outcome,
+                        metadata={
+                            "exchange_count": self.exchange_count,
+                            "outcome": self.call_outcome
+                        }
+                    )
                 logger.info(f"📝 Saved transcript: {len(self.transcript)} entries, {duration}s")
         except Exception as e:
             logger.error(f"Error saving transcript: {e}")

@@ -715,9 +715,10 @@ class FunctionDispatcher:
                 return await handle_end_call()
             
             # Abuse Protection
-            elif function_name == "flag_off_topic":
+            elif function_name == "report_user_behavior":
+                category = args.get("category", "off_topic")
                 reason = args.get("reason", "unspecified")
-                return self.abuse_protection.flag_off_topic(reason)
+                return self.abuse_protection.report_violation(category, reason)
             
             else:
                 return {"error": f"Unknown function: {function_name}"}

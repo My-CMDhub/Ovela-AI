@@ -435,9 +435,11 @@ class CoalCreekFunctionDispatcher:
                 "message": "Sure, I'll transfer you to reception now."
             }
             
-        elif function_name == "flag_off_topic":
+        elif function_name == "report_user_behavior":
              if self.abuse_protection:
-                 return self.abuse_protection.flag_off_topic(args.get("reason", "unspecified"))
+                 category = args.get("category", "off_topic")
+                 reason = args.get("reason", "unspecified")
+                 return self.abuse_protection.report_violation(category, reason)
              return {"message": "Please continue."}
         
         else:

@@ -216,17 +216,22 @@ def get_booking_functions() -> list:
             }
         },
         {
-            "name": "flag_off_topic",
-            "description": "IMPORTANT: Call this when a caller is wasting time with off-topic behavior. Examples: flirting, personal questions about you, repeated nonsense, tangential 'why' chains, demands for info you can't provide. Call this EACH TIME they do something off-topic - the system tracks the count and will tell you how to respond.",
+            "name": "report_user_behavior",
+            "description": "IMPORTANT: Call this to report abusive, off-topic, or inappropriate behavior. Categories: 'off_topic' (wasting time, nonsense), 'abusive' (swearing, insults, sexual comments, harassment). The system will handle the response (redirect or hangup). Call this IMMEDIATELY if you feel uncomfortable or the user is not engaging with the booking process.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "category": {
+                        "type": "string",
+                        "enum": ["off_topic", "abusive", "harassment", "sexual"],
+                        "description": "Category of the behavior"
+                    },
                     "reason": {
                         "type": "string",
-                        "description": "Brief description of why this is off-topic (e.g., 'flirting', 'personal questions', 'repeated nonsense', 'demanding other guest info')"
+                        "description": "Brief description of the behavior"
                     }
                 },
-                "required": ["reason"]
+                "required": ["category", "reason"]
             }
         },
         {

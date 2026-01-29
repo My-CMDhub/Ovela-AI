@@ -34,11 +34,7 @@ def get_coalcreek_prompt(current_date: str, current_time: str) -> str:
     location = COALCREEK_DATA["info"]["address"]
     phone = COALCREEK_DATA["info"]["phone"]
     
-    greeting_examples = [
-        '"Good morning, Coal Creek Motel, how can I help you?"',
-        '"Afternoon, Coal Creek Motel, speaking, what can I do for you?"',
-        '"Evening, Coal Creek Motel, how can I help?"'
-    ]
+
     
     # Build room types section dynamically
     room_types_text = ""
