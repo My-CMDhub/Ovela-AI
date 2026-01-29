@@ -495,6 +495,7 @@ async def handle_request_reservation(args: dict, user_phone: str, business_phone
     if saranda_queue.get_active() and saranda_queue.get_active().id == request_id:
         # FROZEN : WhatsApp notifications disabled for now.
         # Direct Square integration handles kitchen flow.
+        pass
         # try:
         #     await staff_notification_service.send_whatsapp_order_approval(
         #         request_id=request_id,
