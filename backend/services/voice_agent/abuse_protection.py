@@ -79,6 +79,12 @@ class AbuseProtection:
         if category in ["abusive", "harassment", "sexual"]:
             self.violation_count += 1
             is_severe = True
+        elif category in ["compliment", "benign"]:
+             # Do NOT count as a violation
+             return {
+                "action": "ignore",
+                "message": "Thanks! That's very kind of you. Now, back to your order - what can I get for you?"
+            }
         else:
             self.off_topic_count += 1
             is_severe = False

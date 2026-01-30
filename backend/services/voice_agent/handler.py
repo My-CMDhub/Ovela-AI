@@ -144,6 +144,7 @@ class VoiceAgentHandler:
         
         # Order Tracking
         self.order_id = None
+        self.pending_order = None # [NEW] Batch/Draft order buffer
         
         # Tenant Configuration (Database Driven)
         self.tenant_config = {}
@@ -950,7 +951,8 @@ class VoiceAgentHandler:
                 await self._inject_message(get_random_filler_prompt())
             
             # Execute via dispatcher
-            result = await self.function_dispatcher.execute(function_name, function_args)
+            ctx = {"pending_order": self.pending_order}
+            result = await self.function_dispatcher.execute(function_name, function_args, context=ctx)
             
             # Capture system errors/outcome overrides
             if result.get("outcome_override"):
@@ -1018,8 +1020,9 @@ class VoiceAgentHandler:
             # Inject the farewell message
             await self._inject_message(message)
             
-            # Schedule hangup after TTS completes (~15 chars/sec + buffer)
-            delay = max(3.0, len(message) / 15) + 1.5
+            # Schedule hangup after TTS completes (Calculated Buffer)
+            # Formula: 0.1s per char + 2.0s buffer (Min 4s)
+            delay = max(4.0, (len(message) * 0.1) + 2.0)
             logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
             asyncio.create_task(self._scheduled_hangup(delay))
             return  # Don't send function response, call is ending
@@ -1036,11 +1039,18 @@ class VoiceAgentHandler:
         if function_name == "create_booking" and result.get("success"):
             self.booking_completed = True
         
-        # Check for order completion (Saranda)
-        if function_name == "submit_order" and result.get("success"):
-            self.order_id = result.get("order_id")
-            self.call_reference = self.order_id
-            logger.info(f"🛒 Order captured: {self.order_id}")
+        # Check for order completion (Saranda) - NOW LOGIC CHANGED
+        if function_name == "submit_order":
+             if result.get("success") and result.get("action") == "hold":
+                 # BATCH STRATEGY: Store in pending_order, do NOT submit yet
+                 self.pending_order = result.get("order_details")
+                 logger.info(f"📝 Order Held in Batch: {len(self.pending_order.get('items', []))} items")
+             
+             elif result.get("success") and result.get("order_id"):
+                 # Legacy/Instant Submit path
+                 self.order_id = result.get("order_id")
+                 self.call_reference = self.order_id
+                 logger.info(f"🛒 Order captured (Immediate): {self.order_id}")
         
         # Check for booking completion (Motel)
         if function_name == "create_booking_request" and result.get("success"):
@@ -1366,9 +1376,10 @@ class VoiceAgentHandler:
         try:
             await self._inject_message(farewell_message)
             # Wait for TTS to complete - estimate based on message length
-            # ~12 chars/sec for TTS, plus latency buffer
-            estimated_tts_time = max(3.5, len(farewell_message) // 10)
-            logger.info(f"⏳ Waiting {estimated_tts_time}s for farewell TTS")
+            # Wait for TTS to complete - estimate based on message length
+            # Formula: 0.1s per char + 2.0s buffer (Min 4.0s)
+            estimated_tts_time = max(4.0, (len(farewell_message) * 0.1) + 2.0)
+            logger.info(f"⏳ Waiting {estimated_tts_time:.1f}s for farewell TTS")
             await asyncio.sleep(estimated_tts_time)
         except Exception as e:
             logger.warning(f"Failed to send farewell: {e}")
@@ -1421,6 +1432,30 @@ class VoiceAgentHandler:
         
         logger.info(f"📞 Executing transfer to {transfer_to}")
         
+        # [NEW] SEND TRANSFER SUMMARY SMS (Non-blocking)
+        try:
+             # Check for pending order to include context
+             sms_context = ""
+             if self.pending_order:
+                 items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
+                 sms_context = f" | DRAFT ORDER: {items}"
+             
+             # Default intent if none
+             intent = self.memory.get("order_summary") or "Customer Inquiry"
+             
+             from services.messaging.sms_service import sms_service
+             summary_msg = f"📞 INCALL TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
+             
+             # Fire and forget (don't delay transfer significantly)
+             # But use 'create_task' to ensure it runs
+             asyncio.create_task(sms_service.send_message(
+                 to_number=settings.STAFF_PHONE_NUMBER, # Always alert main staff number
+                 body=summary_msg
+             ))
+             logger.info("📨 Transfer summary SMS queued")
+        except Exception as e:
+            logger.warning(f"Failed to queue transfer SMS: {e}")
+
         try:
             from twilio.twiml.voice_response import VoiceResponse, Dial
             
@@ -1492,11 +1527,99 @@ class VoiceAgentHandler:
             logger.error(f"Error saving reservation: {e}")
             return None
 
+    async def _finalize_batch_order(self):
+        """
+        Submit the held batch order to Square/Database.
+        Called on cleanup (hangup/end_call).
+        """
+        if not self.pending_order:
+            return
+            
+        logger.info("🚀 Finalizing Batch Order...")
+        try:
+            from services.tenants.saranda.square_client import SquareClient, SquareOrderItem
+            from services.tenants.saranda.square_flows import saranda_approval_tracker, SquareOrderRequest
+            
+            # Reconstruct objects
+            items_data = self.pending_order.get("items", [])
+            customer_name = self.pending_order.get("customer_name")
+            pickup_time = self.pending_order.get("pickup_time")
+            user_phone = self.pending_order.get("user_phone")
+            
+            if not items_data:
+                logger.warning("⚠️ Pending order is empty, skipping.")
+                return
+
+            square_items = []
+            for i in items_data:
+                square_items.append(SquareOrderItem(
+                    name=i["name"],
+                    quantity=i["quantity"],
+                    price_cents=i["price_cents"],
+                    modifiers=i.get("modifiers", [])
+                ))
+            
+            # Execute Square API
+            square_client = SquareClient()
+            # Use call_sid as ID to link call
+            req_id = f"ovela:{ID.unique()}"
+            
+            order = await square_client.create_pickup_order(
+                customer_name=customer_name,
+                customer_phone=user_phone,
+                items=square_items,
+                pickup_time=pickup_time,
+                call_id=self.call_sid,
+                reference_id=req_id
+            )
+            
+            logger.info(f"✅ Batch Order Submitted to Square: {order.order_id}")
+            
+            # HITL / SMS Notification
+            items_summary = ", ".join([f"{item.quantity}x {item.name}" for item in square_items])
+            
+            request = SquareOrderRequest(
+                square_order_id=order.order_id,
+                square_order_version=order.version,
+                call_id=self.call_sid,
+                request_id=req_id,
+                customer_name=customer_name,
+                customer_phone=user_phone,
+                pickup_time=pickup_time,
+                total_cents=int(order.total_cents),
+                items_summary=items_summary
+            )
+            saranda_approval_tracker.track(request)
+            
+            # Send SMS Confirmation to User (If not handled by HITL flow immediately)
+            # The HITL tracker usually handles the "Pending Approval" SMS.
+            # We trust saranda_approval_tracker to do its job.
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to finalize batch order: {e}")
+            # Fallback: Log critical alert
+            await db_service.create_system_alert(
+                title="Batch Order Failure",
+                message=f"Failed to submit batch order for {self.user_phone}: {e}",
+                severity="critical",
+                component="voice_agent",
+                tenant_id=self.tenant_id
+            )
+
     async def _cleanup(self):
         """Clean up connections and save transcript."""
         logger.info("🧹 Cleaning up VoiceAgentHandler")
         self.is_running = False
         
+        # [NEW] FINALIZE BATCH ORDER (Anti-Race Condition)
+        if self.pending_order:
+            logger.info("💾 Finalizing Batch Order on Cleanup...")
+            try:
+                # Use shielding to prevent cancellation if we are shutting down
+                await asyncio.shield(self._finalize_batch_order())
+            except Exception as e:
+                logger.error(f"Failed to finalize batch order: {e}")
+
         # Close Deepgram connection
         if self.deepgram_ws:
             try:

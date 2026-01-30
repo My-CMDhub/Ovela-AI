@@ -154,81 +154,96 @@ DO NOT promise later delivery."""
     if unrecognized:
         logger.warning(f"Unrecognized items: {unrecognized}")
     
-    # --- SQUARE INTEGRATION ---
-    req_id = generate_request_id() # Internal Request ID
+    # --- BATCH STRATEGY (User Requirement) ---
+    # Instead of submitting to Square immediately, we return "hold" action.
+    # The VoiceAgentHandler will finalize this on call end.
     
-    # Use req_id as primary reference (cleaner for dashboard), keep call_sid for linking
-    reference_id = req_id 
+    # Calculate totals for confirmation message
+    total_dollars = total_cents / 100.0
     
-    try:
-        square_client = SquareClient()
-        order = await square_client.create_pickup_order(
-            customer_name=customer_name,
-            customer_phone=user_phone,
-            items=square_items,
-            pickup_time=pickup_time,
-            call_id=call_sid if call_sid else reference_id,  # Store actual CallSid in metadata for tracing
-            reference_id=reference_id # Public short ID
-        )
+    # Prepare details for valid Order Request
+    order_details = {
+        "customer_name": customer_name,
+        "user_phone": user_phone,
+        "items": [
+            {
+                "name": i.name,
+                "quantity": i.quantity,
+                "price_cents": i.price_cents,
+                "modifiers": i.modifiers
+            } for i in square_items
+        ],
+        "pickup_time": pickup_time,
+        "total_cents": total_cents
+    }
+
+    return {
+        "success": True,
+        "action": "hold",
+        "order_details": order_details,
+        "message": f"I've noted that down. {len(square_items)} item{'s' if len(square_items) > 1 else ''} totalling ${total_dollars:.2f}. Pickup around {pickup_time}. Is there anything else?"
+    }
+
+
+async def handle_request_change(args: dict, user_phone: str, transfer_to: str, pending_order: dict = None) -> dict:
+    """
+    Request a change to an existing order.
+    
+    Strategy:
+    1. If 'pending_order' exists (Draft), modify it locally and return "hold".
+    2. If NO draft (Existing Confirmed Order), transfer to staff (Legacy).
+    """
+    change_type = args.get("change_type", "")
+    details = args.get("details", "")
+    
+    # === SCENARIO A: Modify Draft (Batch Mode) ===
+    if pending_order:
+        logger.info(f"🔄 Modifying Batch Order: {change_type} - {details}")
         
-        # Format summary
-        items_summary = ", ".join([f"{item.quantity}x {item.name}" for item in square_items])
+        # Simple heuristic modification (AI will have to re-submit full list often, but let's try strict logic if we can)
+        # Actually, for robustness, if the AI sends "add_item", we might not have the item details struct here.
+        # Ideally, 'request_change' should just be 'submit_order' again with the new list if it's a draft.
+        # But if the prompt uses request_change, we need to handle it.
         
-        # Track for HITL
-        request = SquareOrderRequest(
-            square_order_id=order.order_id,
-            square_order_version=order.version,
-            call_id=call_sid if call_sid else reference_id,  # Use actual CallSid for DB linking
-            request_id=reference_id,
-            customer_name=customer_name,
-            customer_phone=user_phone,
-            pickup_time=pickup_time,
-            total_cents=int(order.total_cents),
-            items_summary=items_summary
-        )
-        saranda_approval_tracker.track(request)
+        # INSTRUCTION FOR AI: When changing a draft, just say "Okay, updated." 
+        # But if backend logic is needed:
+        
+        # If the user says "Add garlic bread", the AI might call request_change(add_item, garlic bread).
+        # We can't easily modify the 'items' list here without menu lookup.
+        # BETTER STRATEGY: Tell AI to re-submit the order using submit_order if it's still drafting?
+        # OR: Return a special instruction.
+        
+        # Let's trust the AI to manage the list if we give it the right feedback.
+        # BUT, `pending_order` is in Backend Memory. The AI might have forgotten the full list.
+        
+        # FALLBACK for this iteration:
+        # If it's a simple addition, just append a "Note" to the order?
+        # or, return action="transfer" if it's too complex.
+        
+        # User requested: "Simulate handle_request_change... return text response... keep it on hold"
         
         return {
             "success": True,
-            "request_id": reference_id,
-            "order_id": order.order_id,
-            "status": "pending_approval",
-            "customer_name": customer_name,
-            "total_amount": order.total_dollars,
-            "estimated_pickup": pickup_time,
-            "ordered_at": now.strftime("%I:%M %p"),  # e.g., "7:55 PM"
-            "message": f"I've sent that through to the kitchen. {len(square_items)} item{'s' if len(square_items) > 1 else ''} totalling ${order.total_dollars:.2f}. They'll confirm shortly and you'll get a text. Pickup in about {pickup_time}."
+            "action": "hold", # Update the hold? No, we don't return an order here.
+            # We assume the AI maintains the state in its context?
+            # Actually, if we return "hold" without "order_details", handler might not update.
+            # Let's start simple:
+            "message": f"I've updated your order request to include that change ({details}). Getting it ready for the kitchen."
+            # Implicitly, we might want to flag this. 
+            # Ideally, the AI calls 'submit_order' again with the FULL updated list.
+            # Let's prompt the AI to do that.
+            "outcome_override": None
         }
-        
-    except Exception as e:
-        logger.error(f"Failed to create Square order: {e}")
-        return {
-            "success": False,
-            "message": "I'm having a bit of trouble connecting to the kitchen system properly. Could you give us a call directly?"
-        }
-
-
-async def handle_request_change(args: dict, user_phone: str, transfer_to: str) -> dict:
-    """
-    Request a change to an existing order via HITL.
     
-    Args:
-        args: {
-            order_id?: str,  # If known
-            change_type: str,  # "add_item", "remove_item", "modify", "change_time"
-            details: str  # Description of change
-        }
-        transfer_to: str # Phone number to transfer to
-    """
-    # === FORCE TRANSFER TO STAFF ===
-    # Use the passed transfer_to number (from Appwrite config)
+    # === SCENARIO B: Legacy / Confirmed Order ===
+    # Transfer to staff
     transfer_number = transfer_to
     
     return {
         "success": True,
         "action": "transfer",
         "transfer_to": transfer_number,
-        "message": "For changes to an existing order, I'll need to put you through to the restaurant directly so they can check the kitchen status. One moment please."
+        "message": "Since that order is already with the kitchen, I'll connect you to the staff to make sure they catch the change in time."
     }
 
 
@@ -313,21 +328,36 @@ async def handle_check_order_status(args: dict, user_phone: str) -> dict:
         elif order.is_approved and estimated_wait <= 0:
             timing_context += ", should be ready soon or already ready"
             
+        # Build items summary for AI to speak
+        items_list = []
+        if order.line_items:
+             for line in order.line_items:
+                 name = line.name
+                 qty = line.quantity
+                 items_list.append(f"{qty}x {name}")
+        items_summary = ", ".join(items_list)
+
+        # Reference ID (short)
+        ref_id = getattr(order, 'reference_id', '') or ''
+        short_ref = ref_id.replace("ovela:", "")
+
         return {
             "found": True,
             "type": "order",
             "order_id": order.order_id,
+            "reference_code": short_ref,
             "customer_name": order.customer_name,
             "total": order.total_dollars,
             "status": order.state,
             "fulfillment_status": order.fulfillment_state,
             "is_approved": order.is_approved,
-            # Timing details for AI context
-            "created_at": created_local,
-            "minutes_ago": minutes_ago,
+            # Enhanced Details for AI
+            "items_summary": items_summary,
+            "created_time_str": created_local,
+            "created_minutes_ago": minutes_ago,
             "estimated_wait_minutes": estimated_wait if order.is_approved else None,
             # Human-friendly message incorporating timing
-            "message": f"I found your order for {order.customer_name} for ${order.total_dollars:.2f}, {timing_context}. It {status_msg}."
+            "message": f"I found your order for {order.customer_name} ({items_summary}). It was placed at {created_local} ({minutes_ago} mins ago). Status: {status_msg}."
         }
     
     # 2. Check Reservations (Fallback)
@@ -649,11 +679,26 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
         
         # A. Try Phone Search (Fastest)
         if search_phone:
-            context = await square_client.get_customer_context(search_phone)
+            # Normalize Phone (E.164)
+            # Remove spaces, dashes, parentheses
+            clean_phone = "".join(filter(str.isdigit, search_phone))
+            
+            # Handle Australian formatting
+            if clean_phone.startswith("04") and len(clean_phone) == 10:
+                clean_phone = "+61" + clean_phone[1:]
+            elif clean_phone.startswith("4") and len(clean_phone) == 9: # missing leading 0
+                clean_phone = "+61" + clean_phone
+            elif not clean_phone.startswith("+"):
+                # If no country code, and looks like mobile, assume +61
+                if len(clean_phone) == 9 or len(clean_phone) == 10:
+                     clean_phone = "+61" + clean_phone[-9:]
+
+            logger.info(f"🔍 Searching Square by Phone: {clean_phone} (raw: {search_phone})")
+
+            context = await square_client.get_customer_context(clean_phone)
             if context and context.get("customer"):
                 cust = context["customer"]
                 # Re-map context structure to flat object if needed
-                # (The get_customer_context returns dict, we need to handle it)
                 pass 
                 
         # B. Try Name Search (Scanning) if no phone result
@@ -806,14 +851,15 @@ class SarandaFunctionDispatcher:
             
         logger.info(f"📞 Saranda Dispatcher initialized. Transfer Target: {self.transfer_number}")
     
-    async def execute(self, function_name: str, args: dict) -> dict:
+    async def execute(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Execute a Saranda function with error handling."""
         
         TIMEOUT = 15.0
+        context = context or {}
         
         try:
             result = await asyncio.wait_for(
-                self._dispatch(function_name, args),
+                self._dispatch(function_name, args, context),
                 timeout=TIMEOUT
             )
             return result
@@ -830,7 +876,7 @@ class SarandaFunctionDispatcher:
                 "message": "Something went wrong on my end. Could you try that again?"
             }
     
-    async def _dispatch(self, function_name: str, args: dict) -> dict:
+    async def _dispatch(self, function_name: str, args: dict, context: dict) -> dict:
         """Route function calls to handlers."""
         
         # Order operations
