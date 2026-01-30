@@ -140,7 +140,11 @@ class SquareClient:
         customer_phone: str,
         items: List[SquareOrderItem],
         pickup_time: str,
+        customer_phone: str,
+        items: List[SquareOrderItem],
+        pickup_time: str,
         call_id: str,
+        reference_id: str = None, # Optional public reference (e.g. short ID)
     ) -> SquareOrder:
         """
         Create a pickup order in Square with Ovela AI metadata.
@@ -169,9 +173,12 @@ class SquareClient:
             line_items.append(line_item)
         
         # Build order dict
+        # Use provided short reference ID or fallback to call_id
+        public_ref = reference_id if reference_id else f"ovela:{call_id}"
+        
         order_dict = {
             "location_id": location_id,
-            "reference_id": f"ovela:{call_id}",
+            "reference_id": public_ref,
             "line_items": line_items,
             "fulfillments": [
                 {
@@ -337,12 +344,18 @@ class SquareClient:
         try:
             import asyncio
             response = await asyncio.to_thread(
-                self.client.orders.batch_get,
+                self.client.orders.batch_retrieve,
                 location_id=location_id,
                 order_ids=order_ids
             )
             
-            orders = response.body.orders if hasattr(response.body, 'orders') else []
+            # SDK response object handling:
+            # - Success: response.orders is a list of Order objects
+            # - Error: hasattr checks or try/catch
+            orders = response.orders if hasattr(response, 'orders') else []
+            if orders is None:
+                orders = []
+                
             return {order.id: order for order in orders}
         except Exception as e:
             logger.error(f"Batch order fetch error: {e}")

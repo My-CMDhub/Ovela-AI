@@ -985,6 +985,9 @@ class VoiceAgentHandler:
                     
                     # Create visible System Alert (Notification Center)
                     if result["outcome_override"] == "system_failure":
+                        # Trigger Soft Transfer
+                        asyncio.create_task(self._handle_system_failure(result['error_details']))
+                        
                         await db_service.create_system_alert(
                             title=f"Voice Agent Error: {function_name}",
                             message=result['error_details'],
@@ -1397,6 +1400,31 @@ class VoiceAgentHandler:
         
         await self._hangup_call()
     
+    async def _handle_system_failure(self, error_msg: str):
+        """
+        Handle critical system failures (e.g., tool crash, API down).
+        Apologize to user and transfer to human.
+        """
+        logger.error(f"🚨 Handling System Failure: {error_msg}")
+        
+        # 1. Apologize
+        apology = "I'm so sorry, I'm having a bit of technical trouble on my end right now. Let me pass you to a human who can help you out straight away."
+        await self._inject_message(apology)
+        
+        # 2. Prevent further AI processing
+        self._is_hanging_up = True # Block new text
+        self._is_processing_function = True # Block new functions
+        
+        # 3. Wait for TTS
+        await asyncio.sleep(5)
+        
+        # 4. Transfer
+        staff_number = settings.STAFF_PHONE_NUMBER
+        await self._execute_twilio_transfer(staff_number)
+        
+        # 5. Log outcome
+        self.call_outcome = "system_failure_transfer"
+
     async def _execute_twilio_transfer(self, transfer_to: str):
         """
         Execute Twilio call transfer using TwiML update.

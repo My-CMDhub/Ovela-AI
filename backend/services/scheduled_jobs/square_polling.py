@@ -104,12 +104,12 @@ async def square_polling_job():
                 
                 # Update Call Log (if linked)
                 if req.call_id and (req.call_id.startswith("CA") or req.call_id.startswith("SIM")): # Check if valid Twilio CallSid or Simulator
+                    logger.info(f"🔄 Updating Call Log for SID: {req.call_id} -> {status_label}")
                     try:
                         updates = {
                             "sms_status": "sent" if sms_sent else "failed",
                             "outcome": f"Order {status_label.title()}",
                             "pms_reference": req.square_order_id, # Link Square Order ID
-                            "sms_sent_at": datetime.now().isoformat()
                         }
                         await db_service.update_call_log_by_sid(tenant_id="saranda", call_sid=req.call_id, updates=updates)
                         logger.info(f"📝 Updated Call Log {req.call_id} with outcome: {updates['outcome']}")
