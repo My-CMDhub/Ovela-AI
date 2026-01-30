@@ -62,8 +62,8 @@ async def square_polling_job():
 
                 # === ROBUSTNESS: DUPLICATE CHECK ===
                 # Check directly in DB if we already finalized this order/call
-                # This prevents "apologize" loops if server restarts and finds "EXPIRED" orders again
-                if req.call_id and req.call_id.startswith("CA"):
+                # Support both Twilio SIDs (CA) and Simulator IDs (SIM)
+                if req.call_id and (req.call_id.startswith("CA") or req.call_id.startswith("SIM")):
                     try:
                         # Fetch current log
                         collection_id = "call_transcripts_saranda" # Default for this job
@@ -103,7 +103,7 @@ async def square_polling_job():
                 )
                 
                 # Update Call Log (if linked)
-                if req.call_id and req.call_id.startswith("CA"): # Check if valid Twilio CallSid
+                if req.call_id and (req.call_id.startswith("CA") or req.call_id.startswith("SIM")): # Check if valid Twilio CallSid or Simulator
                     try:
                         updates = {
                             "sms_status": "sent" if sms_sent else "failed",

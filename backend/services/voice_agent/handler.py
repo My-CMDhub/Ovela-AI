@@ -730,6 +730,13 @@ class VoiceAgentHandler:
                     await self._inject_message(spam_result["warning"])
 
         elif role == "assistant":
+            # GATING: If we are in the process of hanging up (e.g. end_call triggered),
+            # ignore any subsequent text generation from the LLM to prevent
+            # "silent hangup" where explanation overwrites farewell audio.
+            if getattr(self, '_is_hanging_up', False):
+                logger.info(f"🤐 Ignoring AI text during hangup: '{content[:30]}...'")
+                return
+
             # Extract control signals and clean content for logging/transcript
             clean_content, signals = prepare_for_tts(content)
             

@@ -157,8 +157,8 @@ DO NOT promise later delivery."""
     # --- SQUARE INTEGRATION ---
     req_id = generate_request_id() # Internal Request ID
     
-    # Use CallSid as the primary reference if available, otherwise req_id
-    reference_id = call_sid if call_sid else req_id
+    # Use req_id as primary reference (cleaner for dashboard), keep call_sid for linking
+    reference_id = req_id 
     
     try:
         square_client = SquareClient()
@@ -167,7 +167,7 @@ DO NOT promise later delivery."""
             customer_phone=user_phone,
             items=square_items,
             pickup_time=pickup_time,
-            call_id=reference_id  # Pass CallSid here for linking!
+            call_id=call_sid if call_sid else req_id  # Store actual CallSid in metadata for tracing
         )
         
         # Format summary
@@ -177,8 +177,8 @@ DO NOT promise later delivery."""
         request = SquareOrderRequest(
             square_order_id=order.order_id,
             square_order_version=order.version,
-            call_id=call_id,
-            request_id=call_id,
+            call_id=call_sid if call_sid else reference_id,  # Use actual CallSid for DB linking
+            request_id=reference_id,
             customer_name=customer_name,
             customer_phone=user_phone,
             pickup_time=pickup_time,
@@ -189,7 +189,7 @@ DO NOT promise later delivery."""
         
         return {
             "success": True,
-            "request_id": call_id,
+            "request_id": reference_id,
             "order_id": order.order_id,
             "status": "pending_approval",
             "customer_name": customer_name,
