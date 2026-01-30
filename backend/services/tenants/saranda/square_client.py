@@ -17,6 +17,7 @@ from typing import List, Optional, Dict, Any
 
 from square import Square
 from square.environment import SquareEnvironment
+import asyncio
 
 from .config import get_config, SarandaConfig
 
@@ -140,8 +141,9 @@ class SquareClient:
         customer_phone: str,
         items: List[SquareOrderItem],
         pickup_time: str,
-        call_id: str,
+        call_id: str = None,
         reference_id: str = None, # Optional public reference (e.g. short ID)
+        customer_id: str = None
     ) -> SquareOrder:
         """
         Create a pickup order in Square with Ovela AI metadata.
@@ -197,6 +199,9 @@ class SquareClient:
                 "pending_approval": "true",
             },
         }
+        
+        if customer_id:
+            order_dict["customer_id"] = customer_id
         
         logger.info(f"Creating Square order for {customer_name} (call: {call_id})")
         
@@ -454,30 +459,43 @@ class SquareClient:
             logger.error(f"Customer search error: {e}")
             return []
 
-    async def get_customer_context(self, phone: str) -> Optional[Dict[str, Any]]:
+    async def get_customer_context(self, phone: str = None, customer_id: str = None) -> Optional[Dict[str, Any]]:
         """
-        Get full customer context (profile + recent orders) by phone.
+        Get full customer context (profile + recent orders) by phone or ID.
         """
-        # 1. Search Customer
-        customers = await self.search_customers(phone=phone)
-        if not customers:
-            return None
-            
-        customer = customers[0]
-        customer_id = customer.id
-        
-        # 2. Search Recent Orders
-        location_id = await self.get_location_id()
-        import asyncio
-        
         try:
+            cust = None
+            
+            # 1. Resolve Customer
+            if customer_id:
+                  resp = await asyncio.to_thread(self.client.customers.get, customer_id)
+                  if hasattr(resp, 'body') and 'customer' in resp.body:
+                       cust = resp.body['customer']
+                  elif hasattr(resp, 'customer'): # Handle if it returns object directly without body wrapper
+                       cust = resp.customer
+            elif phone:
+                  res = await self.search_customers(phone=phone)
+                  if res:
+                      cust = res[0]
+            
+            if not cust:
+                return None
+            
+            # Normalize object/dict access
+            cid = cust['id'] if isinstance(cust, dict) else cust.id
+            given = cust['given_name'] if isinstance(cust, dict) else cust.given_name
+            family = cust['family_name'] if isinstance(cust, dict) else cust.family_name
+            
+            # 2. Search Recent Orders
+            location_id = await self.get_location_id()
+             
             orders_response = await asyncio.to_thread(
                 self.client.orders.search,
                 location_ids=[location_id],
                 query={
                     "filter": {
                         "customer_filter": {
-                            "customer_ids": [customer_id]
+                            "customer_ids": [str(cid)]
                         },
                          "state_filter": {
                             "states": ["OPEN", "COMPLETED"]
@@ -536,25 +554,30 @@ class SquareClient:
                     "items": items_str
                 })
             
+            phone_val = cust.get("phone_number") if isinstance(cust, dict) else getattr(cust, "phone_number", "")
+            
             return {
                 "source": "square_pms",
                 "customer": {
-                    "id": customer.id,
-                    "given_name": customer.given_name,
-                    "family_name": customer.family_name,
-                    "phone": customer.phone_number
+                    "id": cid,
+                    "given_name": given,
+                    "family_name": family,
+                    "phone": phone_val
                 },
                 "recent_orders": formatted_orders
             }
             
         except Exception as e:
             logger.error(f"Context fetch failed: {e}")
-            return {
-                 "source": "square_pms",
-                 "customer": {
-                    "id": customer.id,
-                    "given_name": customer.given_name
-                 }, 
-                 "recent_orders": [],
-                 "error": str(e)
-            }
+            # Try to return partial info if we have it
+            if 'cid' in locals():
+                return {
+                     "source": "square_pms",
+                     "customer": {
+                        "id": cid,
+                        "given_name": locals().get('given', 'Unknown')
+                     }, 
+                     "recent_orders": [],
+                     "error": str(e)
+                }
+            return None

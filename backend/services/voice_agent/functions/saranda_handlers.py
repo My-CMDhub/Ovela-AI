@@ -679,18 +679,19 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
             # Get recent orders for this customer ID (independent of how we found them)
             # We can't use context['recent_orders'] if we found by name, so we fetch afresh
             orders = []
-            if not search_phone: # If we didn't use get_customer_context
-                 # Fetch context manually by ID? Or just skip history for speed?
-                 # Let's try to get context by phone if the found customer has one
-                 found_phone_val = cust.get("phone")
-                 if found_phone_val:
-                     ctx = await square_client.get_customer_context(found_phone_val)
-                     if ctx:
-                         orders = ctx.get("recent_orders", [])
-            else:
-                 # We already have context if we found by phone
-                 if 'context' in locals() and context:
-                     orders = context.get("recent_orders", [])
+            
+            # If we already have context from phone search, use it
+            if 'context' in locals() and context and context.get("customer") and context["customer"].get("id") == cust["id"]:
+                orders = context.get("recent_orders", [])
+            
+            # If no orders yet (e.g. found by name, or phone search failed but name search succeeded), fetch now
+            if not orders:
+                 # Fetch context explicitly using the FOUND customer ID
+                 # This is more reliable than phone if we just found them by name
+                 logger.info(f"Fetching context for Customer ID: {cust['id']}")
+                 ctx = await square_client.get_customer_context(customer_id=cust['id'])
+                 if ctx:
+                     orders = ctx.get("recent_orders", [])
 
             # Format recent history
             history_msg = ""
