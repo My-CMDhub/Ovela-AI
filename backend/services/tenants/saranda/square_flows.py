@@ -170,7 +170,12 @@ class SquareApprovalTracker:
                 logger.error(f"Failed to search orders: {result.errors}")
                 return []
                 
-            orders = result.orders if hasattr(result, 'orders') else []
+            # Safe extraction of orders
+            # SDK might return None for .orders if empty, or list
+            orders = getattr(result, 'orders', [])
+            if orders is None:
+                orders = []
+            
             discovered = []
             
             for order_data in orders:
