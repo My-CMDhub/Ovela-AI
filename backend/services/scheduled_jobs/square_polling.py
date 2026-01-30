@@ -162,23 +162,20 @@ async def square_polling_job():
                         # If update failed (likely doc not found) and it's a SIM call, create it!
                         if not updated and req.call_id.startswith("SIM"):
                              logger.info(f"⚠️ Call Log not found for {req.call_id}, creating new record...")
-                             # We need to construct a minimal call log
-                             # In a real app we might want more fields, but for tracking SMS status:
-                             await db_service.create_call_log(
+                             
+                             # Use save_call_transcript (which is the actual method name)
+                             # We map the fields to what save_call_transcript expects
+                             await db_service.save_call_transcript(
                                  tenant_id="saranda",
                                  call_sid=req.call_id,
-                                 direction="inbound", # Assume inbound for sim
-                                 from_number=req.customer_phone,
-                                 to_number="simulator",
-                                 status="completed",
-                                 transcript=f"Simulator Order: {req.items_summary}",
-                                 summary=f"Simulated Order {status_label}",
-                                 start_time=datetime.now(),
+                                 caller_phone=req.customer_phone,
+                                 transcript=json.dumps([{"role": "system", "content": f"Simulator Order: {req.items_summary}"}]),
                                  duration=0,
-                                 recording_url="",
-                                 sms_status=updates["sms_status"],
-                                 outcome=updates["outcome"],
-                                 pms_reference=updates["pms_reference"]
+                                 status=updates["outcome"], # e.g. "Order Approved"
+                                 booking_ref=req.square_order_id, # pms_reference
+                                 customer_name=req.customer_name or "Simulator User",
+                                 call_summary=f"Simulated Order {status_label}",
+                                 metadata={"sms_status": updates["sms_status"]}
                              )
                              logger.info(f"📝 Created new Call Log for {req.call_id}")
                         else:
