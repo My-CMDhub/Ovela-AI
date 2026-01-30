@@ -96,6 +96,7 @@ class VoiceAgentHandler:
         self.call_start_time = None
         self.call_sid = None
         self.exchange_count = 0
+        self.customer_id = None # Track Square Customer ID for order linking
 
         self.booking_completed = False
         
@@ -1056,6 +1057,11 @@ class VoiceAgentHandler:
         if function_name == "create_booking_request" and result.get("success"):
             self.call_reference = result.get("booking_reference")
             logger.info(f"🏨 Booking captured: {self.call_reference}")
+
+        # SMART MEMORY UPDATE: Capture Customer ID from Lookup
+        if function_name == "lookup_customer" and result.get("found") and result.get("customer_id"):
+            self.customer_id = result.get("customer_id")
+            logger.info(f"🆔 Captured Customer ID: {self.customer_id}")
         
         # Send response back to Deepgram
         await self._send_function_response(call_id, function_name, result)
@@ -1232,27 +1238,50 @@ class VoiceAgentHandler:
                 self.call_outcome = duration_result.get("outcome", "timeout_duration")
                 
                 # Check if we should transfer instead of hanging up
-                # Production calls get transferred; Demo calls get polite hangup
                 should_transfer = ABUSE_CONFIG.get("transfer_on_cap", False) and not self.is_demo_call
                 if should_transfer:
                     logger.info(f"🚨 Duration cap reached - transferring to staff [{call_type}]")
-                    # 1. Honest Message
-                    msg = "I've realized this is getting a bit complex and I want to make sure you get the best help. I'm going to pass you to a manager now. I'm just summarizing our chat for them so you don't have to repeat yourself. One moment please."
-                    await self._inject_message(msg)
                     
                     # GO DEAF MECHANISM: Stop listening immediately to prevent interruptions
                     logger.info("🙉 'Go Deaf' activated: Ignoring input during transfer explanation")
                     self._is_hanging_up = True
                     
-                    # 2. Generate Summary (Simple heuristic or LLM)
-                    # Wait for TTS to play before transfer
-                    await asyncio.sleep(6)
+                    # 1. Honest Message
+                    msg = "I've realized this is getting a bit complex and I want to make sure you get the best help. I'm going to pass you to a manager now. I'm just summarizing our chat for them so you don't have to repeat yourself. One moment please."
+                    await self._inject_message(msg)
                     
-                    # Attempt transfer - if it fails or staff doesn't answer,
-                    # the transfer-status callback will return caller to AI
-                    await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER)
+                    # 2. PROACTIVE SUMMARY SMS (Blocking/Sync)
+                    try:
+                        logger.info("📨 Sending Hard Cap Summary SMS (Blocking)...")
+                        
+                        # Build context
+                        intent = self.memory.get("order_summary") or "Customer Inquiry"
+                        sms_context = ""
+                        if self.pending_order:
+                             items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
+                             sms_context = f" | DRAFT: {items}"
+                        
+                        summary_msg = f"⏱️ HARD CAP TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
+                        
+                        # Use immediate dispatch & AWAIT it
+                        from services.messaging.sms_service import sms_service
+                        from core.config import settings
+                        
+                        await sms_service.send_message(
+                             to_number=settings.STAFF_PHONE_NUMBER,
+                             body=summary_msg
+                        )
+                        logger.info("✅ Hard Cap Summary SMS Sent.")
+                    except Exception as e:
+                        logger.error(f"Failed to send hard cap summary: {e}")
+
+                    # 3. Wait for TTS to play (Extended Delay)
+                    logger.info("⏳ Waiting 12s for TTS to complete before transfer...")
+                    await asyncio.sleep(12.0)
+                    
+                    # 4. Transfer (Skip internal SMS since we just sent it)
+                    await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER, skip_summary_sms=True)
                 else:
-                    # Demo mode or transfer_on_cap disabled: polite hangup
                     logger.info(f"🚫 Hard time cap reached - ending call [{call_type}]")
                     await self._hangup_with_farewell(duration_result.get("farewell", "Thanks for calling!"))
                 
@@ -1418,7 +1447,7 @@ class VoiceAgentHandler:
         # 5. Log outcome
         self.call_outcome = "system_failure_transfer"
 
-    async def _execute_twilio_transfer(self, transfer_to: str):
+    async def _execute_twilio_transfer(self, transfer_to: str, skip_summary_sms: bool = False):
         """
         Execute Twilio call transfer using TwiML update.
         
@@ -1433,7 +1462,8 @@ class VoiceAgentHandler:
         logger.info(f"📞 Executing transfer to {transfer_to}")
         
         # [NEW] SEND TRANSFER SUMMARY SMS (Non-blocking)
-        try:
+        if not skip_summary_sms:
+            try:
              # Check for pending order to include context
              sms_context = ""
              if self.pending_order:
@@ -1564,13 +1594,35 @@ class VoiceAgentHandler:
             # Use call_sid as ID to link call
             req_id = f"ovela:{ID.unique()}"
             
+            # Robustness: Ensure we have a Customer ID
+            if not self.customer_id and customer_name and user_phone:
+                logger.info(f"👤 No Customer ID linked. Attempting to create/find for {customer_name}...")
+                try:
+                    # Try find first (simple check)
+                    custs = await square_client.search_customers(phone=user_phone, limit=1)
+                    if custs:
+                        # Handle object vs dict
+                        c = custs[0]
+                        self.customer_id = c.id if hasattr(c, 'id') else c.get('id')
+                        logger.info(f"✅ Found existing customer: {self.customer_id}")
+                    else:
+                        # Create new
+                        parts = customer_name.strip().split(" ", 1)
+                        given = parts[0]
+                        family = parts[1] if len(parts) > 1 else ""
+                        self.customer_id = await square_client.create_customer(given, family, user_phone)
+                        logger.info(f"✅ Created new customer: {self.customer_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to resolve customer ID: {e}")
+            
             order = await square_client.create_pickup_order(
                 customer_name=customer_name,
                 customer_phone=user_phone,
                 items=square_items,
                 pickup_time=pickup_time,
                 call_id=self.call_sid,
-                reference_id=req_id
+                reference_id=req_id,
+                customer_id=self.customer_id
             )
             
             logger.info(f"✅ Batch Order Submitted to Square: {order.order_id}")

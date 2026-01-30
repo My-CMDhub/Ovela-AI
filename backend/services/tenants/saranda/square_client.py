@@ -459,6 +459,51 @@ class SquareClient:
             logger.error(f"Customer search error: {e}")
             return []
 
+    async def create_customer(self, given_name: str, family_name: str, phone: str) -> Optional[str]:
+        """
+        Create a new customer profile in Square.
+        """
+        try:
+            import asyncio
+            import uuid
+            
+            idempotency_key = str(uuid.uuid4())
+            
+            customer_data = {
+                "given_name": given_name,
+                "family_name": family_name,
+                "phone_number": phone,
+                "idempotency_key": idempotency_key
+            }
+            
+            logger.info(f"🆕 Creating Customer: {given_name} {family_name} ({phone})")
+            
+            response = await asyncio.to_thread(
+                self.client.customers.create,
+                body=customer_data
+            )
+            
+            if hasattr(response, "is_error") and response.is_error():
+                 logger.error(f"Failed to create customer: {response.errors}")
+                 return None
+            
+            # Helper for obj/dict access
+            def g(obj, k, d=None):
+                return obj.get(k, d) if isinstance(obj, dict) else getattr(obj, k, d)
+                
+            cust = response.customer if hasattr(response, 'customer') else (response.body.get('customer') if hasattr(response, 'body') else None)
+            
+            if cust:
+                cid = g(cust, "id")
+                logger.info(f"✅ Created Customer ID: {cid}")
+                return cid
+                
+            return None
+
+        except Exception as e:
+            logger.error(f"Customer creation error: {e}")
+            return None
+
     async def get_customer_context(self, phone: str = None, customer_id: str = None) -> Optional[Dict[str, Any]]:
         """
         Get full customer context (profile + recent orders) by phone or ID.
