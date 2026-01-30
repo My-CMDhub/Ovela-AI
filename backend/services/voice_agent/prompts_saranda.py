@@ -84,15 +84,17 @@ def get_saranda_prompt(current_date: str = None, current_time: str = None) -> st
     is_open, reason = is_within_operating_hours(current_day, current_time)
     next_open = get_next_opening_datetime()
     
+    is_monday = (current_day.lower() == "monday")
+
     status_note = ""
-    if not is_open:
+    if is_monday:
+        status_note = "\n⚠️ TODAY IS MONDAY - WE ARE CLOSED ALL DAY!"
+    elif not is_open:
         if next_open:
             if next_open.date() == now.date():
                 status_note = f"\n⚠️ WE ARE CURRENTLY CLOSED. We reopen TODAY at {next_open.strftime('%I:%M %p')}."
             else:
                 status_note = f"\n⚠️ WE ARE CURRENTLY CLOSED. We reopen on {next_open.strftime('%A at %I:%M %p')}."
-    elif is_monday:
-        status_note = "\n⚠️ TODAY IS MONDAY - WE ARE CLOSED ALL DAY!"
     
     context = f"""=== TODAY: {current_date} | {current_time} (Perth AWST) ==={status_note}
 """ if current_date else ""
