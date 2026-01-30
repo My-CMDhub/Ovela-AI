@@ -576,10 +576,28 @@ async def handle_get_restaurant_info(args: dict) -> dict:
     info = SARANDA_DATA["info"]
     
     if info_type == "hours":
-        hours = info["hours"]
+        # Get dynamic hours summary
+        tz = ZoneInfo("Australia/Perth")
+        now = datetime.now(tz)
+        day = now.strftime("%A")
+        time = now.strftime("%I:%M %p")
+        
+        is_open, _ = is_within_operating_hours(day, time)
+        next_opening = get_next_opening_datetime()
+        
+        hours_msg = "We're open Tuesday to Friday from 4:30 to 9pm, and on weekends we do lunch from 11:30 to 2 plus dinner from 4:30. "
+        
+        if is_open:
+            hours_msg += "We're actually open right now!"
+        elif next_opening:
+            if next_opening.date() == now.date():
+                hours_msg += f"We're currently closed but we'll be open today at {next_opening.strftime('%I:%M %p')}."
+            else:
+                hours_msg += f"We're closed now and reopen {next_opening.strftime('%A at %I:%M %p')}."
+        
         return {
-            "hours": hours,
-            "message": "We're open Tuesday to Friday from 4:30 to 9pm, and Saturday and Sunday we're open 11:30am to 2pm for lunch, and 4:30 to 9pm for dinner. Closed Mondays."
+            "hours": info["hours"],
+            "message": hours_msg
         }
     
     if info_type == "location":

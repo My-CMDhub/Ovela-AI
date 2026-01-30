@@ -683,17 +683,19 @@ def get_next_opening_datetime() -> Optional[datetime]:
     day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
     current_day_idx = now.weekday()  # 0=Monday, 6=Sunday
     
-    # Check up to 7 days ahead
-    for days_ahead in range(1, 8):
+    # Check from today up to 7 days ahead
+    for days_ahead in range(0, 8):
         check_idx = (current_day_idx + days_ahead) % 7
         day_name = day_names[check_idx]
         hours_str = SARANDA_DATA["info"]["hours"].get(day_name, "CLOSED")
         
         if hours_str != "CLOSED":
-            # Get first opening time
-            first_range = hours_str.split(",")[0].strip()
-            parts = first_range.split(" - ")
-            if parts:
+            # Check each hours range for this day
+            for hours_part in hours_str.split(","):
+                parts = hours_part.strip().split(" - ")
+                if not parts:
+                    continue
+                    
                 start_str = parts[0].strip().upper()
                 try:
                     try:
@@ -701,11 +703,15 @@ def get_next_opening_datetime() -> Optional[datetime]:
                     except ValueError:
                         opening_time = datetime.strptime(start_str, "%I %p").time()
                     
-                    # Calculate the actual datetime
+                    # Calculate potential opening datetime
                     opening_date = now.date() + timedelta(days=days_ahead)
                     opening_dt = datetime.combine(opening_date, opening_time)
                     opening_dt = opening_dt.replace(tzinfo=tz)
                     
+                    # For today (days_ahead=0), only return if it's in the future
+                    if days_ahead == 0 and opening_dt <= now:
+                        continue
+                        
                     return opening_dt
                 except ValueError:
                     continue
