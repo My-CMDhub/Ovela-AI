@@ -739,12 +739,10 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
             
             if not matches:
                  logger.info(f"⚠️ Square Name Search failed for '{name_query}'. Proceeding to DB Fallback.")
-                 # Do NOT return here. Fall through to Step 3.
+                 # Fall through to Step 3
                  pass
-            
-            else:
-                # Filter matches carefully
-                if len(matches) == 1:
+
+            elif len(matches) == 1:
                 cust = matches[0]
                 masked = cust.phone_number[-3:] if cust.phone_number and len(cust.phone_number) >= 3 else "..."
                 return {
