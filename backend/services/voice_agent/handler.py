@@ -1464,27 +1464,27 @@ class VoiceAgentHandler:
         # [NEW] SEND TRANSFER SUMMARY SMS (Non-blocking)
         if not skip_summary_sms:
             try:
-             # Check for pending order to include context
-             sms_context = ""
-             if self.pending_order:
-                 items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
-                 sms_context = f" | DRAFT ORDER: {items}"
-             
-             # Default intent if none
-             intent = self.memory.get("order_summary") or "Customer Inquiry"
-             
-             from services.messaging.sms_service import sms_service
-             summary_msg = f"📞 INCALL TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
-             
-             # Fire and forget (don't delay transfer significantly)
-             # But use 'create_task' to ensure it runs
-             asyncio.create_task(sms_service.send_message(
-                 to_number=settings.STAFF_PHONE_NUMBER, # Always alert main staff number
-                 body=summary_msg
-             ))
-             logger.info("📨 Transfer summary SMS queued")
-        except Exception as e:
-            logger.warning(f"Failed to queue transfer SMS: {e}")
+                # Check for pending order to include context
+                sms_context = ""
+                if self.pending_order:
+                    items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
+                    sms_context = f" | DRAFT ORDER: {items}"
+                
+                # Default intent if none
+                intent = self.memory.get("order_summary") or "Customer Inquiry"
+                
+                from services.messaging.sms_service import sms_service
+                summary_msg = f"📞 INCALL TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
+                
+                # Fire and forget (don't delay transfer significantly)
+                # But use 'create_task' to ensure it runs
+                asyncio.create_task(sms_service.send_message(
+                    to_number=settings.STAFF_PHONE_NUMBER, # Always alert main staff number
+                    body=summary_msg
+                ))
+                logger.info("📨 Transfer summary SMS queued")
+            except Exception as e:
+                logger.warning(f"Failed to queue transfer SMS: {e}")
 
         try:
             from twilio.twiml.voice_response import VoiceResponse, Dial
@@ -1493,8 +1493,6 @@ class VoiceAgentHandler:
             twiml = VoiceResponse()
             
             # CRITICAL: Say transfer message FIRST via Twilio's TTS
-            # This ensures the message plays BEFORE the dial starts
-            # (Deepgram inject doesn't work - WebSocket gets disconnected before TTS completes)
             twiml.say(
                 "Sure, I'll transfer you to our team now. Please hold.",
                 voice="Polly.Joanna"  # AWS Polly voice for natural sound
