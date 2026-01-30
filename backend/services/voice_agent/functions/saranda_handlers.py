@@ -639,47 +639,87 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
     # Check if LLM extracted a specific phone number (e.g. user provided it)
     # Otherwise use the Caller ID
     search_phone = args.get("phone")
-    if not search_phone:
+    if not search_phone and user_phone:
         search_phone = user_phone
         
-    if search_phone:
-        try:
-            square_client = SquareClient()
-            context = await square_client.get_customer_context(user_phone)
-            
+    try:
+        square_client = SquareClient()
+        cust = None
+        source_note = ""
+        
+        # A. Try Phone Search (Fastest)
+        if search_phone:
+            context = await square_client.get_customer_context(search_phone)
             if context and context.get("customer"):
                 cust = context["customer"]
-                given = cust.get("given_name", "")
-                family = cust.get("family_name", "")
-                full_name = f"{given} {family}".strip()
+                # Re-map context structure to flat object if needed
+                # (The get_customer_context returns dict, we need to handle it)
+                pass 
                 
-                # If user provided a name, check if it roughly matches to be polite
-                # (Simple check: is the provided name in the full name?)
-                match_note = ""
-                if name_query and name_query.lower() not in full_name.lower():
-                    match_note = f" (registered as {full_name})"
-                
-                # Format recent history
-                orders = context.get("recent_orders", [])
-                history_msg = ""
-                if orders:
-                    last = orders[0]
-                    # Format time (simple ISO parse)
-                    history_msg = f". Last order was ${last['total']:.2f} ({last['fulfillment_status']})"
-                
-                return {
-                    "found": True,
-                    "source": "pms",
-                    "customer": {
-                         "name": full_name,
-                         "id": cust["id"],
-                         "phone": cust.get("phone", user_phone)
-                    },
-                    "message": f"I found you in our system{match_note}{history_msg}. Is that right?"
+        # B. Try Name Search (Scanning) if no phone result
+        if not cust and name_query:
+            # We use search_customers directly for name scan
+            matches = await square_client.search_customers(name=name_query, limit=1)
+            if matches:
+                c_obj = matches[0]
+                # Convert object to dict for consistency with context
+                cust = {
+                    "id": c_obj.id,
+                    "given_name": c_obj.given_name,
+                    "family_name": c_obj.family_name,
+                    "phone": c_obj.phone_number
                 }
-        except Exception as e:
-            logger.error(f"PMS Lookup failed: {e}")
-            # Fallthrough to DB
+                source_note = " (found by name)"
+
+        if cust:
+            given = cust.get("given_name", "")
+            family = cust.get("family_name", "")
+            full_name = f"{given} {family}".strip()
+            
+            # Get recent orders for this customer ID (independent of how we found them)
+            # We can't use context['recent_orders'] if we found by name, so we fetch afresh
+            orders = []
+            if not search_phone: # If we didn't use get_customer_context
+                 # Fetch context manually by ID? Or just skip history for speed?
+                 # Let's try to get context by phone if the found customer has one
+                 found_phone_val = cust.get("phone")
+                 if found_phone_val:
+                     ctx = await square_client.get_customer_context(found_phone_val)
+                     if ctx:
+                         orders = ctx.get("recent_orders", [])
+            else:
+                 # We already have context if we found by phone
+                 if 'context' in locals() and context:
+                     orders = context.get("recent_orders", [])
+
+            # Format recent history
+            history_msg = ""
+            if orders:
+                last = orders[0]
+                # Format: "Last order was 2x Pizza, 1x Coke ($30) - Cooking"
+                # Use simplified status if possible
+                status = last['fulfillment_status']
+                if status == "PROPOSED": status = "Pending Approval"
+                
+                history_msg = f". Last order: {last['items']} (${last['total']:.2f}) is {status}"
+                if last.get("reference_id"):
+                     ref = last["reference_id"].replace("ovela:", "")
+                     history_msg += f". Ref: {ref}"
+            
+            return {
+                "found": True,
+                "source": "pms",
+                "customer": {
+                        "name": full_name,
+                        "id": cust["id"],
+                        "phone": cust.get("phone", "")
+                },
+                "message": f"I found you in our system{source_note}{history_msg}. Is that right?"
+            }
+
+    except Exception as e:
+        logger.error(f"PMS Lookup failed: {e}")
+        # Fallthrough to DB
     
     # 2. Appwrite Lookup (Name Search) - Fallback
     if not name_query:

@@ -388,30 +388,67 @@ class SquareClient:
             logger.error(f"❌ Square connection failed: {e}")
             return False
 
-    async def search_customers(self, email: str = None, phone: str = None, limit: int = 1) -> List[Any]:
+    async def search_customers(self, email: str = None, phone: str = None, name: str = None, limit: int = 1) -> List[Any]:
         """
-        Search for a customer by email or phone.
-        Uses client.customers.search(query=..., limit=...)
+        Search for a customer by email, phone, or name (scan).
+        For name search, we scan the most recent 100 customers (Square API limitation).
         """
         try:
             import asyncio
             
+            # 1. Direct Search (Phone/Email) - Fast & Accurate
             query_filter = {}
             if email:
                 query_filter["email_address"] = {"exact": email}
             if phone:
                 query_filter["phone_number"] = {"exact": phone}
             
-            if not query_filter:
-                return []
+            if query_filter:
+                response = await asyncio.to_thread(
+                    self.client.customers.search,
+                    query={"filter": query_filter},
+                    limit=limit
+                )
+                return response.customers if hasattr(response, 'customers') else []
                 
-            response = await asyncio.to_thread(
-                self.client.customers.search,
-                query={"filter": query_filter},
-                limit=limit
-            )
-            
-            return response.customers if hasattr(response, 'customers') else []
+            # 2. Name Scan (Fallback) - Slow & Approximate
+            # Square has no name search, so we fetch recent customers and filter in Python.
+            if name:
+                logger.info(f"🔎 Scanning recent Square customers for name '{name}'...")
+                response = await asyncio.to_thread(
+                    self.client.customers.list,
+                    sort_field="CREATED_AT",
+                    sort_order="DESC",
+                    limit=100  # Cap scan to 100 recent
+                )
+                
+                # response is a SyncPager (iterator), convert to list
+                try:
+                    candidates = list(response)
+                except TypeError:
+                     # Fallback if it's not iterable? (Unlikely given help)
+                     candidates = response.customers if hasattr(response, 'customers') else []
+                
+                if not candidates:
+                    return []
+                    
+                matches = []
+                name_lower = name.lower()
+                for cust in candidates:
+                    given = getattr(cust, "given_name", "") or ""
+                    family = getattr(cust, "family_name", "") or ""
+                    full_name = f"{given} {family}".strip().lower()
+                    
+                    if name_lower in full_name:
+                        matches.append(cust)
+                        if len(matches) >= limit:
+                            break
+                
+                if matches:
+                    logger.info(f"✅ Found {len(matches)} matches for '{name}' in scan")
+                return matches
+
+            return []
             
         except Exception as e:
             logger.error(f"Customer search error: {e}")
@@ -477,12 +514,26 @@ class SquareClient:
                 
                 created_at = g(o, "created_at")
                 
+                # Format Items
+                line_items = g(o, "line_items", [])
+                items_summary = []
+                for item in line_items:
+                    name = g(item, "name", "Item")
+                    qty = g(item, "quantity", "1")
+                    items_summary.append(f"{qty}x {name}")
+                items_str = ", ".join(items_summary)
+                
+                # Get Reference ID
+                ref_id = g(o, "reference_id", "")
+                
                 formatted_orders.append({
                     "id": g(o, "id"),
+                    "reference_id": ref_id,
                     "total": amt / 100.0,
                     "status": g(o, "state"),
                     "fulfillment_status": status_msg,
-                    "created_at": created_at
+                    "created_at": created_at,
+                    "items": items_str
                 })
             
             return {
