@@ -1264,12 +1264,12 @@ class VoiceAgentHandler:
                         summary_msg = f"⏱️ HARD CAP TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
                         
                         # Use immediate dispatch & AWAIT it
-                        from services.messaging.sms_service import sms_service
+                        from services.sms import sms_service
                         from core.config import settings
                         
-                        await sms_service.send_message(
+                        await sms_service.send_sms(
                              to_number=settings.STAFF_PHONE_NUMBER,
-                             body=summary_msg
+                             message=summary_msg
                         )
                         logger.info("✅ Hard Cap Summary SMS Sent.")
                     except Exception as e:
@@ -1473,14 +1473,14 @@ class VoiceAgentHandler:
                 # Default intent if none
                 intent = self.memory.get("order_summary") or "Customer Inquiry"
                 
-                from services.messaging.sms_service import sms_service
+                from services.sms import sms_service
                 summary_msg = f"📞 INCALL TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
                 
                 # Fire and forget (don't delay transfer significantly)
                 # But use 'create_task' to ensure it runs
-                asyncio.create_task(sms_service.send_message(
+                asyncio.create_task(sms_service.send_sms(
                     to_number=settings.STAFF_PHONE_NUMBER, # Always alert main staff number
-                    body=summary_msg
+                    message=summary_msg
                 ))
                 logger.info("📨 Transfer summary SMS queued")
             except Exception as e:

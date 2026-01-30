@@ -738,13 +738,13 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
             matches = await square_client.search_customers(name=name_query, limit=5)
             
             if not matches:
-                 return {
-                    "found": False,
-                    "message": "I couldn't find a profile with that name. Would you like to create a new order?"
-                }
-                
-            # Filter matches carefully
-            if len(matches) == 1:
+                 logger.info(f"⚠️ Square Name Search failed for '{name_query}'. Proceeding to DB Fallback.")
+                 # Do NOT return here. Fall through to Step 3.
+                 pass
+            
+            else:
+                # Filter matches carefully
+                if len(matches) == 1:
                 cust = matches[0]
                 masked = cust.phone_number[-3:] if cust.phone_number and len(cust.phone_number) >= 3 else "..."
                 return {
