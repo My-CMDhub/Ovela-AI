@@ -4,7 +4,7 @@ Saranda Cafe & Pizzeria - System Prompt (BALANCED VERSION)
 Optimized for latency (~50% smaller) while preserving ALL UX-critical rules.
 """
 
-from services.knowledge_base.saranda import SARANDA_DATA
+from services.knowledge_base.saranda import SARANDA_DATA, is_within_operating_hours, get_next_opening_datetime
 
 # Pre-compute static menu lists at module load (not per-request)
 _MENU_CACHE = None
