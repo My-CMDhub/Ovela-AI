@@ -197,6 +197,10 @@ def get_saranda_functions() -> list:
                     "name": {
                         "type": "string",
                         "description": "Name or partial name to search for (e.g. 'John', 'Sarah Smith')"
+                    },
+                    "phone": {
+                         "type": "string",
+                         "description": "Optional: Phone number if the user provides it (e.g., '0412345678')"
                     }
                 },
                 "required": ["name"]
@@ -222,7 +226,7 @@ def get_saranda_functions() -> list:
         },
         {
             "name": "transfer_to_staff",
-            "description": "Transfer call to restaurant staff. Use when: customer asks for a person, complex complaint, or something you can't handle.",
+            "description": "Transfer call to restaurant staff. Use ONLY when: (1) customer EXPLICITLY asks to speak to a person/human, or (2) you are completely unable to assist after multiple attempts. Do NOT use just because the user corrects you or says 'no'.",
             "parameters": {
                 "type": "object",
                 "properties": {}

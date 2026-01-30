@@ -636,8 +636,13 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
     name_query = args.get("name", "").strip()
     
     # 1. PMS Lookup (Square) - Primary
-    # We ignore the name query for this step because phone is more unique/accurate
-    if user_phone:
+    # Check if LLM extracted a specific phone number (e.g. user provided it)
+    # Otherwise use the Caller ID
+    search_phone = args.get("phone")
+    if not search_phone:
+        search_phone = user_phone
+        
+    if search_phone:
         try:
             square_client = SquareClient()
             context = await square_client.get_customer_context(user_phone)
