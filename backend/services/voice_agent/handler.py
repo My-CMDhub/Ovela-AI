@@ -777,28 +777,10 @@ class VoiceAgentHandler:
                 logger.info("📞 AI initiated hangup (Signal detected)")
                 await self._hangup_call()
             
-            # Semantic termination detection (Backup for explicit function calls)
-            # If AI says goodbye, we should ensure the call actually ends
-            termination_phrases = [
-                # Explicit farewells
-                "goodbye", "bye now", "bye bye", "bye!",
-                # Time-based farewells (day/night/evening)
-                "have a great day", "have a wonderful day", "have a lovely day", "enjoy your day",
-                "have a great night", "have a wonderful night", "have a lovely night", "enjoy your night",
-                "have a great evening", "have a wonderful evening", "have a lovely evening", "enjoy your evening",
-                # Casual farewells
-                "take care", "see you", "cheers", "catch you later", "thanks for calling", "thank you for calling",
-                # Australian-style
-                "have a good one", "all the best",
-            ]
-            lower_content = clean_content.lower()
-            if any(phrase in lower_content for phrase in termination_phrases) and len(lower_content) < 80:
-                logger.info(f"👋 AI indicated farewell ('{clean_content}') - scheduling hangup")
-                # Mark as hanging up so duration monitor doesn't inject warnings
-                self._is_hanging_up = True
-                # Schedule hangup after estimated TTS duration
-                wait_seconds = max(3, len(clean_content) / 12) + 2
-                asyncio.create_task(self._scheduled_hangup(wait_seconds))
+            # Semantic termination detection REMOVED
+            # We now rely exclusively on the explicit 'end_call' function to hang up.
+            # This prevents premature hangups on phrases like "Cheers" or "Have a good one".
+
     
     async def _handle_user_started_speaking(self):
         """Handle VAD detection of user speech."""

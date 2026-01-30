@@ -869,10 +869,13 @@ class SarandaFunctionDispatcher:
             return {"action": "end_call", "success": True}
         
         # Abuse protection
-        elif function_name == "report_user_behavior":
+        elif function_name == "flag_off_topic" or function_name == "report_user_behavior":
             if self.abuse_protection:
+                # Map arguments to report_violation
                 category = args.get("category", "off_topic")
+                # If tool calls 'flag_off_topic', it usually sends 'reason'
                 reason = args.get("reason", "unspecified")
+                
                 return self.abuse_protection.report_violation(category, reason)
             return {"message": "Let's focus on your order. What can I get for you?"}
         

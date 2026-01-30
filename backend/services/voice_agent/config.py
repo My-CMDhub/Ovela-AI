@@ -60,7 +60,11 @@ ABANDON_THRESHOLD = 25        # End call
 # =============================================================================
 # ABUSE PROTECTION CONFIG - Easy to switch between DEMO and PRODUCTION
 # =============================================================================
-ENVIRONMENT = "demo"  # Change to "production" for prod settings
+from core.config import settings
+
+# Active config based on environment
+# Use global settings.ENVIRONMENT to respect the user's configuration
+ENVIRONMENT = settings.ENVIRONMENT.lower()
 
 # Demo settings (stricter for testing - public demos)
 DEMO_CONFIG = {
