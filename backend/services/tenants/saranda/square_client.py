@@ -331,7 +331,7 @@ class SquareClient:
     
     async def batch_get_orders(self, order_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """
-        Fetch multiple orders.
+        Fetch multiple orders using batch_get.
         """
         if not order_ids:
             return {}
@@ -341,13 +341,33 @@ class SquareClient:
         try:
             import asyncio
             response = await asyncio.to_thread(
-                self.client.orders.batch_retrieve,
+                self.client.orders.batch_get,
                 location_id=location_id,
                 order_ids=order_ids
             )
             
-            # SDK response object handling:
-            orders = response.orders if hasattr(response, 'orders') else []
+            # response is typically a BatchGetOrdersResponse object.
+            # It might handle errors internally or returned as a wrapper.
+            # Based on source code inspection, it returns _response.data
+            
+            # Check for generic success/error if available (ApiResponse style)
+            if hasattr(response, "is_error") and response.is_error():
+                logger.error(f"Batch get failed: {response.errors}")
+                return {}
+             
+            # Access orders. 
+            # If it's the Pydantic/DataClass model from Fern:
+            orders = getattr(response, "orders", [])
+            
+            # If it's ApiResponse wrapper (Square standard):
+            if hasattr(response, "body"):
+                 body = response.body
+                 # body might be dict or object
+                 if hasattr(body, "orders"):
+                     orders = body.orders
+                 elif isinstance(body, dict):
+                     orders = body.get("orders", [])
+            
             if orders is None:
                 orders = []
                 

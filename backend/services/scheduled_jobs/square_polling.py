@@ -24,7 +24,48 @@ async def square_polling_job():
         # 1. Discover any missed pending orders from API if tracker is empty
         # (Self-healing: if server restarted, we lose memory state, so we check API)
         if saranda_approval_tracker.pending_count == 0:
-            await saranda_approval_tracker.discover_pending_orders()
+            discovered = await saranda_approval_tracker.discover_pending_orders()
+            
+            # --- HARDENING: SYNC WITH DB ---
+            # Remove any discovered orders that are already finalized in our DB
+            # This prevents "zombie" notifications on server restart
+            if discovered:
+                logger.info(f"🛡️ Validating {len(discovered)} discovered orders against DB...")
+                to_remove = []
+                for req in discovered:
+                    try:
+                        if not req.call_id: continue
+                        
+                        collection_id = "call_transcripts_saranda"
+                        queries = [db_service.Query.equal("call_sid", req.call_id)]
+                        
+                        # We use the internal request helper to avoid full dependency if possible, 
+                        # or just use standard db_service method if exposed.
+                        # Using raw request for speed/safety matching existing pattern
+                        existing = await db_service._make_request(
+                            "GET", 
+                            f"/databases/{db_service.motel_db_id}/collections/{collection_id}/documents", 
+                            params={'queries': queries}
+                        )
+                        
+                        if existing and existing.get("documents"):
+                            doc = existing["documents"][0]
+                            outcome = doc.get("outcome", "")
+                            # If outcome suggests final state, remove from tracking
+                            if "Order" in outcome and outcome != "Order Pending":
+                                logger.info(f"🚫 Ignoring already finalized order {req.request_id} (Outcome: {outcome})")
+                                to_remove.append(req.square_order_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to validate {req.request_id} against DB: {e}")
+                
+                # Remove from tracker
+                for oid in to_remove:
+                    if oid in saranda_approval_tracker._pending:
+                        # Move to resolved silently
+                        req = saranda_approval_tracker._pending.pop(oid)
+                        saranda_approval_tracker._resolved[oid] = req
+                        req.state = ApprovalState.APPROVED # Mark as 'done' so we don't track
+            # -------------------------------
         
         # 2. Poll for updates
         changed_requests = await saranda_approval_tracker.poll_for_updates()
@@ -98,23 +139,53 @@ async def square_polling_job():
                     order_id=req.request_id,
                     status=status_label,
                     pickup_time=req.pickup_time,
+                    customer_name=req.customer_name,
+                    items_summary=req.items_summary,
+                    total_amount=req.total_dollars,
                     message_override=msg_override,
                     tenant_id="saranda"
                 )
                 
                 # Update Call Log (if linked)
-                if req.call_id and (req.call_id.startswith("CA") or req.call_id.startswith("SIM")): # Check if valid Twilio CallSid or Simulator
+                if req.call_id and (req.call_id.startswith("CA") or req.call_id.startswith("SIM")): 
                     logger.info(f"🔄 Updating Call Log for SID: {req.call_id} -> {status_label}")
                     try:
                         updates = {
                             "sms_status": "sent" if sms_sent else "failed",
                             "outcome": f"Order {status_label.title()}",
-                            "pms_reference": req.square_order_id, # Link Square Order ID
+                            "pms_reference": req.square_order_id, 
                         }
-                        await db_service.update_call_log_by_sid(tenant_id="saranda", call_sid=req.call_id, updates=updates)
-                        logger.info(f"📝 Updated Call Log {req.call_id} with outcome: {updates['outcome']}")
+                        
+                        # Try update first
+                        updated = await db_service.update_call_log_by_sid(tenant_id="saranda", call_sid=req.call_id, updates=updates)
+                        
+                        # If update failed (likely doc not found) and it's a SIM call, create it!
+                        if not updated and req.call_id.startswith("SIM"):
+                             logger.info(f"⚠️ Call Log not found for {req.call_id}, creating new record...")
+                             # We need to construct a minimal call log
+                             # In a real app we might want more fields, but for tracking SMS status:
+                             await db_service.create_call_log(
+                                 tenant_id="saranda",
+                                 call_sid=req.call_id,
+                                 direction="inbound", # Assume inbound for sim
+                                 from_number=req.customer_phone,
+                                 to_number="simulator",
+                                 status="completed",
+                                 transcript=f"Simulator Order: {req.items_summary}",
+                                 summary=f"Simulated Order {status_label}",
+                                 start_time=datetime.now(),
+                                 duration=0,
+                                 recording_url="",
+                                 sms_status=updates["sms_status"],
+                                 outcome=updates["outcome"],
+                                 pms_reference=updates["pms_reference"]
+                             )
+                             logger.info(f"📝 Created new Call Log for {req.call_id}")
+                        else:
+                             logger.info(f"📝 Updated Call Log {req.call_id} with outcome: {updates['outcome']}")
+
                     except Exception as e:
-                        logger.error(f"Failed to update call log: {e}")
+                        logger.error(f"Failed to update/create call log: {e}")
                 
                 logger.info(f"✅ Notification sent for {req.request_id} ({status_label})")
                 

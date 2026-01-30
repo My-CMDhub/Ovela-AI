@@ -277,6 +277,9 @@ Reply with:
         order_id: str,
         status: str,  # "approved", "rejected", "too_late"
         pickup_time: str = None,
+        customer_name: str = "Customer",
+        items_summary: str = None,
+        total_amount: float = 0.0,
         message_override: str = None,
         tenant_id: str = "saranda" 
     ) -> bool:
@@ -291,11 +294,24 @@ Reply with:
             if message_override:
                 message = message_override
             elif status == "approved":
-                message = f"✅ Your Saranda order #{order_id} is confirmed! Ready for pickup in {pickup_time or '15-20 mins'}. Pay when you collect. See you soon!"
+                # Rich Message Template
+                msg_parts = [f"✅ Hi {customer_name}, Saranda has confirmed your order!"]
+                if items_summary:
+                    msg_parts.append(f"🍕 {items_summary}")
+                if total_amount > 0:
+                    msg_parts.append(f"💵 Total: ${total_amount:.2f} (Pay on pickup)")
+                
+                pickup_text = pickup_time or '15-20 mins'
+                msg_parts.append(f"⏱️ Ready in: {pickup_text}")
+                msg_parts.append("See you soon!")
+                msg_parts.append("\n note: This is an automated conformation message of your order status. do not reply to this message.")
+                
+                message = "\n".join(msg_parts)
+                
             elif status == "too_late":
-                message = f"⏳ Sorry, the kitchen has already started your original order, so we couldn't make changes. Your order #{order_id} is still on track!"
+                message = f"⏳ Hi {customer_name}, notice regarding order #{order_id}. The kitchen has already started your original order, so we couldn't make changes. It is still on track for pickup!"
             else:  # rejected
-                message = f"Sorry, we couldn't process your order #{order_id} right now. Please call us or order via Uber Eats/DoorDash. Apologies for the inconvenience!"
+                message = f"Hi {customer_name}, sorry regarding order request. We couldn't process it right now. Please call us or order via Uber Eats/DoorDash. Apologies!"
             
             # Ensure proper phone format (E.164, no spaces/dashes)
             if not customer_phone:
