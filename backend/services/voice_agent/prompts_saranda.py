@@ -64,6 +64,10 @@ def get_saranda_prompt(current_date: str = None, current_time: str = None) -> st
     if current_date and "," in current_date:
         current_day = current_date.split(",")[0].strip()
     
+    # Get current time for comparison
+    tz = ZoneInfo("Australia/Perth")
+    now = datetime.now(tz)
+    
     # Dynamic Context (Closed vs Open)
     is_open, reason = is_within_operating_hours(current_day, current_time)
     next_open = get_next_opening_datetime()
