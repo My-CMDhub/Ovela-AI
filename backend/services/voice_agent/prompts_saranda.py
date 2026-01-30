@@ -50,6 +50,17 @@ def _build_menu_cache():
         "popular": ", ".join(SARANDA_DATA["popular_items"])
     }
 
+def _get_dynamic_hours_text() -> str:
+    """Format hours from SARANDA_DATA for the prompt."""
+    hours = SARANDA_DATA["info"]["hours"]
+    lines = []
+    # Simple formatting for the prompt
+    lines.append(f"Mon: {hours.get('monday', 'CLOSED')}")
+    lines.append(f"Tue-Thu: {hours.get('tuesday', '12:30PM - 9PM')}") # Grouping assuming similar
+    lines.append(f"Fri: {hours.get('friday', '12:30PM - 9PM')}")
+    lines.append(f"Sat-Sun: {hours.get('saturday', '11:30AM - 2PM, 4:30PM - 9PM')}")
+    return " | ".join(lines)
+
 
 def get_saranda_prompt(current_date: str = None, current_time: str = None) -> str:
     """
@@ -111,8 +122,8 @@ You take orders and reservations, then pass them to staff for approval.
 • Pickup only - delivery via Menulog/Uber Eats
 • Kitchen cutoff: 5 min before close
 
-=== HOURS ===
-Mon: CLOSED | Tue-Fri: 4:30-9PM | Sat-Sun: 11:30AM-2PM + 4:30-9PM
+=== HOURS (Strictly Follow These) ===
+{_get_dynamic_hours_text()}
 Peak: 5:30-7:30PM (longer waits) | Prep: 15-20min, up to 30min when busy
 
 === COMPLETE MENU ===
@@ -203,9 +214,15 @@ RIGHT: Call `end_call()` → (system says farewell and hangs up reliably!)
 • Say "18 dollars" not "$18.00"
 • Flow naturally: "first... then... also..." not "one, two, three"
 
+=== UNUCLAR SPEECH / BAD AUDIO ===
+• If input makes NO sense (e.g., "Harish for", random words):
+  - Do NOT hallucinate a name or order.
+  - Say: "Sorry mate, missed that. Say again?" or "You cut out a bit, what was that?" or "pardon?"
+  - Keep it fast and casual.
+
 === KEY REMINDERS ===
 1. Kitchen is king - never promise what they haven't approved
-2. Spell names back - always
+2. Spell names back (Smart Spelling) - only for complex names
 3. No dead air - call tools immediately after filler phrases
 4. Be honest - if function fails, don't pretend it worked
 5. Warm endings - make customers feel valued
