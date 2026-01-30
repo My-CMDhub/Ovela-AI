@@ -182,7 +182,7 @@ class SquareClient:
                             "display_name": customer_name,
                             "phone_number": customer_phone,
                         },
-                        "note": f"🤖 Created by Ovela AI | Pickup: {pickup_time}",
+                        "note": f"Created by Ovela AI | Pickup: {pickup_time}",
                         "pickup_at": (datetime.now() + timedelta(minutes=20)).isoformat() + "Z",
                     },
                 }

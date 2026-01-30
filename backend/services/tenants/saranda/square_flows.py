@@ -240,7 +240,7 @@ class SquareApprovalTracker:
                                    cust_phone = getattr(recip, "phone_number", "Unknown")
                                pickup = getattr(pd, "note", "")
                 
-                pickup = pickup.replace("🤖 Created by Ovela AI | Pickup: ", "")
+                pickup = pickup.replace("Created by Ovela AI | Pickup: ", "")
                 
                 # Summary
                 line_items = get_val(order_data, "line_items", [])
