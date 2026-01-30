@@ -44,7 +44,9 @@ async def handle_voice_webhook(
 
     
     # Resolve tenant_id
-    # 1. Check Query Param (override)
+    # 1. Check Query Param explicitly from request (override)
+    tenant_id = request.query_params.get("tenant_id")
+    
     if not tenant_id:
         # 2. Check Phone Mapping (Ingress Number)
         cleaned_to = To.replace(" ", "").strip() if To else ""
@@ -260,6 +262,7 @@ I'll forward your request to the team and they'll confirm your booking! 💅"""
 
 @router.post("/sms")
 async def handle_incoming_sms(
+    request: Request,
     From: str = Form(...),
     Body: str = Form(...),
     To: str = Form(...),
@@ -268,7 +271,10 @@ async def handle_incoming_sms(
     """
     Handle incoming SMS messages.
     """
-    logger.info(f"📩 Incoming SMS from {mask_phone(From)} to {mask_phone(To)}: '{Body}'")
+    # Resolve tenant_id from query params
+    tenant_id = request.query_params.get("tenant_id")
+    
+    logger.info(f"📩 Incoming SMS from {mask_phone(From)} to {mask_phone(To)} (tenant_id={tenant_id}): '{Body}'")
     
     # Simple auto-reply to acknowledge receipt (optional, but good for testing)
     # twiml = '<Response><Message>Thanks for your message. We have received it.</Message></Response>'
