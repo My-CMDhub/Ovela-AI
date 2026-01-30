@@ -7,6 +7,7 @@ SMS notifications to customers when their order is approved/rejected.
 """
 
 import logging
+import json
 from services.tenants.saranda.square_flows import saranda_approval_tracker, ApprovalState
 from services.staff_notifications import staff_notification_service
 from services.sms import sms_service
