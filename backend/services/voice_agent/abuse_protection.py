@@ -219,7 +219,7 @@ class AbuseProtection:
                     return {
                         "is_spam": True,
                         "should_hangup": True,
-                        "message": "I'm having trouble understanding. Let's end here - call back when you're ready to chat about a booking."
+                        "message": "I'm having trouble understanding. Let's end here - call back when you're ready to chat."
                     }
                 else:
                     return {
@@ -240,7 +240,7 @@ class AbuseProtection:
                 logger.warning(f"🔄 Repetitive input detected (violations: {self.violation_count})")
                 return {
                     "is_spam": True,
-                    "warning": "I noticed you've said that a few times. Is there something specific about motel or booking I can help with?"
+                    "warning": "I noticed you've said that a few times. Is there something specific I can help with?"
                 }
         
         # Track short/non-substantive responses

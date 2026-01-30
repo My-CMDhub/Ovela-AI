@@ -323,17 +323,37 @@ async def handle_check_order_status(args: dict, user_phone: str) -> dict:
                 "success": True,
                 "found": True,
                 "active": False,
-                "order": target_order.dict(),
+                "order": {
+                    "order_id": target_order.order_id,
+                    "state": target_order.state,
+                    "total_dollars": target_order.total_dollars,
+                    "items": [
+                        {"name": i.name, "quantity": i.quantity} 
+                        for i in getattr(target_order, "items", [])
+                    ]
+                },
                 "message": f"I couldn't find any active orders for you right now. The last order I have is from {time_str}, which {status_msg}."
             }
         else:
             # Active Order Found
+            # Return flattened structure for checking_status
+            
+            # Helper for items
+            items_summary = ", ".join([f"{i.quantity}x {i.name}" for i in getattr(target_order, "items", [])])
+            
+            # Format time
+            created_local = target_order.created_at.strftime("%I:%M %p") if target_order.created_at else "recently"
+            
             return {
                 "success": True, 
                 "found": True,
                 "active": True,
-                "order": target_order.dict(),
-                "message": f"I found your order. It {status_msg}."
+                "order_id": target_order.order_id,
+                "status": target_order.state,
+                "fulfillment_status": target_order.fulfillment_state,
+                "items_summary": items_summary,
+                "total": target_order.total_dollars,
+                "message": f"I found your order for {target_order.customer_name} ({items_summary}). It was placed at {created_local}. Status: {status_msg}."
             }
         
         # Calculate timing information for AI context
@@ -788,7 +808,16 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
                     "customer_id": None, # Guest
                     "name": ord_name,
                     "phone": clean_phone,
-                    "recent_order": ord,
+                    "recent_order": {
+                        "order_id": ord.order_id,
+                        "state": ord.state,
+                        "total_dollars": ord.total_dollars,
+                        "created_at": ord.created_at.isoformat() if ord.created_at else None,
+                        "items": [
+                            {"name": i.name, "quantity": i.quantity, "modifiers": i.modifiers}
+                            for i in getattr(ord, "items", [])  # SquareOrder might not have items attached here yet? 
+                        ] 
+                    },
                     "message": msg
                 }
 

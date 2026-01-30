@@ -1252,6 +1252,10 @@ class VoiceAgentHandler:
                     
                     # 2. PROACTIVE SUMMARY SMS (Blocking/Sync)
                     try:
+                        logger.info("Generating summary for Hard Cap SMS...")
+                        # Ensure we have a summary BEFORE sending
+                        await self.generate_call_summary()
+                        
                         logger.info("📨 Sending Hard Cap Summary SMS (Blocking)...")
                         
                         # Build context
