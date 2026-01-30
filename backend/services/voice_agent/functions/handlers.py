@@ -606,7 +606,7 @@ class FunctionDispatcher:
         self.abuse_protection = abuse_protection
         self.tenant_id = tenant_id
     
-    async def execute(self, function_name: str, args: dict) -> dict:
+    async def execute(self, function_name: str, args: dict, context: dict = None) -> dict:
         """
         Execute a function with retry logic (max 2 attempts) and watchdog timeout (15s).
         """
@@ -620,7 +620,7 @@ class FunctionDispatcher:
                 # Watchdog: Wrap execution in timeout
                 # We call the internal dispatch logic here
                 result = await asyncio.wait_for(
-                    self._dispatch_logic(function_name, args),
+                    self._dispatch_logic(function_name, args, context),
                     timeout=WATCHDOG_TIMEOUT
                 )
                 return result
@@ -652,7 +652,7 @@ class FunctionDispatcher:
                     "error_details": f"Function Error: {function_name} - {str(e)}"
                 }
         
-    async def _dispatch_logic(self, function_name: str, args: dict) -> dict:
+    async def _dispatch_logic(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Internal dispatch logic matching function names to handlers."""
         try:
             # Availability & Booking

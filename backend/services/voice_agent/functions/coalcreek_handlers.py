@@ -347,7 +347,7 @@ class CoalCreekFunctionDispatcher:
         # Always set context on init
         set_tenant_context("coalcreek")
     
-    async def execute(self, function_name: str, args: dict) -> dict:
+    async def execute(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Execute a function with basic error handling."""
         import asyncio
         TIMEOUT = 10.0
@@ -357,7 +357,7 @@ class CoalCreekFunctionDispatcher:
         
         try:
              result = await asyncio.wait_for(
-                self._dispatch(function_name, args),
+                self._dispatch(function_name, args, context),
                 timeout=TIMEOUT
              )
              return result
@@ -368,7 +368,7 @@ class CoalCreekFunctionDispatcher:
              logger.error(f"Function error {function_name}: {e}")
              return {"error": str(e), "message": "I encountered a system error."}
 
-    async def _dispatch(self, function_name: str, args: dict) -> dict:
+    async def _dispatch(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Internal dispatch map."""
         
         # Booking / Availability
