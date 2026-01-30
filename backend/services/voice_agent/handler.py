@@ -440,7 +440,8 @@ class VoiceAgentHandler:
             self.function_dispatcher = SarandaFunctionDispatcher(
                 user_phone=self.user_phone,
                 abuse_protection=self.abuse_protection,
-                tenant_config=self.tenant_config
+                tenant_config=self.tenant_config,
+                call_sid=self.call_sid
             )
             logger.info("✅ Using Saranda/Restaurant Dispatcher")
             

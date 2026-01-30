@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 from services.tenants.saranda.square_client import SquareClient, SquareOrderItem
 from services.tenants.saranda.square_flows import saranda_approval_tracker, SquareOrderRequest, ApprovalState
 
-async def handle_submit_order(args: dict, user_phone: str) -> dict:
+async def handle_submit_order(args: dict, user_phone: str, call_sid: str = None) -> dict:
     """
     Submit a new pickup order for kitchen approval via Square.
     
@@ -155,7 +155,10 @@ DO NOT promise later delivery."""
         logger.warning(f"Unrecognized items: {unrecognized}")
     
     # --- SQUARE INTEGRATION ---
-    call_id = generate_request_id() # Using existing generator for short ID as call_id suffix
+    req_id = generate_request_id() # Internal Request ID
+    
+    # Use CallSid as the primary reference if available, otherwise req_id
+    reference_id = call_sid if call_sid else req_id
     
     try:
         square_client = SquareClient()
@@ -164,7 +167,7 @@ DO NOT promise later delivery."""
             customer_phone=user_phone,
             items=square_items,
             pickup_time=pickup_time,
-            call_id=call_id
+            call_id=reference_id  # Pass CallSid here for linking!
         )
         
         # Format summary
@@ -606,17 +609,62 @@ async def handle_get_restaurant_info(args: dict) -> dict:
 
 async def lookup_customer(args: dict, user_phone: str) -> dict:
     """
-    Lookup customer by name to disambiguate or find previous orders.
+    Lookup customer by name/phone.
+    Strategy:
+    1. PMS Lookup (Square) by Phone (Source of Truth)
+    2. Appwrite Lookup by Name (Fallback / Legacy)
     """
     name_query = args.get("name", "").strip()
+    
+    # 1. PMS Lookup (Square) - Primary
+    # We ignore the name query for this step because phone is more unique/accurate
+    if user_phone:
+        try:
+            square_client = SquareClient()
+            context = await square_client.get_customer_context(user_phone)
+            
+            if context and context.get("customer"):
+                cust = context["customer"]
+                given = cust.get("given_name", "")
+                family = cust.get("family_name", "")
+                full_name = f"{given} {family}".strip()
+                
+                # If user provided a name, check if it roughly matches to be polite
+                # (Simple check: is the provided name in the full name?)
+                match_note = ""
+                if name_query and name_query.lower() not in full_name.lower():
+                    match_note = f" (registered as {full_name})"
+                
+                # Format recent history
+                orders = context.get("recent_orders", [])
+                history_msg = ""
+                if orders:
+                    last = orders[0]
+                    # Format time (simple ISO parse)
+                    history_msg = f". Last order was ${last['total']:.2f} ({last['fulfillment_status']})"
+                
+                return {
+                    "found": True,
+                    "source": "pms",
+                    "customer": {
+                         "name": full_name,
+                         "id": cust["id"],
+                         "phone": cust.get("phone", user_phone)
+                    },
+                    "message": f"I found you in our system{match_note}{history_msg}. Is that right?"
+                }
+        except Exception as e:
+            logger.error(f"PMS Lookup failed: {e}")
+            # Fallthrough to DB
+    
+    # 2. Appwrite Lookup (Name Search) - Fallback
     if not name_query:
-        return {
+         return {
             "found": False,
             "message": "I didn't catch the name. Could you repeat it?"
         }
-    
-    # Use global db_service
-    # Tenant ID is implicitly Saranda for this module
+        
+    # Tenant ID is implicitly Saranda
     tenant_id = "saranda" 
     
     customers = await db_service.find_customers_by_name(name_query, tenant_id)
@@ -629,29 +677,19 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
     
     if len(customers) == 1:
         cust = customers[0]
-        # Mask phone: ...123
         phone = cust.get("phone", "")
         masked = phone[-3:] if len(phone) >= 3 else phone
-        
-        # Check last order?
-        last_order = ""
-        prefs = {}
-        try:
-             prefs = json.loads(cust.get("preferences_json", "{}"))
-        except: pass
-        
-        if "last_call_at" in prefs:
-             last_order = " (ordered previously)"
-             
         return {
             "found": True,
+            "source": "db",
             "count": 1,
             "customer": {
                 "name": cust.get("name"),
                 "phone_masked": masked,
-                "id": cust.get("$id")
+                "id": cust.get("$id"),
+                "phone": phone 
             },
-            "message": f"I found {cust.get('name')} ending in {masked}{last_order}. Is that you?"
+            "message": f"I found {cust.get('name')} ending in {masked} in our records. Is that you?"
         }
         
     # Multiple matches
@@ -682,10 +720,11 @@ class SarandaFunctionDispatcher:
     Integrates with WhatsApp HITL for all approval-required actions.
     """
     
-    def __init__(self, user_phone: str, abuse_protection=None, tenant_config=None):
+    def __init__(self, user_phone: str, abuse_protection=None, tenant_config=None, call_sid: str = None):
         self.user_phone = user_phone
         self.abuse_protection = abuse_protection
         self.tenant_config = tenant_config or {}
+        self.call_sid = call_sid
         
         # Resolve Transfer Number (Config Driven)
         # Priority:
@@ -731,7 +770,8 @@ class SarandaFunctionDispatcher:
         
         # Order operations
         if function_name == "submit_order":
-            return await handle_submit_order(args, self.user_phone)
+            # Pass call_sid if available
+            return await handle_submit_order(args, self.user_phone, call_sid=self.call_sid)
         
         elif function_name == "request_change":
             # Pass transfer number

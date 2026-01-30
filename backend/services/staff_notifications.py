@@ -278,12 +278,13 @@ Reply with:
         status: str,  # "approved", "rejected", "too_late"
         pickup_time: str = None,
         message_override: str = None,
+        tenant_id: str = "saranda" 
     ) -> bool:
         """
         Send confirmation/rejection to customer via SMS.
-        
-        Note: Customer gets SMS (they called via voice).
+        Delegate to generic SMS service for dynamic sender ID handling.
         """
+        from services.sms import sms_service
         
         try:
             # Build message based on status
@@ -305,25 +306,12 @@ Reply with:
             if not clean_phone.startswith("+"):
                 clean_phone = f"+61{clean_phone.lstrip('0')}"
             
-            # ASYNC TWILIO CALL via httpx
-            auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Messages.json"
-            data = {
-                "To": clean_phone,
-                "From": settings.TWILIO_PHONE_NUMBER,
-                "Body": message
-            }
+            # Send via main SMS service (uses DB config for 'From' number)
+            return await sms_service.send_sms(clean_phone, message, tenant_id=tenant_id)
             
-            logger.info(f"🚀 Sending SMS to {mask_phone(clean_phone)} via {settings.TWILIO_PHONE_NUMBER}")
-            
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, data=data, auth=auth)
-                if response.status_code != 201:
-                    logger.error(f"❌ Twilio Error ({response.status_code}): {response.text}")
-                    return False
-            
-            logger.info(f"✅ Customer SMS sent to {mask_phone(clean_phone)} for order #{order_id} ({status})")
-            return True
+        except Exception as e:
+            logger.error(f"❌ Customer SMS exception for {order_id}: {e}")
+            return False
             
         except Exception as e:
             logger.error(f"❌ Customer SMS exception for {order_id}: {e}")

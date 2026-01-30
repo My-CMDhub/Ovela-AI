@@ -144,19 +144,6 @@ class SquareClient:
     ) -> SquareOrder:
         """
         Create a pickup order in Square with Ovela AI metadata.
-        
-        The order is created in OPEN state with metadata tagging it as
-        AI-generated and pending staff approval.
-        
-        Args:
-            customer_name: Customer's name
-            customer_phone: Customer's phone (E.164 format preferred)
-            items: List of order items
-            pickup_time: Human-readable pickup time (e.g., "20 minutes", "6:30 PM")
-            call_id: Our internal call ID for traceability
-        
-        Returns:
-            SquareOrder with the created order details
         """
         location_id = await self.get_location_id()
         idempotency_key = str(uuid.uuid4())
@@ -169,7 +156,7 @@ class SquareClient:
                 "quantity": str(item.quantity),
                 "base_price_money": {
                     "amount": item.price_cents,
-                    "currency": "AUD",  # Australian dollars for Perth
+                    "currency": "AUD",
                 },
             }
             if item.note or item.modifiers:
@@ -181,35 +168,29 @@ class SquareClient:
                 line_item["note"] = " | ".join(notes)
             line_items.append(line_item)
         
-        # Build the order with Ovela AI metadata
-        # Using reference_id and note fields for traceability
-        order_body = {
-            "idempotency_key": idempotency_key,
-            "order": {
-                "location_id": location_id,
-                "reference_id": f"ovela:{call_id}",  # Traceable reference
-                "line_items": line_items,
-                "fulfillments": [
-                    {
-                        "type": "PICKUP",
-                        "state": "PROPOSED",  # Staff will update to RESERVED/PREPARED
-                        "pickup_details": {
-                            "recipient": {
-                                "display_name": customer_name,
-                                "phone_number": customer_phone,
-                            },
-                            "note": f"🤖 Created by Ovela AI | Pickup: {pickup_time}",
-                            # Square requires pickup_at for SCHEDULED pickups
-                            "pickup_at": (datetime.now() + timedelta(minutes=20)).isoformat() + "Z",
+        # Build order dict
+        order_dict = {
+            "location_id": location_id,
+            "reference_id": f"ovela:{call_id}",
+            "line_items": line_items,
+            "fulfillments": [
+                {
+                    "type": "PICKUP",
+                    "state": "PROPOSED",
+                    "pickup_details": {
+                        "recipient": {
+                            "display_name": customer_name,
+                            "phone_number": customer_phone,
                         },
-                    }
-                ],
-                # Metadata in the note field (visible in Square Dashboard)
-                "metadata": {
-                    "source": "ovela_ai",
-                    "call_id": call_id,
-                    "pending_approval": "true",
-                },
+                        "note": f"🤖 Created by Ovela AI | Pickup: {pickup_time}",
+                        "pickup_at": (datetime.now() + timedelta(minutes=20)).isoformat() + "Z",
+                    },
+                }
+            ],
+            "metadata": {
+                "source": "ovela_ai",
+                "call_id": call_id,
+                "pending_approval": "true",
             },
         }
         
@@ -219,8 +200,8 @@ class SquareClient:
             import asyncio
             response = await asyncio.to_thread(
                 self.client.orders.create,
-                order=order_body["order"],
-                idempotency_key=order_body["idempotency_key"]
+                order=order_dict,
+                idempotency_key=idempotency_key
             )
             
             order_data = response.order
@@ -246,12 +227,10 @@ class SquareClient:
         except Exception as e:
             logger.error(f"❌ Square order creation failed: {e}")
             raise
-    
+
     async def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
         """
         Fetch an order by ID.
-        
-        Returns the raw Square order data, or None if not found.
         """
         try:
             import asyncio
@@ -263,9 +242,7 @@ class SquareClient:
     
     async def get_order_state(self, order_id: str) -> Optional[str]:
         """
-        Get just the state of an order (OPEN, COMPLETED, CANCELED).
-        
-        Returns None if order not found.
+        Get just the state of an order.
         """
         order = await self.get_order(order_id)
         if order:
@@ -278,12 +255,6 @@ class SquareClient:
         """
         location_id = await self.get_location_id()
         try:
-            # We can't strictly filter by phone in SearchOrders easily without Customer API.
-            # But we can find OPEN orders and filter in memory, or use the metadata filtering if we indexed it?
-            # Actually, we put phone in the fulfillment recipient.
-            # SearchOrders query support exact match on strict fields.
-            # Workaround: Search all OPEN/recent orders and filter. Low volume assumption.
-            
             import asyncio
             result = await asyncio.to_thread(
                 self.client.orders.search,
@@ -300,39 +271,35 @@ class SquareClient:
                 limit=50
             )
             
-            if hasattr(result, 'errors') and result.errors:
+            if result.is_error():
                 logger.error(f"Search failed: {result.errors}")
                 return []
                 
-            orders_data = result.orders if hasattr(result, 'orders') else []
+            orders_data = result.body.orders if hasattr(result.body, 'orders') else []
             matches = []
             
             for o in orders_data:
-                # Helper for obj/dict access (reuse logic or keep simple if known)
-                is_dict = isinstance(o, dict)
+                # Helper for obj/dict access
                 def g(obj, k, d=None):
                     return obj.get(k, d) if isinstance(obj, dict) else getattr(obj, k, d)
 
                 # Check fulfillment phone
                 found_phone = ""
-                fuls = g(o, "fulfillments", [])
+                fuls = g(o, "fulfillments") or []
                 if fuls:
                     f = fuls[0]
                     pd = g(f, "pickup_details", {})
                     recip = g(pd, "recipient", {})
                     found_phone = g(recip, "phone_number", "")
                 
-                # Simple loose match (last 9 digits?) or exact
-                # Phone formats vary, so let's strip to digits
+                # Check match (last 9 digits)
                 p1 = "".join(filter(str.isdigit, phone))[-9:]
                 p2 = "".join(filter(str.isdigit, found_phone))[-9:]
                 
                 if p1 and p2 and p1 == p2:
-                    # Match!
-                    tm = g(o, "total_money", {})
-                    amt = g(tm, "amount", 0)
+                    tm = g(o, "total_money")
+                    amt = g(tm, "amount") if tm else 0
                     
-                    # Extract fulfillment state (critical for status checks!)
                     fulfillment_state = "PROPOSED"
                     if fuls:
                         fulfillment_state = g(fuls[0], "state", "PROPOSED")
@@ -360,9 +327,7 @@ class SquareClient:
     
     async def batch_get_orders(self, order_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         """
-        Fetch multiple orders in a single API call.
-        
-        Returns a dict mapping order_id -> order data.
+        Fetch multiple orders.
         """
         if not order_ids:
             return {}
@@ -377,7 +342,7 @@ class SquareClient:
                 order_ids=order_ids
             )
             
-            orders = response.orders if hasattr(response, 'orders') else []
+            orders = response.body.orders if hasattr(response.body, 'orders') else []
             return {order.id: order for order in orders}
         except Exception as e:
             logger.error(f"Batch order fetch error: {e}")
@@ -386,8 +351,6 @@ class SquareClient:
     async def test_connection(self) -> bool:
         """
         Test the Square API connection.
-        
-        Returns True if connection is successful.
         """
         try:
             location_id = await self.get_location_id()
@@ -396,3 +359,123 @@ class SquareClient:
         except Exception as e:
             logger.error(f"❌ Square connection failed: {e}")
             return False
+
+    async def search_customers(self, email: str = None, phone: str = None, limit: int = 1) -> List[Any]:
+        """
+        Search for a customer by email or phone.
+        Uses client.customers.search(query=..., limit=...)
+        """
+        try:
+            import asyncio
+            
+            query_filter = {}
+            if email:
+                query_filter["email_address"] = {"exact": email}
+            if phone:
+                query_filter["phone_number"] = {"exact": phone}
+            
+            if not query_filter:
+                return []
+                
+            response = await asyncio.to_thread(
+                self.client.customers.search,
+                query={"filter": query_filter},
+                limit=limit
+            )
+            
+            return response.customers if hasattr(response, 'customers') else []
+            
+        except Exception as e:
+            logger.error(f"Customer search error: {e}")
+            return []
+
+    async def get_customer_context(self, phone: str) -> Optional[Dict[str, Any]]:
+        """
+        Get full customer context (profile + recent orders) by phone.
+        """
+        # 1. Search Customer
+        customers = await self.search_customers(phone=phone)
+        if not customers:
+            return None
+            
+        customer = customers[0]
+        customer_id = customer.id
+        
+        # 2. Search Recent Orders
+        location_id = await self.get_location_id()
+        import asyncio
+        
+        try:
+            orders_response = await asyncio.to_thread(
+                self.client.orders.search,
+                location_ids=[location_id],
+                query={
+                    "filter": {
+                        "customer_filter": {
+                            "customer_ids": [customer_id]
+                        },
+                         "state_filter": {
+                            "states": ["OPEN", "COMPLETED"]
+                        }
+                    },
+                    "sort": {
+                        "sort_field": "CREATED_AT",
+                        "sort_order": "DESC"
+                    }
+                },
+                limit=5
+            )
+            
+            orders = orders_response.orders if hasattr(orders_response, 'orders') else []
+            if orders is None:
+                orders = []
+            
+            # Format Orders
+            formatted_orders = []
+            for o in orders:
+                def g(obj, k, d=None):
+                    return obj.get(k, d) if isinstance(obj, dict) else getattr(obj, k, d)
+                
+                tm = g(o, "total_money")
+                amt = g(tm, "amount") if tm else 0
+                
+                fuls = g(o, "fulfillments") or []
+                status_msg = "Completed"
+                if g(o, "state") == "OPEN":
+                     if fuls:
+                         status_msg = g(fuls[0], "state")
+                     else:
+                         status_msg = "Open"
+                
+                created_at = g(o, "created_at")
+                
+                formatted_orders.append({
+                    "id": g(o, "id"),
+                    "total": amt / 100.0,
+                    "status": g(o, "state"),
+                    "fulfillment_status": status_msg,
+                    "created_at": created_at
+                })
+            
+            return {
+                "source": "square_pms",
+                "customer": {
+                    "id": customer.id,
+                    "given_name": customer.given_name,
+                    "family_name": customer.family_name,
+                    "phone": customer.phone_number
+                },
+                "recent_orders": formatted_orders
+            }
+            
+        except Exception as e:
+            logger.error(f"Context fetch failed: {e}")
+            return {
+                 "source": "square_pms",
+                 "customer": {
+                    "id": customer.id,
+                    "given_name": customer.given_name
+                 }, 
+                 "recent_orders": [],
+                 "error": str(e)
+            }

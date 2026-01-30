@@ -352,6 +352,12 @@ async def get_call_logs(
             limit=limit * 2  # Fetch more to account for filtering
         )
         
+        # Get Summary Stats (Official Daily Counts) for the KPI cards
+        # We only use this if no filters are applied (or if filters imply "today's view")
+        # For simplicity, we always return "Today's" stats in the counting block if no date range is restrictive,
+        # but the dashboard cards specifically ask for "Today".
+        daily_stats = await db_service.get_daily_summary_stats(tenant_id)
+        
         # Filter by status category
         # valid outcomes match COMPLETED_OUTCOMES / ISSUE_OUTCOMES
         # We map tenant 'status' to 'outcome' for consistency
@@ -417,6 +423,7 @@ async def get_call_logs(
                 "booking_reference": t.get("pms_reference") or t.get("booking_ref") or "",
                 "call_summary": t.get("call_summary") or "",
                 "customer_name": t.get("customer_name") or "Not provided",
+                "sms_status": t.get("sms_status") or "none",
             })
         
         return {
@@ -424,10 +431,10 @@ async def get_call_logs(
             "logs": formatted,
             "total": len(formatted),
             "counts": {
-                "completed": len([t for t in transcripts if (t.get("status") or t.get("outcome")) in COMPLETED_OUTCOMES]),
-                "issues": len([t for t in transcripts if (t.get("status") or t.get("outcome")) in ISSUE_OUTCOMES]),
-                "all": len(transcripts),
-                "avg_duration": sum([t.get("duration") or t.get("duration_seconds", 0) for t in transcripts]) / len(transcripts) if transcripts else 0
+                "completed": daily_stats["total_calls"] - daily_stats["missed_calls"],
+                "issues": daily_stats["missed_calls"],
+                "all": daily_stats["total_calls"],
+                "avg_duration": daily_stats["avg_duration"]
             }
         }
         

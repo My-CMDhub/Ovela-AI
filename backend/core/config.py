@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # Twilio (Missed Call → WhatsApp)
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_PHONE_NUMBER: str = "+61348236219"  # Your purchased Twilio number
+    TWILIO_PHONE_NUMBER: str = "+61468088990"  # Your purchased Twilio number
     TWILIO_WHATSAPP_NUMBER: str = "+14155238886"  # Twilio WhatsApp Sandbox number
     
     # Saranda Restaurant Staff WhatsApp

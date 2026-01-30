@@ -8,11 +8,13 @@ logger = logging.getLogger(__name__)
 from appwrite.query import Query as AppwriteQuery
 
 class AppwriteBase:
+    Query = AppwriteQuery
+    
     def __init__(self):
         self.endpoint = settings.APPWRITE_ENDPOINT
         self.project_id = settings.APPWRITE_PROJECT_ID
         self.api_key = settings.APPWRITE_API_KEY
-        self.db_id = "ovela_db"
+        self.db_id = "6947b8300005f5863f96" # PRODUCTION DB: Ovela_Clients
         self.motel_db_id = "6947b8300005f5863f96"  # Ovela_Clients Database (Motel + Tenants)
         self.timeout = httpx.Timeout(15.0, connect=5.0)
 

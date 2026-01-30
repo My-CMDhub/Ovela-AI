@@ -258,6 +258,25 @@ I'll forward your request to the team and they'll confirm your booking! 💅"""
     return {"status": "ok"}
 
 
+@router.post("/sms")
+async def handle_incoming_sms(
+    From: str = Form(...),
+    Body: str = Form(...),
+    To: str = Form(...),
+    tenant_id: str = None
+):
+    """
+    Handle incoming SMS messages.
+    """
+    logger.info(f"📩 Incoming SMS from {mask_phone(From)} to {mask_phone(To)}: '{Body}'")
+    
+    # Simple auto-reply to acknowledge receipt (optional, but good for testing)
+    # twiml = '<Response><Message>Thanks for your message. We have received it.</Message></Response>'
+    # return Response(content=twiml, media_type="application/xml")
+    
+    return Response(content="", media_type="text/plain")
+
+
 @router.post("/transfer-status")
 async def handle_transfer_status(
     CallSid: str = Form(...),

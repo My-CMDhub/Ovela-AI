@@ -20,6 +20,7 @@ interface CallLog {
     phone: string;
     duration_seconds: number;
     outcome: string;
+    sms_status?: string;
     created_at: string;
 }
 
@@ -216,11 +217,19 @@ export default function RestaurantDashboard() {
                                     </div>
                                 </div>
                                 <span className={`text-xs px-2 py-1 rounded-full ${call.outcome === 'completed' || call.outcome === 'transferred'
-                                        ? 'bg-green-100 text-green-700'
-                                        : 'bg-red-100 text-red-700'
+                                    ? 'bg-green-100 text-green-700'
+                                    : 'bg-red-100 text-red-700'
                                     }`}>
                                     {call.outcome}
                                 </span>
+                                {call.sms_status && call.sms_status !== 'none' && (
+                                    <span className={`ml-2 text-xs px-2 py-1 rounded-full ${call.sms_status === 'sent'
+                                            ? 'bg-blue-100 text-blue-700'
+                                            : 'bg-yellow-100 text-yellow-700'
+                                        }`}>
+                                        SMS: {call.sms_status}
+                                    </span>
+                                )}
                             </div>
                         ))
                     )}

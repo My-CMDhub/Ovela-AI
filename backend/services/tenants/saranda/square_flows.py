@@ -269,9 +269,18 @@ class SquareApprovalTracker:
                         amt = getattr(tm, "amount", 0)
 
                 created_at_str = get_val(order_data, "created_at")
-                created_at = datetime.now()
                 if created_at_str:
                      created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+                else:
+                     created_at = datetime.now()
+
+                # ROBUSTNESS: Ignore orders older than 60 minutes
+                # This prevents "ghost" notifications from old sessions after restarts
+                # Match timezone of created_at
+                now_aware = datetime.now(created_at.tzinfo) if created_at.tzinfo else datetime.now()
+                if (now_aware - created_at).total_seconds() > 3600:
+                    logger.debug(f"⏭️ Ignoring stale order {oid} (created {created_at})")
+                    continue
 
                 # Create request
                 req = SquareOrderRequest(
