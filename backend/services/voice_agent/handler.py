@@ -1254,7 +1254,10 @@ class VoiceAgentHandler:
                     try:
                         logger.info("Generating summary for Hard Cap SMS...")
                         # Ensure we have a summary BEFORE sending
-                        await self.generate_call_summary()
+                        try:
+                            await self._generate_call_summary()
+                        except Exception as e:
+                            logger.error(f"Summary generation failed (proceeding to transfer): {e}")
                         
                         logger.info("📨 Sending Hard Cap Summary SMS (Blocking)...")
                         
@@ -1731,6 +1734,10 @@ class VoiceAgentHandler:
         Generates a concise 1-sentence summary of the call transcript 
         using a dedicated model after the call ends.
         """
+        # Return cached summary if available (avoids re-generation on cleanup)
+        if getattr(self, 'cached_summary', None):
+            return self.cached_summary
+
         if not self.transcript or len(self.transcript) < 2:
             return ""
 
@@ -1753,6 +1760,7 @@ class VoiceAgentHandler:
             
             summary = response.choices[0].message.content.strip()
             logger.info(f"📝 Generated call summary: {summary}")
+            self.cached_summary = summary
             return summary
             
         except Exception as e:
