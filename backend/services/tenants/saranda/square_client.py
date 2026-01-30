@@ -341,7 +341,7 @@ class SquareClient:
         try:
             import asyncio
             response = await asyncio.to_thread(
-                self.client.orders.batch_retrieve_orders,
+                self.client.orders.batch_retrieve,
                 location_id=location_id,
                 order_ids=order_ids
             )
