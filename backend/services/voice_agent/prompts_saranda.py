@@ -5,7 +5,8 @@ Optimized for latency (~50% smaller) while preserving ALL UX-critical rules.
 """
 
 from services.knowledge_base.saranda import SARANDA_DATA, is_within_operating_hours, get_next_opening_datetime
-
+from zoneinfo import ZoneInfo
+from datetime import datetime
 # Pre-compute static menu lists at module load (not per-request)
 _MENU_CACHE = None
 
