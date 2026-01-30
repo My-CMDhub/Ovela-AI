@@ -140,9 +140,6 @@ class SquareClient:
         customer_phone: str,
         items: List[SquareOrderItem],
         pickup_time: str,
-        customer_phone: str,
-        items: List[SquareOrderItem],
-        pickup_time: str,
         call_id: str,
         reference_id: str = None, # Optional public reference (e.g. short ID)
     ) -> SquareOrder:
@@ -344,14 +341,12 @@ class SquareClient:
         try:
             import asyncio
             response = await asyncio.to_thread(
-                self.client.orders.batch_retrieve,
+                self.client.orders.batch_retrieve_orders,
                 location_id=location_id,
                 order_ids=order_ids
             )
             
             # SDK response object handling:
-            # - Success: response.orders is a list of Order objects
-            # - Error: hasattr checks or try/catch
             orders = response.orders if hasattr(response, 'orders') else []
             if orders is None:
                 orders = []

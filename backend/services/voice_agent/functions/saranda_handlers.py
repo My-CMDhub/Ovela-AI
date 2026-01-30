@@ -167,7 +167,6 @@ DO NOT promise later delivery."""
             customer_phone=user_phone,
             items=square_items,
             pickup_time=pickup_time,
-            pickup_time=pickup_time,
             call_id=call_sid if call_sid else reference_id,  # Store actual CallSid in metadata for tracing
             reference_id=reference_id # Public short ID
         )

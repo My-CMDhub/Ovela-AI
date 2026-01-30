@@ -210,6 +210,12 @@ class SquareApprovalTracker:
                 # Reconstruct request object
                 call_id = meta.get("call_id", "unknown") if isinstance(meta, dict) else getattr(meta, "call_id", "unknown")
                 
+                # Check for clean reference ID (e.g. "A17" or "ovela:...")
+                ref_id = get_val(order_data, "reference_id")
+                # If reference_id is an Ovela ref, use it. But create_pickup_order puts "ovela:{call_id}" or just "{short_id}"
+                # If we have a short ID in reference_id, use it as request_id
+                request_id = ref_id if ref_id and not ref_id.startswith("ovela:") else call_id
+                
                 # Extract customer details
                 fulfillments = get_val(order_data, "fulfillments", [])
                 cust_name = "Unknown"
@@ -287,7 +293,7 @@ class SquareApprovalTracker:
                     square_order_id=oid,
                     square_order_version=get_val(order_data, "version", 1),
                     call_id=call_id,
-                    request_id=call_id, 
+                    request_id=request_id, 
                     customer_name=cust_name,
                     customer_phone=cust_phone,
                     pickup_time=pickup,
