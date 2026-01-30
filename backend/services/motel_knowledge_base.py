@@ -140,7 +140,7 @@ def get_room_details(room_type: str) -> Dict[str, Any]:
         "max_guests": room["max_guests"],
         "bedding": room["bedding"],
         "best_for": room["best_for"],
-        "facilities": room["facilities"]
+        "facilities": room.get("facilities", []) or [f.strip() for f in room.get("features", "").split(",") if f.strip()]
     }
     
     if "special_features" in room and room["special_features"]:
@@ -221,8 +221,14 @@ def get_activities_nearby() -> Dict[str, List[str]]:
     if "distances" in location:
         nearby_areas = list(location["distances"].keys())
     
+    
+    # Safely get activities or fallback to attractions
+    activities = data.get("activities", [])
+    if not activities and "location" in data and "nearby_attractions" in data["location"]:
+        activities = data["location"]["nearby_attractions"]
+
     return {
-        "activities": data["activities"],
+        "activities": activities,
         "nearby_areas": nearby_areas,
         "region": location.get("region", "the area")
     }
@@ -312,12 +318,21 @@ def search_motel_info(query: str) -> Dict[str, Any]:
     
     # Search room facilities
     for key, room in data["rooms"].items():
-        matching_facilities = [f for f in room["facilities"] if query in f.lower()]
+        # Handle list or string features
+        facilities = room.get("facilities", [])
+        if not facilities and "features" in room:
+             facilities = [f.strip() for f in room["features"].split(",") if f.strip()]
+             
+        matching_facilities = [f for f in facilities if query in f.lower()]
         if matching_facilities:
             results[f"{room['name']}_facilities"] = matching_facilities
     
-    # Search activities
-    matching_activities = [a for a in data["activities"] if query in a.lower()]
+    # Search activities (Safe Access)
+    activities_list = data.get("activities", [])
+    if not activities_list and "location" in data and "nearby_attractions" in data["location"]:
+        activities_list = data["location"]["nearby_attractions"]
+
+    matching_activities = [a for a in activities_list if query in a.lower()]
     if matching_activities:
         results["activities"] = matching_activities
     
