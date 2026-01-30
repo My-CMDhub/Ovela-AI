@@ -282,26 +282,59 @@ async def handle_check_order_status(args: dict, user_phone: str) -> dict:
         }
     
     square_client = SquareClient()
-    orders = await square_client.search_orders_by_phone(user_phone, limit=1)
+    # Fetch recent history (up to 5) to distinguish active vs past
+    orders = await square_client.search_orders_by_phone(user_phone, limit=5)
     
-    # 1. Check Orders (Priority)
     if orders:
-        order = orders[0]
-        # Translate state to human friendly - use BOTH order state and fulfillment state
-        status_msg = "is being processed"
+        # 1. Look for ACTIVE order first
+        active_order = next((o for o in orders if o.state == "OPEN" and o.fulfillment_state != "CANCELED"), None)
         
-        if order.state == "COMPLETED":
-            status_msg = "is ready or has been picked up"
-        elif order.state == "CANCELED":
+        target_order = active_order if active_order else orders[0]
+        is_historical = active_order is None
+        
+        # Translate state
+        status_msg = "is being processed"
+        if target_order.state == "COMPLETED":
+            status_msg = "is completed"
+        elif target_order.state == "CANCELED" or target_order.fulfillment_state == "CANCELED":
             status_msg = "was cancelled"
-        elif order.state == "OPEN":
-            # For OPEN orders, check fulfillment state for more accurate status
-            if order.is_approved:  # RESERVED, PREPARED, or COMPLETED
-                status_msg = "has been accepted by the kitchen and is being prepared"
-            elif order.fulfillment_state == "CANCELED":
-                status_msg = "was declined by the kitchen"
-            else:  # PROPOSED - still waiting for staff
-                status_msg = "is waiting for the kitchen to confirm"
+        elif target_order.state == "OPEN":
+             if target_order.is_approved:
+                 status_msg = "is being prepared"
+             else:
+                 status_msg = "is waiting for confirmation"
+
+        if is_historical:
+             # Calculate relative time
+             from datetime import datetime, timezone
+             now = datetime.now(timezone.utc)
+             created = target_order.created_at
+             if created.tzinfo is None: created = created.replace(tzinfo=timezone.utc)
+             
+             diff = now - created
+             if diff.days > 0:
+                 time_str = f"{diff.days} days ago"
+             elif diff.seconds > 3600:
+                 time_str = f"about {diff.seconds // 3600} hours ago"
+             else:
+                 time_str = "just recently"
+
+             return {
+                "success": True,
+                "found": True,
+                "active": False,
+                "order": target_order.dict(),
+                "message": f"I couldn't find any active orders for you right now. The last order I have is from {time_str}, which {status_msg}."
+            }
+        else:
+            # Active Order Found
+            return {
+                "success": True, 
+                "found": True,
+                "active": True,
+                "order": target_order.dict(),
+                "message": f"I found your order. It {status_msg}."
+            }
         
         # Calculate timing information for AI context
         from datetime import datetime, timezone
@@ -663,6 +696,10 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
     1. Phone Search (Caller ID or Explicit Args) - Primary & Fastest
     2. Name Search (Fallback) - Only if phone yields no result or bad match.
     """
+    # Safe attribute/key accessor helper
+    def g(obj, k, default=None):
+        return obj.get(k, default) if isinstance(obj, dict) else getattr(obj, k, default) or default
+
     name_query = args.get("name", "").strip()
     
     # Check if a specific phone was provided in args, else use Caller ID
@@ -697,38 +734,62 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
                 cust = context["customer"]
                 
                 # Check for Name Mismatch (Smart Identity)
-                found_name = f"{cust.given_name} {cust.family_name}".strip()
+                # Use helper g()
+                given = g(cust, "given_name", "")
+                family = g(cust, "family_name", "")
+                phone = g(cust, "phone_number", "")
+                cid = g(cust, "id")
+                
+                found_name = f"{given} {family}".strip()
                 
                 # If name was provided and matches loosely, it's a strong verify.
                 if name_query and name_query.lower() in found_name.lower():
                      return {
                         "found": True,
-                        "customer_id": cust.id,
+                        "customer_id": cid,
                         "name": found_name,
-                        "phone": cust.phone_number,
+                        "phone": phone,
                         "recent_order": context.get("recent_order"),
-                        "message": f"Welcome back {cust.given_name}. I see you ordered {context.get('last_item', 'recently')}. Same again?"
+                        "message": f"Welcome back {given}. I see you ordered {context.get('last_item', 'recently')}. Same again?"
                     }
                 
                 # If name provided but doesn't match, ask for confirmation
                 if name_query:
                      return {
                         "found": True,
-                        "customer_id": cust.id,
+                        "customer_id": cid,
                         "name": found_name,
-                        "phone": cust.phone_number,
+                        "phone": phone,
                         "recent_order": context.get("recent_order"),
-                        "message": f"I see this number is registered to {cust.given_name}. Is that you, or are you ordering for someone else?"
+                        "message": f"I see this number is registered to {given}. Is that you, or are you ordering for someone else?"
                     }
                 
                 # No name provided, just return found profile
                 return {
                     "found": True,
-                    "customer_id": cust.id,
+                    "customer_id": cid,
                     "name": found_name,
-                    "phone": cust.phone_number,
+                    "phone": phone,
                     "recent_order": context.get("recent_order"),
-                    "message": f"Hi {cust.given_name}, welcome back."
+                    "message": f"Hi {given}, welcome back."
+                }
+
+            # GUEST ORDER HANDLING (No Customer Profile, but Active Order exists)
+            elif context and context.get("recent_order"):
+                ord = context["recent_order"]
+                # Use name already extracted by SquareClient
+                ord_name = g(ord, 'customer_name', 'Guest')
+                
+                # If we name match or just assume it's them because they are calling from that number
+                msg = f"I see you have an open order, {ord_name}." if ord_name and ord_name != "Guest" else "I see you have an open order with us."
+                
+                return {
+                    "found": True,
+                    "customer_id": None, # Guest
+                    "name": ord_name,
+                    "phone": clean_phone,
+                    "recent_order": ord,
+                    "message": msg
                 }
 
         # --- STEP 2: Name Search (Fallback) ---
@@ -744,17 +805,22 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
 
             elif len(matches) == 1:
                 cust = matches[0]
-                masked = cust.phone_number[-3:] if cust.phone_number and len(cust.phone_number) >= 3 else "..."
+                given = g(cust, "given_name", "")
+                family = g(cust, "family_name", "")
+                phone = g(cust, "phone_number", "")
+                cid = g(cust, "id")
+                
+                masked = phone[-3:] if phone and len(phone) >= 3 else "..."
                 return {
                     "found": True,
-                    "customer_id": cust.id,
-                    "name": f"{cust.given_name} {cust.family_name}".strip(),
-                    "message": f"I found one {cust.given_name}. Just to check, is your number ending in {masked}?"
+                    "customer_id": cid,
+                    "name": f"{given} {family}".strip(),
+                    "message": f"I found one {given}. Just to check, is your number ending in {masked}?"
                 }
                 
             elif len(matches) > 1:
                 # Ambiguity handling
-                options_str = ", ".join([f"{c.given_name} {c.family_name}" for c in matches[:3]])
+                options_str = ", ".join([f"{g(c,'given_name')} {g(c,'family_name')}" for c in matches[:3]])
                 return {
                     "found": True, 
                     "count": len(matches),
@@ -779,7 +845,8 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
                         "customer": {
                             "name": cust.get("name"),
                             "phone": phone,
-                            "id": cust.get("$id")
+                            "id": cust.get("$id"),
+                            "sms_status": cust.get("sms_status")
                         },
                         "message": f"I found {cust.get('name')} in our records. Is that you?"
                     }

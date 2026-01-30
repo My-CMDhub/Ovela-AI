@@ -37,23 +37,82 @@ class CustomersMixin:
     async def find_customers_by_name(self, name_query: str, tenant_id: str, limit: int = 5):
         """
         Find customers by partial name match.
-        ENFORCED: Scoped to tenant_id.
+        Priority: 
+        1. 'customers' collection (CRM profile)
+        2. 'call_transcripts_{tenant}' collection (Historical Callers)
         """
+        results = []
+        
+        # 1. Search Primary 'customers' collection
         try:
             path = f"/databases/{self.db_id}/collections/customers/documents"
-            
-            # Use search if fulltext index exists, otherwise matching might be limited
             queries = [
                 f'search("name", "{name_query}")',
                 f'equal("tenant_id", "{tenant_id}")',
                 f'limit({limit})'
             ]
             
-            result = await self._make_request("GET", path, params={"queries": queries})
-            return result.get("documents", []) if result else []
+            response = await self._make_request("GET", path, params={"queries": queries})
+            if response and response.get("documents"):
+                 results = response.get("documents")
         except Exception as e:
-            logger.error(f"Error searching customer by name '{name_query}': {e}")
-            return []
+            # It's okay if this fails (e.g. collection doesn't exist yet)
+            pass
+
+        # 2. Fallback: Search Transcripts (if no CRM results)
+        if not results:
+            try:
+                # Resolve transcript collection name
+                # Simple mapping based on known tenants, defaults to call_transcripts_{tenant_id}
+                coll_name = f"call_transcripts_{tenant_id}"
+                
+                # Check for "Not provided" or generic names to avoid junk
+                if name_query.lower() in ["unknown", "guest", "not provided"]:
+                    return []
+
+                path = f"/databases/{self.motel_db_id}/collections/{coll_name}/documents"
+                # queries = [
+                #     'limit(100)' 
+                # ]
+                queries = []
+                
+                response = await self._make_request("GET", path, params={"queries": queries})
+                transcripts = response.get("documents", []) if response else []
+                
+                # Setup Deduplication by Phone
+                seen_phones = set()
+                name_lower = name_query.lower()
+                
+                for t in transcripts:
+                    # Python Filter
+                    c_name = t.get("customer_name", "")
+                    if not c_name or name_lower not in c_name.lower():
+                        continue
+                        
+                    name = c_name
+                    phone = t.get("caller_phone")
+                    
+                    if not name or not phone: continue
+                    if phone in seen_phones: continue
+                    
+                    # Transform to Customer format
+                    results.append({
+                        "name": name,
+                        "phone": phone,
+                        "tenant_id": tenant_id,
+                        "$id": t.get("$id"), # Use transcript ID as proxy
+                        "source": "transcript", 
+                        "sms_status": t.get("sms_status")
+                    })
+                    seen_phones.add(phone)
+                    
+                    if len(results) >= limit:
+                        break
+                        
+            except Exception as e:
+                logger.warning(f"Transcript fallback search failed: {e}")
+        
+        return results
 
     async def create_customer(self, phone: str, name: str = None, tenant_id: str = "saranda"):
         """Create a new customer profile."""

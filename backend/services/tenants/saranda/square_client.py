@@ -270,7 +270,7 @@ class SquareClient:
                 location_ids=[location_id],
                 query={
                     "filter": {
-                        "state_filter": {"states": ["OPEN", "COMPLETED"]}
+                        "state_filter": {"states": ["OPEN", "COMPLETED", "CANCELED"]}
                     },
                     "sort": {
                         "sort_field": "CREATED_AT",
@@ -280,11 +280,18 @@ class SquareClient:
                 limit=50
             )
             
-            if result.is_error():
-                logger.error(f"Search failed: {result.errors}")
+            # Check for errors property if available
+            errors = getattr(result, 'errors', None)
+            if errors:
+                logger.error(f"Search failed: {errors}")
                 return []
                 
-            orders_data = result.body.orders if hasattr(result.body, 'orders') else []
+            orders_data = result.orders if hasattr(result, 'orders') else []
+            # specific fallback for dict/body
+            if not orders_data and hasattr(result, 'body'):
+                orders_data = result.body.get('orders', [])
+            
+            logger.info(f"debug: found {len(orders_data)} orders to scan for phone {phone}")
             matches = []
             
             for o in orders_data:
@@ -302,10 +309,16 @@ class SquareClient:
                     found_phone = g(recip, "phone_number", "")
                 
                 # Check match (last 9 digits)
-                p1 = "".join(filter(str.isdigit, phone))[-9:]
-                p2 = "".join(filter(str.isdigit, found_phone))[-9:]
-                
-                if p1 and p2 and p1 == p2:
+                if not phone:
+                     # If no phone query, accept all (used for inspection)
+                     is_match = True
+                else:
+                    p1 = "".join(filter(str.isdigit, phone))[-9:]
+                    p2 = "".join(filter(str.isdigit, found_phone))[-9:]
+                    is_match = (p1 and p2 and p1 == p2)
+                    # logger.info(f"Checking Order {g(o,'id')}: {p2} vs Target {p1} -> {is_match}")
+
+                if is_match:
                     tm = g(o, "total_money")
                     amt = g(tm, "amount") if tm else 0
                     
@@ -523,6 +536,35 @@ class SquareClient:
                   if res:
                       cust = res[0]
             
+            # 1b. If no profile found, try searching orders by phone (Guest Order)
+            recent_orders_fallback = []
+            if not cust and phone:
+                 recent_orders_fallback = await self.search_orders_by_phone(phone, limit=5)
+                 if recent_orders_fallback:
+                      # We found orders for this phone, but no profile.
+                      # Return context with customer=None but orders populated.
+                      logger.info(f"Found {len(recent_orders_fallback)} Guest orders for {phone}")
+                      # Skip fetching by customer_id since we have no ID.
+                      # Return immediately with the found orders.
+                      
+                      # Get most recent order
+                      last_order = recent_orders_fallback[0]
+                      
+                      # Format last item for message
+                      def g(obj, k, d=None):
+                           return obj.get(k, d) if isinstance(obj, dict) else getattr(obj, k, d)
+                      line_items = g(last_order, "line_items", [])
+                      last_item = "something"
+                      if line_items:
+                           last_item = g(line_items[0], "name", "something")
+                           
+                      return {
+                           "customer": None, # Guest
+                           "recent_order": last_order,
+                           "recent_orders": recent_orders_fallback,
+                           "last_item": last_item
+                      }
+
             if not cust:
                 return None
             
