@@ -120,9 +120,9 @@ def get_random_greeting(tenant_id: str = "coalcreek") -> str:
     if tenant_id == "saranda":
         greetings = [
             "Good day! You've reached Saranda Cafe and Pizzeria. Calls are recorded for quality assurance. How can I help you today?",
-            "Hello! Thanks for calling Saranda. Just letting you know this call is recorded. What can I get for you?",
-            "Hi there! Saranda Cafe speaking. Please note calls are recorded for quality. Are you after a pickup order or a reservation?",
-            "Welcome to Saranda! This call is recorded for quality training. How may I assist you today?",
+            "Hello! Thanks for calling Saranda. Just letting you know this call is recorded for quality purposes. What can I get for you?",
+            "Hi there! Saranda Cafe speaking. Please note calls are recorded for quality and training purposes. Are you after a pickup order or a reservation?",
+            "Welcome to Saranda! This call is recorded for quality training purposes. How may I assist you today?",
             "Good to hear from you! This is Saranda Cafe. Calls are recorded. What can I do for you?",
         ]
         return random.choice(greetings)
@@ -131,9 +131,9 @@ def get_random_greeting(tenant_id: str = "coalcreek") -> str:
     if tenant_id == "coalcreek":
         greetings = [
             "G'day! Coal Creek Motel, Ovela speaking. Please note this call is recorded for quality and training purposes. How can I help you today?",
-            "Hello! Thanks for calling Coal Creek Motel. Just letting you know this call is recorded for quality and training. What can I do for you?",
-            "Hi there! Coal Creek Motel speaking. Please note calls are recorded for quality and training. Are you after a room or some information?",
-            "Good day! You've reached Coal Creek Motel in Korumburra. Calls are recorded for quality assurance. How can I help?",
+            "Hello! Thanks for calling Coal Creek Motel. Just letting you know this call is recorded for quality and training purposes. What can I do for you?",
+            "Hi there! Coal Creek Motel speaking. Please note calls are recorded for quality and training purposes. Are you after a room or some information?",
+            "Good day! You've reached Coal Creek Motel in Korumburra. Calls are recorded for quality and training purposes. How can I help?",
             "Welcome to Coal Creek Motel! This is Ovela. Please note this call is recorded for quality and training purposes. What can I assist you with?",
         ]
         return random.choice(greetings)
