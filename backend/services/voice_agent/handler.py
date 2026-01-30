@@ -309,7 +309,10 @@ class VoiceAgentHandler:
             logger.warning(f"⚠️ Invalid Voice ID format: {voice_id} - falling back to default")
             voice_id = CARTESIA_VOICE_ID
             
-        logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id})")
+        # Get dynamic speed (multiplier: 1.0 is default, 0.8 is slower)
+        speed = voice_settings.get("speed", 1.0)
+        
+        logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id}) | Speed: {speed}")
         return {
             "provider": {
                 "type": "cartesia",
@@ -317,7 +320,8 @@ class VoiceAgentHandler:
                 "voice": {
                     "mode": "id",
                     "id": voice_id
-                }
+                },
+                "speed": float(speed)
             }
         }
     
