@@ -320,8 +320,7 @@ class VoiceAgentHandler:
                 "voice": {
                     "mode": "id",
                     "id": voice_id
-                },
-                "speed": float(speed)
+                }
             }
         }
     
