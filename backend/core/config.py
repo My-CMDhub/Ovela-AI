@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Ovela AI Backend"
     BACKEND_URL: str = "https://ovela-12c561a30285.herokuapp.com"  # Production URL
+    ENVIRONMENT: str = "production"  # 'demo' or 'production'
 
     # Meta (WhatsApp Cloud API)
     META_ACCESS_TOKEN: str = ""
@@ -52,10 +53,9 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: Optional[str] = ""
     
     # Staff Phone (for transfers)
-    STAFF_PHONE_NUMBER: str = "+61492897718"
+    STAFF_PHONE_NUMBER: str = "+61475677771"
     
     # Demo Settings
-    TENANT_ID: str = "coalcreek"  # Default tenant (coalcreek is production)
     TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
     
     # Phone to Tenant Mapping (Ingress)

@@ -42,11 +42,11 @@ SARANDA_DATA: RestaurantData = {
         "hours": {
             "monday": "CLOSED",
             "tuesday": "4:30 PM - 9:00 PM",
-            "wednesday": "4:30 PM - 9:00 PM",
-            "thursday": "4:30 PM - 9:00 PM",
-            "friday": "4:30 PM - 9:00 PM",
-            "saturday": "11:30 AM - 2:00 PM, 4:30 PM - 9:00 PM",
-            "sunday": "11:30 AM - 2:00 PM, 4:30 PM - 9:00 PM",
+            "wednesday": "16:30 - 21:00",
+            "thursday": "16:30 - 21:00",
+            "friday": "12:00 - 21:00",  # EXTENDED FOR TESTING (Normally 16:30)
+            "saturday": "11:30 - 14:00, 16:30 - 21:00",
+            "sunday": "11:30 - 14:00, 16:30 - 21:00"
         },
         "peak_hours": "5:30 PM - 7:30 PM",
         "kitchen_cutoff": "5 minutes before close",

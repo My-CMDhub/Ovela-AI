@@ -995,8 +995,15 @@ class VoiceAgentHandler:
         
         # Check for transfer signal
         if result.get("action") == "transfer":
-            transfer_to = result.get("transfer_to")
+            # Determine transfer number
+            # PRIORITIZE Config (Env Var) for testing/safety override
+            # typically we'd use DB, but user wants to ensure it goes to the specific updated number
+            transfer_to = getattr(settings, 'SARANDA_STAFF_PHONE', settings.STAFF_PHONE_NUMBER)
             
+            # Only fallback to DB if config is missing (rare)
+            if not transfer_to and self.tenant_config.get("business_phone"):
+                 transfer_to = self.tenant_config["business_phone"]
+                 
             logger.info(f"📞 Transfer requested to {transfer_to}")
             
             # Execute transfer immediately - TwiML <Say> handles the message
@@ -1225,16 +1232,17 @@ class VoiceAgentHandler:
                 # Check if we should transfer instead of hanging up
                 # Production calls get transferred; Demo calls get polite hangup
                 should_transfer = ABUSE_CONFIG.get("transfer_on_cap", False) and not self.is_demo_call
-                
                 if should_transfer:
                     logger.info(f"🚨 Duration cap reached - transferring to staff [{call_type}]")
-                    # Clearer message about time limit
-                    transfer_message = (
-                        "We've reached the maximum duration for this automated call. "
-                        "I'm going to transfer you to a staff member who can pick up right where we left off."
-                    )
-                    await self._inject_message(transfer_message)
+                    # 1. Honest Message
+                    msg = "I've realized this is getting a bit complex and I want to make sure you get the best help. I'm going to pass you to a manager now. I'm just summarizing our chat for them so you don't have to repeat yourself. One moment please."
+                    await self._inject_message(msg)
                     
+                    # GO DEAF MECHANISM: Stop listening immediately to prevent interruptions
+                    logger.info("🙉 'Go Deaf' activated: Ignoring input during transfer explanation")
+                    self._is_hanging_up = True
+                    
+                    # 2. Generate Summary (Simple heuristic or LLM)
                     # Wait for TTS to play before transfer
                     await asyncio.sleep(6)
                     

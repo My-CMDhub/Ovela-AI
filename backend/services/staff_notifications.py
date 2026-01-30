@@ -316,5 +316,45 @@ Reply with:
         except Exception as e:
             logger.error(f"❌ Customer SMS exception for {order_id}: {e}")
             return False
+    async def notify_smart_transfer(
+        self,
+        customer_phone: str,
+        summary: str,
+        reason: str = "Time Limit Reached",
+        tenant_id: str = "saranda"
+    ) -> bool:
+        """
+        Notify staff of an incoming smart transfer.
+        Sends a concisely summarized context via SMS so they know what the call is about.
+        """
+        from services.sms import sms_service
+        
+        try:
+            # 1. Get staff phone for tenant (or default)
+            # In a real app, we'd query DB configuration. For now, using config default.
+            staff_phone = settings.SARANDA_STAFF_PHONE if tenant_id == "saranda" else settings.STAFF_PHONE_NUMBER
+            
+            # Ensure staff phone is cleaned
+            clean_staff_phone = re.sub(r'[^\d+]', '', staff_phone)
+            if not clean_staff_phone.startswith("+"):
+                clean_staff_phone = f"+61{clean_staff_phone.lstrip('0')}"
+            
+            # 2. Build concise message
+            # Limit length to ensure quick delivery and readability
+            short_reason = reason.upper()
+            
+            message = f"🚀 INCOMING TRANSFER ({short_reason})\n\n"
+            message += f"📞 Customer: {customer_phone}\n"
+            message += f"📝 Context: {summary}\n\n"
+            message += "Connecting now..."
+            
+            logger.info(f"📤 Sending Smart Transfer context to {clean_staff_phone}")
+            
+            # 3. Send SMS
+            return await sms_service.send_sms(clean_staff_phone, message, tenant_id=tenant_id)
+            
+        except Exception as e:
+            logger.error(f"❌ Smart Transfer Notification failed: {e}")
+            return False
 
 staff_notification_service = StaffNotificationService()
