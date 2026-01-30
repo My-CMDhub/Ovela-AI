@@ -228,7 +228,7 @@ async def handle_request_change(args: dict, user_phone: str, transfer_to: str, p
             # We assume the AI maintains the state in its context?
             # Actually, if we return "hold" without "order_details", handler might not update.
             # Let's start simple:
-            "message": f"I've updated your order request to include that change ({details}). Getting it ready for the kitchen."
+            "message": f"I've updated your order request to include that change ({details}). Getting it ready for the kitchen.",
             # Implicitly, we might want to flag this. 
             # Ideally, the AI calls 'submit_order' again with the FULL updated list.
             # Let's prompt the AI to do that.

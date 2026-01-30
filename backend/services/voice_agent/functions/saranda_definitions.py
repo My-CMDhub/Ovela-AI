@@ -212,9 +212,6 @@ def get_saranda_functions() -> list:
         # =================================================================
         {
             "name": "flag_off_topic",
-            "description": "Call when customer is wasting time with off-topic behavior: flirting, personal questions, repeated nonsense. System tracks count and guides response.",
-        {
-            "name": "flag_off_topic",
             "description": "Call when customer is off-topic (flirting, personal questions) OR complementary (e.g. 'you are sweet'). System handles each appropriately (warnings for abuse, polite thanks for compliments).",
             "parameters": {
                 "type": "object",
