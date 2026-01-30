@@ -660,162 +660,155 @@ async def lookup_customer(args: dict, user_phone: str) -> dict:
     """
     Lookup customer by name/phone.
     Strategy:
-    1. PMS Lookup (Square) by Phone (Source of Truth)
-    2. Appwrite Lookup by Name (Fallback / Legacy)
+    1. Phone Search (Caller ID or Explicit Args) - Primary & Fastest
+    2. Name Search (Fallback) - Only if phone yields no result or bad match.
     """
     name_query = args.get("name", "").strip()
     
-    # 1. PMS Lookup (Square) - Primary
-    # Check if LLM extracted a specific phone number (e.g. user provided it)
-    # Otherwise use the Caller ID
+    # Check if a specific phone was provided in args, else use Caller ID
     search_phone = args.get("phone")
+    
     if not search_phone and user_phone:
         search_phone = user_phone
         
     try:
         square_client = SquareClient()
         cust = None
-        source_note = ""
         
-        # A. Try Phone Search (Fastest)
+        # --- STEP 1: Try Phone Search ---
         if search_phone:
             # Normalize Phone (E.164)
-            # Remove spaces, dashes, parentheses
-            clean_phone = "".join(filter(str.isdigit, search_phone))
+            # BUG FIX: filter(str.isdigit) strips '+', so we must handle it carefully
+            raw_clean = "".join(filter(lambda x: x.isdigit() or x == '+', search_phone))
+            clean_phone = raw_clean
             
-            # Handle Australian formatting
+            # AU Logic
             if clean_phone.startswith("04") and len(clean_phone) == 10:
                 clean_phone = "+61" + clean_phone[1:]
-            elif clean_phone.startswith("4") and len(clean_phone) == 9: # missing leading 0
-                clean_phone = "+61" + clean_phone
-            elif not clean_phone.startswith("+"):
-                # If no country code, and looks like mobile, assume +61
-                if len(clean_phone) == 9 or len(clean_phone) == 10:
-                     clean_phone = "+61" + clean_phone[-9:]
+            elif clean_phone.startswith("61") and len(clean_phone) == 11:
+                 clean_phone = "+" + clean_phone
+            elif not clean_phone.startswith("+") and len(clean_phone) == 9:
+                 clean_phone = "+61" + clean_phone
 
             logger.info(f"🔍 Searching Square by Phone: {clean_phone} (raw: {search_phone})")
-
             context = await square_client.get_customer_context(clean_phone)
+            
             if context and context.get("customer"):
                 cust = context["customer"]
-                # Re-map context structure to flat object if needed
-                pass 
                 
-        # B. Try Name Search (Scanning) if no phone result
-        if not cust and name_query:
-            # We use search_customers directly for name scan
-            matches = await square_client.search_customers(name=name_query, limit=1)
-            if matches:
-                c_obj = matches[0]
-                # Convert object to dict for consistency with context
-                cust = {
-                    "id": c_obj.id,
-                    "given_name": c_obj.given_name,
-                    "family_name": c_obj.family_name,
-                    "phone": c_obj.phone_number
+                # Check for Name Mismatch (Smart Identity)
+                found_name = f"{cust.given_name} {cust.family_name}".strip()
+                
+                # If name was provided and matches loosely, it's a strong verify.
+                if name_query and name_query.lower() in found_name.lower():
+                     return {
+                        "found": True,
+                        "customer_id": cust.id,
+                        "name": found_name,
+                        "phone": cust.phone_number,
+                        "recent_order": context.get("recent_order"),
+                        "message": f"Welcome back {cust.given_name}. I see you ordered {context.get('last_item', 'recently')}. Same again?"
+                    }
+                
+                # If name provided but doesn't match, ask for confirmation
+                if name_query:
+                     return {
+                        "found": True,
+                        "customer_id": cust.id,
+                        "name": found_name,
+                        "phone": cust.phone_number,
+                        "recent_order": context.get("recent_order"),
+                        "message": f"I see this number is registered to {cust.given_name}. Is that you, or are you ordering for someone else?"
+                    }
+                
+                # No name provided, just return found profile
+                return {
+                    "found": True,
+                    "customer_id": cust.id,
+                    "name": found_name,
+                    "phone": cust.phone_number,
+                    "recent_order": context.get("recent_order"),
+                    "message": f"Hi {cust.given_name}, welcome back."
                 }
-                source_note = " (found by name)"
 
-        if cust:
-            given = cust.get("given_name", "")
-            family = cust.get("family_name", "")
-            full_name = f"{given} {family}".strip()
+        # --- STEP 2: Name Search (Fallback) ---
+        # Only reachable if Step 1 failed (no profile for phone) AND we have a name
+        if not cust and name_query:
+            logger.info(f"🔍 Searching Square by Name: {name_query}")
+            matches = await square_client.search_customers(name=name_query, limit=5)
             
-            # Get recent orders for this customer ID (independent of how we found them)
-            # We can't use context['recent_orders'] if we found by name, so we fetch afresh
-            orders = []
-            
-            # If we already have context from phone search, use it
-            if 'context' in locals() and context and context.get("customer") and context["customer"].get("id") == cust["id"]:
-                orders = context.get("recent_orders", [])
-            
-            # If no orders yet (e.g. found by name, or phone search failed but name search succeeded), fetch now
-            if not orders:
-                 # Fetch context explicitly using the FOUND customer ID
-                 # This is more reliable than phone if we just found them by name
-                 logger.info(f"Fetching context for Customer ID: {cust['id']}")
-                 ctx = await square_client.get_customer_context(customer_id=cust['id'])
-                 if ctx:
-                     orders = ctx.get("recent_orders", [])
-
-            # Format recent history
-            history_msg = ""
-            if orders:
-                last = orders[0]
-                # Format: "Last order was 2x Pizza, 1x Coke ($30) - Cooking"
-                # Use simplified status if possible
-                status = last['fulfillment_status']
-                if status == "PROPOSED": status = "Pending Approval"
+            if not matches:
+                 return {
+                    "found": False,
+                    "message": "I couldn't find a profile with that name. Would you like to create a new order?"
+                }
                 
-                history_msg = f". Last order: {last['items']} (${last['total']:.2f}) is {status}"
-                if last.get("reference_id"):
-                     ref = last["reference_id"].replace("ovela:", "")
-                     history_msg += f". Ref: {ref}"
+            # Filter matches carefully
+            if len(matches) == 1:
+                cust = matches[0]
+                masked = cust.phone_number[-3:] if cust.phone_number and len(cust.phone_number) >= 3 else "..."
+                return {
+                    "found": True,
+                    "customer_id": cust.id,
+                    "name": f"{cust.given_name} {cust.family_name}".strip(),
+                    "message": f"I found one {cust.given_name}. Just to check, is your number ending in {masked}?"
+                }
+                
+            elif len(matches) > 1:
+                # Ambiguity handling
+                options_str = ", ".join([f"{c.given_name} {c.family_name}" for c in matches[:3]])
+                return {
+                    "found": True, 
+                    "count": len(matches),
+                    "message": f"I found a few people called {name_query}. Could you give me your mobile number so I can find the right one?"
+                }
+
+        # --- STEP 3: Appwrite DB Search (Fallback) ---
+        # Only reachable if Square failed to find anyone by Phone OR Name
+        if name_query:
+            logger.info(f"🔍 Falling back to Appwrite DB Search: {name_query}")
+            # Tenant ID is implicitly Saranda for this handler
+            customers = await db_service.find_customers_by_name(name_query, "saranda")
             
-            return {
-                "found": True,
-                "source": "pms",
-                "customer": {
-                        "name": full_name,
-                        "id": cust["id"],
-                        "phone": cust.get("phone", "")
-                },
-                "message": f"I found you in our system{source_note}{history_msg}. Is that right?"
-            }
+            if customers:
+                if len(customers) == 1:
+                    cust = customers[0]
+                    phone = cust.get("phone", "")
+                    masked = phone[-3:] if len(phone) >= 3 else "..."
+                    return {
+                        "found": True,
+                        "source": "db",
+                        "customer": {
+                            "name": cust.get("name"),
+                            "phone": phone,
+                            "id": cust.get("$id")
+                        },
+                        "message": f"I found {cust.get('name')} in our records. Is that you?"
+                    }
+                else:
+                    # Multiple matches
+                    options = []
+                    for c in customers[:3]:
+                        p = c.get("phone", "")
+                        m = p[-3:] if len(p) >= 3 else ""
+                        options.append(f"{c.get('name')} (...{m})")
+                    return {
+                        "found": True,
+                        "count": len(customers),
+                        "message": f"I found a few people named {name_query}: {', '.join(options)}. Which one is you?"
+                    }
+
+        return {
+            "found": False,
+            "message": "I couldn't find your details. May I have your name again?"
+        }
 
     except Exception as e:
-        logger.error(f"PMS Lookup failed: {e}")
-        # Fallthrough to DB
-    
-    # 2. Appwrite Lookup (Name Search) - Fallback
-    if not name_query:
-         return {
-            "found": False,
-            "message": "I didn't catch the name. Could you repeat it?"
-        }
-        
-    # Tenant ID is implicitly Saranda
-    tenant_id = "saranda" 
-    
-    customers = await db_service.find_customers_by_name(name_query, tenant_id)
-    
-    if not customers:
+        logger.error(f"Customer lookup failed: {e}")
         return {
             "found": False,
-            "message": f"I couldn't find anyone named '{name_query}'. Is this your first time ordering with us?"
+            "message": "I couldn't find a matching profile. Could I get your name again?"
         }
-    
-    if len(customers) == 1:
-        cust = customers[0]
-        phone = cust.get("phone", "")
-        masked = phone[-3:] if len(phone) >= 3 else phone
-        return {
-            "found": True,
-            "source": "db",
-            "count": 1,
-            "customer": {
-                "name": cust.get("name"),
-                "phone_masked": masked,
-                "id": cust.get("$id"),
-                "phone": phone 
-            },
-            "message": f"I found {cust.get('name')} ending in {masked} in our records. Is that you?"
-        }
-        
-    # Multiple matches
-    options = []
-    for cust in customers[:3]:
-        phone = cust.get("phone", "")
-        masked = phone[-3:] if len(phone) >= 3 else phone
-        options.append(f"{cust.get('name')} (...{masked})")
-        
-    options_str = " or ".join(options)
-    
-    return {
-        "found": True,
-        "count": len(customers),
-        "message": f"I found a few people with that name: {options_str}. Which one is you? or what is your phone number?"
-    }
 
 
 # =============================================================================

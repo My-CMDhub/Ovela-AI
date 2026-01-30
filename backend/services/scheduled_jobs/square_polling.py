@@ -104,6 +104,7 @@ async def square_polling_job():
 
                 # === ROBUSTNESS: DUPLICATE CHECK & LOCK ===
                 # 1. Check/Lock DB before sending anything
+                # If we have a call_id, verify we haven't already processed this outcome
                 if req.call_id and (req.call_id.startswith("CA") or req.call_id.startswith("SIM")):
                     try:
                         # Try to get existing log
@@ -121,12 +122,18 @@ async def square_polling_job():
                             doc_id = log.get("$id")
                             existing_outcome = log.get("outcome", "")
                             
-                            # If already finalized or processing, SKIP
+                            # If already finalized or processing with SAME status, SKIP
+                            # e.g. "Order Approved" -> don't send again
+                            if status_label.title() in existing_outcome:
+                                logger.info(f"🚫 Skipping duplicate notification for {req.request_id} (Already {existing_outcome})")
+                                continue
+                                
+                            # If outcome suggests final state (and different?), usually we respect the first final state
                             if "Order" in existing_outcome and existing_outcome != "Order Pending":
                                 logger.info(f"🚫 Skipping duplicate notification for {req.request_id} (Outcome: {existing_outcome})")
                                 continue
                         else:
-                            # If not found (SIM order), create it immediately as "Processing" to lock it
+                            # If not found (Likely SIM order not yet logged), create it immediately as "Processing" to lock it
                             # If this fails with 409, it means another thread beat us to it -> SKIP
                             try:
                                 result = await db_service.save_call_transcript(
@@ -135,7 +142,7 @@ async def square_polling_job():
                                      caller_phone=req.customer_phone,
                                      transcript=json.dumps([{"role": "system", "content": f"Simulator Order: {req.items_summary}"}]),
                                      duration=0,
-                                     status=f"Order {status_label.title()} (Processing)", # Lock state
+                                     status=f"Order {status_label.title()}", # Lock state immediately
                                      booking_ref=req.square_order_id,
                                      customer_name=req.customer_name or "Simulator User",
                                      call_summary=f"Simulated Order {status_label}",
@@ -152,13 +159,9 @@ async def square_polling_job():
 
                     except Exception as e:
                         logger.warning(f"⚠️ Failed duplicate check for {req.call_id}: {e}")
-                        # If we can't verify DB, we rarely might want to fail-safe, but here we proceed carefully? 
-                        # No, assume safer to skip if DB is down to avoid spam? 
-                        # Let's proceed only if we have a lock or existing doc to update.
-                        if not doc_id:
-                             # If we can't lock, don't send SMS? 
-                             # For now, let's log and continue, but typically we should return.
-                             pass
+                        # Proceed cautiously or skip? 
+                        # If DB is down, we risk spamming. Better to skip.
+                        pass
 
                 # 2. Send Customer SMS
                 sms_sent = await staff_notification_service.send_customer_order_confirmation(
