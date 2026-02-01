@@ -7,6 +7,7 @@ import { PhoneCall } from "@/components/animate-ui/icons/phone-call"
 import { Sparkles } from "@/components/animate-ui/icons/sparkles"
 import { ClipboardList } from "@/components/animate-ui/icons/clipboard-list"
 import { CircleCheckBig } from "@/components/animate-ui/icons/circle-check-big"
+import { Check, CreditCard, Workflow, ShieldCheck } from "lucide-react"
 
 const painPoints = [
   {
@@ -55,32 +56,45 @@ const solutionSteps = [
     detailLabel: "response time",
     Icon: PhoneCall,
     mockup: (isActive: boolean) => (
-      <div className="space-y-2" key={isActive ? "active" : "inactive"}>
-        <div className="flex items-center gap-2">
+      <div className="w-full max-w-sm mx-auto p-4 rounded-xl bg-background border border-border shadow-lg" key={isActive ? "active" : "inactive"}>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center text-green-500">
+              <PhoneCall size={20} />
+            </div>
+            <div>
+              <div className="text-sm font-medium">Incoming Call</div>
+              <div className="text-xs text-muted-foreground">+61 400 123 456</div>
+            </div>
+          </div>
           <motion.div
-            animate={isActive ? { scale: [1, 1.2, 1] } : { scale: 1 }}
-            transition={{ duration: 1.5, repeat: isActive ? Infinity : 0 }}
-            className="w-3 h-3 rounded-full bg-accent"
+            animate={{ scale: [1, 1.2, 1], opacity: [0.5, 1, 0.5] }}
+            transition={{ duration: 1.5, repeat: Infinity }}
+            className="w-2 h-2 rounded-full bg-green-500"
           />
-          <span className="text-xs text-muted-foreground">Incoming call...</span>
         </div>
+
         {isActive && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.3, delay: 0.5 }}
-            className="text-xs font-medium"
-          >
-            {/* Typewriter effect */}
-            <motion.span
-              initial={{ width: 0 }}
-              animate={{ width: "100%" }}
-              transition={{ duration: 1.5, delay: 0.8, ease: "linear" }}
-              className="inline-block overflow-hidden whitespace-nowrap"
-            >
-              "Hi, do you have availability?"
-            </motion.span>
-          </motion.div>
+          <div className="bg-muted/30 rounded-lg p-3 space-y-2">
+            <div className="flex gap-2">
+              <div className="w-1 h-8 rounded-full bg-accent/30" />
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.3, delay: 0.2 }}
+                className="text-sm font-medium leading-relaxed"
+              >
+                <motion.span
+                  initial={{ width: 0 }}
+                  animate={{ width: "100%" }}
+                  transition={{ duration: 1.5, delay: 0.4, ease: "linear" }}
+                  className="inline-block overflow-hidden whitespace-nowrap"
+                >
+                  "Hi, do you have a room for 2 people on the 24th?"
+                </motion.span>
+              </motion.div>
+            </div>
+          </div>
         )}
       </div>
     ),
@@ -93,52 +107,33 @@ const solutionSteps = [
     detailLabel: "context aware",
     Icon: Sparkles,
     mockup: (isActive: boolean) => (
-      <div className="space-y-1.5" key={isActive ? "active" : "inactive"}>
-        {/* Processing indicator - only shows when active */}
-        {isActive && (
-          <motion.div
-            initial={{ opacity: 1 }}
-            animate={{ opacity: 0 }}
-            transition={{ duration: 0.3, delay: 1.5 }}
-            className="flex items-center gap-1 text-xs text-muted-foreground"
-          >
-            <motion.div
-              animate={{ opacity: [0.3, 1, 0.3] }}
-              transition={{ duration: 1, repeat: Infinity }}
-              className="w-1 h-1 rounded-full bg-accent"
-            />
-            <motion.div
-              animate={{ opacity: [0.3, 1, 0.3] }}
-              transition={{ duration: 1, repeat: Infinity, delay: 0.2 }}
-              className="w-1 h-1 rounded-full bg-accent"
-            />
-            <motion.div
-              animate={{ opacity: [0.3, 1, 0.3] }}
-              transition={{ duration: 1, repeat: Infinity, delay: 0.4 }}
-              className="w-1 h-1 rounded-full bg-accent"
-            />
-            <span className="ml-1">Processing...</span>
-          </motion.div>
-        )}
+      <div className="w-full max-w-sm mx-auto p-4 rounded-xl bg-background border border-border shadow-lg" key={isActive ? "active" : "inactive"}>
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles className="text-accent w-4 h-4" />
+          <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Intent Extraction</span>
+        </div>
 
-        {/* Data extraction - sequential reveal */}
-        {["Service: Hair Cut", "Time: Tomorrow 2pm", "Intent: Booking"].map((item, i) => (
-          <motion.div
-            key={item}
-            initial={{ opacity: 0, x: -10 }}
-            animate={isActive ? { opacity: 1, x: 0 } : { opacity: 0, x: -10 }}
-            transition={{ delay: isActive ? 0.5 + i * 0.4 : 0, duration: 0.4 }}
-            className="flex items-center gap-2 text-xs"
-          >
+        {/* Context Cards */}
+        <div className="space-y-2">
+          {[
+            { label: "Intent", value: "New Booking", color: "text-blue-500 bg-blue-500/10" },
+            { label: "Date", value: "Oct 24", color: "text-purple-500 bg-purple-500/10" },
+            { label: "Guests", value: "2 Adults", color: "text-orange-500 bg-orange-500/10" }
+          ].map((item, i) => (
             <motion.div
-              initial={{ scale: 0 }}
-              animate={isActive ? { scale: 1 } : { scale: 0 }}
-              transition={{ delay: isActive ? 0.5 + i * 0.4 : 0, type: "spring", stiffness: 300 }}
-              className="w-1 h-1 rounded-full bg-accent"
-            />
-            <span className="text-muted-foreground">{item}</span>
-          </motion.div>
-        ))}
+              key={item.label}
+              initial={{ opacity: 0, x: -10 }}
+              animate={isActive ? { opacity: 1, x: 0 } : { opacity: 0, x: -10 }}
+              transition={{ delay: isActive ? 0.3 + i * 0.2 : 0, duration: 0.4 }}
+              className="flex items-center justify-between p-2 rounded-lg bg-muted/20 border border-border/50"
+            >
+              <span className="text-xs text-muted-foreground">{item.label}</span>
+              <span className={`text-xs font-medium px-2 py-0.5 rounded ${item.color}`}>
+                {item.value}
+              </span>
+            </motion.div>
+          ))}
+        </div>
       </div>
     ),
   },
@@ -150,78 +145,82 @@ const solutionSteps = [
     detailLabel: "calendar + CRM",
     Icon: ClipboardList,
     mockup: (isActive: boolean) => (
-      <div className="relative" key={isActive ? "active" : "inactive"}>
-        <div className="grid grid-cols-3 gap-1.5">
-          {["1pm", "2pm", "3pm"].map((time, i) => (
+      <div className="w-full max-w-md mx-auto p-4 rounded-xl bg-background border border-border shadow-lg" key={isActive ? "active" : "inactive"}>
+        <div className="flex items-center justify-between mb-4 border-b border-border/50 pb-2">
+          <span className="text-xs font-medium text-muted-foreground">Availability Scan</span>
+          <div className="flex gap-1">
+            <div className="w-2 h-2 rounded-full bg-red-400" />
+            <div className="w-2 h-2 rounded-full bg-yellow-400" />
+            <div className="w-2 h-2 rounded-full bg-green-400" />
+          </div>
+        </div>
+
+        {/* Calendar Date Scanning Animation */}
+        <div className="grid grid-cols-4 gap-2">
+          {[
+            { date: "Oct 22", status: "booked" },
+            { date: "Oct 23", status: "booked" },
+            { date: "Oct 24", status: "available" }, // Target
+            { date: "Oct 25", status: "available" },
+          ].map((slot, i) => (
             <motion.div
-              key={time}
-              animate={
-                isActive
-                  ? {
-                    // Hover effect: border changes when cursor is over
-                    borderColor:
-                      i === 0
-                        ? ["hsl(var(--border))", "hsl(var(--accent))", "hsl(var(--border))", "hsl(var(--border))"]
-                        : i === 1
-                          ? ["hsl(var(--border))", "hsl(var(--border))", "hsl(var(--accent))", "hsl(var(--accent))"]
-                          : "hsl(var(--border))",
-                    backgroundColor:
-                      i === 1
-                        ? ["transparent", "transparent", "hsl(var(--accent) / 0.1)", "hsl(var(--accent) / 0.1)"]
-                        : "transparent",
-                    // Click effect on 2pm
-                    scale: i === 1 ? [1, 1, 1, 0.95, 1] : 1,
-                  }
-                  : {
-                    borderColor: "hsl(var(--border))",
-                    backgroundColor: "transparent",
-                    scale: 1,
-                  }
-              }
+              key={i}
+              animate={isActive ? {
+                scale: slot.date === "Oct 24" ? [1, 1.1, 1] : 1,
+                borderColor: slot.date === "Oct 24" ? ["transparent", "hsl(var(--accent))", "hsl(var(--accent))"] : "transparent",
+                backgroundColor: slot.date === "Oct 24" ? ["transparent", "hsl(var(--accent) / 0.1)", "hsl(var(--accent) / 0.1)"] : "transparent"
+              } : {}}
               transition={{
-                duration: 3,
-                times: i === 0 ? [0, 0.3, 0.5, 1] : i === 1 ? [0, 0.3, 0.6, 0.7, 0.75] : [0, 1],
-                ease: "easeInOut",
+                scale: { delay: 1.5, duration: 0.4 },
+                borderColor: { delay: 1.5, duration: 0.4 },
+                backgroundColor: { delay: 1.5, duration: 0.4 }
               }}
-              className="border rounded p-1.5 text-center relative"
+              className="relative overflow-hidden flex flex-col items-center justify-center p-3 rounded border border-transparent transition-colors"
             >
-              <div className="text-[10px] font-medium">{time}</div>
-              {i === 1 && isActive && (
+              {/* Scanning beam effect */}
+              {isActive && (
                 <motion.div
-                  initial={{ opacity: 0, scale: 0.8 }}
+                  initial={{ top: "-100%" }}
+                  animate={{ top: "200%" }}
+                  transition={{ duration: 1, delay: i * 0.2, ease: "linear" }}
+                  className="absolute left-0 right-0 h-1/2 bg-gradient-to-b from-transparent via-accent/10 to-transparent pointer-events-none"
+                />
+              )}
+
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{slot.date}</span>
+              <span className={`text-xs font-bold mt-1 ${slot.status === "available" ? "text-foreground" : "text-muted-foreground/50 line-through"
+                }`}>
+                {slot.status === "booked" ? "Booked" : "Open"}
+              </span>
+
+              {/* Selection Check for Oct 24 */}
+              {slot.date === "Oct 24" && isActive && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0 }}
                   animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 2.3, duration: 0.2, type: "spring" }}
-                  className="text-[8px] text-accent mt-0.5 font-medium"
+                  transition={{ delay: 1.8, type: "spring" }}
+                  className="absolute -top-1 -right-1 w-4 h-4 bg-accent rounded-full flex items-center justify-center"
                 >
-                  Open
+                  <Check size={10} className="text-white" />
                 </motion.div>
               )}
             </motion.div>
           ))}
         </div>
 
-        {/* Animated cursor pointer - hovers through each slot realistically */}
-        {isActive && (
-          <motion.div
-            initial={{ opacity: 0, x: -20, y: 5 }}
-            animate={{
-              opacity: [0, 1, 1, 1, 1, 1, 0],
-              x: [-20, 8, 8, 43, 43, 43, 43],
-              y: [5, 5, 5, 5, 5, 5, 5],
-            }}
-            transition={{
-              duration: 3,
-              times: [0, 0.15, 0.45, 0.55, 0.85, 0.95, 1],
-              ease: "easeInOut",
-            }}
-            className="absolute pointer-events-none z-10"
-            style={{ left: "0", top: "50%", transform: "translateY(-50%)" }}
-          >
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-foreground drop-shadow-lg">
-              <path d="M2 2L10 7L6 10L2 2Z" fill="currentColor" stroke="white" strokeWidth="0.5" />
-            </svg>
-          </motion.div>
-        )}
+        <div className="mt-3 text-center">
+          {isActive && (
+            <motion.div
+              initial={{ opacity: 0, y: 5 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 2.0 }}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-accent/10 border border-accent/20 text-[10px] font-medium text-accent"
+            >
+              <Check size={10} />
+              Availability Confirmed
+            </motion.div>
+          )}
+        </div>
       </div>
     ),
   },
@@ -233,53 +232,43 @@ const solutionSteps = [
     detailLabel: "SMS + calendar",
     Icon: CircleCheckBig,
     mockup: (isActive: boolean) => (
-      <div className="space-y-2" key={isActive ? "active" : "inactive"}>
-        {isActive && (
-          <>
-            <motion.div
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: "spring", stiffness: 200, delay: 0.2 }}
-              className="flex items-center gap-2"
-            >
-              <motion.div
-                initial={{ rotate: -90 }}
-                animate={{ rotate: 0 }}
-                transition={{ type: "spring", stiffness: 200, delay: 0.4 }}
-                className="w-4 h-4 rounded-full bg-accent/20 flex items-center justify-center"
-              >
-                <motion.svg
-                  viewBox="0 0 16 16"
-                  className="w-2.5 h-2.5 text-accent"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  initial={{ pathLength: 0 }}
-                  animate={{ pathLength: 1 }}
-                  transition={{ duration: 0.4, delay: 0.6 }}
-                >
-                  <motion.path d="M3 8l3 3 7-7" />
-                </motion.svg>
-              </motion.div>
-              <motion.span
-                initial={{ opacity: 0, x: -5 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.7, duration: 0.3 }}
-                className="text-xs font-medium text-accent"
-              >
-                Confirmed!
-              </motion.span>
-            </motion.div>
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 1, duration: 0.3 }}
-              className="text-[10px] text-muted-foreground"
-            >
-              Tomorrow at 2:00 PM
-            </motion.div>
-          </>
-        )}
+      <div className="w-full max-w-sm mx-auto" key={isActive ? "active" : "inactive"}>
+        <motion.div
+          initial={{ scale: 0.9, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="bg-background border border-green-500/20 shadow-xl shadow-green-500/5 rounded-2xl p-6 text-center"
+        >
+          <motion.div
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ type: "spring", stiffness: 200, delay: 0.2 }}
+            className="w-16 h-16 mx-auto bg-green-500 rounded-full flex items-center justify-center mb-4 text-white shadow-lg shadow-green-500/30"
+          >
+            <Check className="w-8 h-8" strokeWidth={3} />
+          </motion.div>
+
+          <h4 className="text-lg font-semibold mb-1">Booking Confirmed</h4>
+          <p className="text-sm text-muted-foreground mb-4">Confirmation sent to guest.</p>
+
+          <motion.div
+            initial={{ y: 10, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            transition={{ delay: 0.5 }}
+            className="bg-muted/40 rounded-xl p-4 text-left border border-border/50"
+          >
+            <div className="flex gap-3 items-start">
+              <div className="w-8 h-8 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
+                <span className="text-[10px] font-bold text-blue-500">SMS</span>
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-foreground font-medium">Ovela Motel</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Hi! Your booking for <span className="text-foreground font-medium">Oct 24</span> is confirmed. Check-in is at 2pm. Reply HELP for info.
+                </p>
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
       </div>
     ),
   },
@@ -397,147 +386,145 @@ export function ProblemSolution() {
             Ovela handles every call with natural conversation, turning inquiries into confirmed appointments.
           </p>
 
-          {/* Desktop: Horizontal Flow */}
-          <div className="hidden md:grid md:grid-cols-4 gap-6">
-            {solutionSteps.map((item, index) => (
-              <motion.div
-                key={item.step}
-                initial={{ opacity: 0, y: 30 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ duration: 0.5, delay: index * 0.1 }}
-                onMouseEnter={() => setActiveStep(index)}
-                className="relative group"
-              >
-                {/* Connecting line */}
-                {index < solutionSteps.length - 1 && (
-                  <div className="absolute top-12 left-[calc(50%+32px)] w-[calc(100%-32px)] h-[2px] bg-border/50 z-0">
-                    <motion.div
-                      className="h-full bg-accent origin-left"
-                      initial={{ scaleX: 0 }}
-                      animate={{ scaleX: activeStep > index ? 1 : 0 }}
-                      transition={{ duration: 0.5, delay: 0.2 }}
-                    />
-                  </div>
-                )}
-
+          {/* Desktop: Premium Cinema Layout */}
+          <div className="hidden md:block">
+            {/* Step Indicators */}
+            <div className="grid grid-cols-4 gap-4 mb-12">
+              {solutionSteps.map((item, index) => (
                 <div
-                  className={`relative bg-background border rounded-2xl p-6 transition-all duration-500 ${activeStep === index ? "border-accent shadow-lg shadow-accent/10" : "border-border/50"
-                    }`}
+                  key={item.step}
+                  onMouseEnter={() => setActiveStep(index)}
+                  className="cursor-pointer group"
                 >
-                  {/* Step number badge */}
-                  <div
-                    className={`absolute -top-3 -right-3 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${activeStep >= index ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground"
-                      }`}
-                  >
-                    {item.step}
-                  </div>
+                  <div className={`h-[2px] w-full rounded-full mb-6 transition-all duration-500 ${activeStep === index
+                    ? "bg-accent"
+                    : activeStep > index
+                      ? "bg-accent/50"
+                      : "bg-border"
+                    }`} />
 
-                  {/* Icon */}
-                  <motion.div
-                    animate={{ scale: activeStep === index ? 1.1 : 1 }}
-                    transition={{ duration: 0.3 }}
-                    className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-5 transition-all duration-300 ${activeStep === index ? "bg-accent/20" : "bg-muted"
-                      }`}
-                  >
-                    <item.Icon
-                      size={28}
-                      className={`transition-colors duration-300 ${activeStep === index ? "text-accent" : "text-muted-foreground"
-                        }`}
-                      animate={activeStep === index}
-                      animation="default"
-                      loop={true}
-                    />
-                  </motion.div>
-
-                  <h3 className="font-serif text-xl mb-2">{item.title}</h3>
-                  <p className="text-sm text-muted-foreground mb-5">{item.description}</p>
-
-                  {/* Visual Mockup */}
-                  <div className="mb-5 p-3 rounded-lg bg-muted/30 border border-border/50 min-h-[120px] flex items-center">
-                    {item.mockup(activeStep === index)}
-                  </div>
-
-                  {/* Stats - matching Problem section style */}
-                  <div className="pt-5 border-t border-border/30">
-                    <div className="flex items-end gap-2">
-                      <motion.span
-                        animate={{ opacity: activeStep === index ? 1 : 0.5 }}
-                        className="font-serif text-3xl text-accent"
-                      >
-                        {item.detail}
-                      </motion.span>
-                      <span className="text-xs text-muted-foreground mb-1">{item.detailLabel}</span>
+                  <div className={`flex items-start gap-4 transition-opacity duration-300 ${activeStep === index ? "opacity-100" : "opacity-40 hover:opacity-70"
+                    }`}>
+                    <div className={`p-3 rounded-xl transition-colors duration-300 ${activeStep === index ? "bg-accent/10 text-accent" : "bg-muted text-muted-foreground"
+                      }`}>
+                      <item.Icon size={24} />
+                    </div>
+                    <div>
+                      <h3 className="font-serif text-lg mb-1">{item.title}</h3>
+                      <p className="text-sm text-muted-foreground leading-snug">{item.description}</p>
                     </div>
                   </div>
-
-                  {/* Progress bar - matching Problem section */}
-                  <AnimatePresence>
-                    {activeStep === index && (
-                      <motion.div
-                        initial={{ scaleX: 0 }}
-                        animate={{ scaleX: 1 }}
-                        exit={{ scaleX: 0 }}
-                        transition={{ duration: 3.5, ease: "linear" }}
-                        className="absolute bottom-0 left-0 right-0 h-[2px] bg-accent origin-left"
-                        style={{ borderBottomLeftRadius: "1rem", borderBottomRightRadius: "1rem" }}
-                      />
-                    )}
-                  </AnimatePresence>
                 </div>
-              </motion.div>
-            ))}
+              ))}
+            </div>
+
+            {/* Main Visual Stage */}
+            <div className="relative rounded-3xl border border-border/40 bg-gradient-to-br from-background/50 to-muted/20 overflow-hidden backdrop-blur-sm h-[400px] shadow-2xl shadow-black/5 dark:shadow-black/20 dark:border-white/10">
+              {/* Grid Background - Visible in both modes */}
+              <div className="absolute inset-0 bg-grid-black/[0.02] dark:bg-grid-white/[0.02]" />
+
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={activeStep}
+                  initial={{ opacity: 0, scale: 0.98, filter: "blur(4px)" }}
+                  animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+                  exit={{ opacity: 0, scale: 1.02, filter: "blur(4px)" }}
+                  transition={{ duration: 0.4, ease: "easeOut" }}
+                  className="absolute inset-0 flex items-center justify-center p-8 sm:p-12"
+                >
+                  <div className="w-full max-w-lg transform-gpu">
+                    {solutionSteps[activeStep].mockup(true)}
+                  </div>
+                </motion.div>
+              </AnimatePresence>
+
+              {/* Formatting the detail/stat for the stage */}
+              <div className="absolute bottom-6 right-6 flex items-end gap-3 px-5 py-2.5 rounded-full bg-background/80 border border-border/50 backdrop-blur-md shadow-sm">
+                <span className="font-serif text-2xl text-accent">
+                  {solutionSteps[activeStep].detail}
+                </span>
+                <span className="text-[10px] text-muted-foreground mb-1.5 uppercase tracking-wider font-medium">
+                  {solutionSteps[activeStep].detailLabel}
+                </span>
+              </div>
+            </div>
           </div>
 
-          {/* Mobile: Vertical Stack */}
-          <div className="md:hidden space-y-4">
+          {/* Mobile: Clean Vertical Timeline */}
+          <div className="md:hidden space-y-8 pl-4 border-l-2 border-border/30 ml-4">
             {solutionSteps.map((item, index) => (
-              <motion.div
-                key={item.step}
-                initial={{ opacity: 0, x: -20 }}
-                whileInView={{ opacity: 1, x: 0 }}
-                viewport={{ once: true, margin: "-50px" }}
-                transition={{ duration: 0.4, delay: index * 0.1 }}
-                className="relative"
-              >
-                {/* Vertical connecting line */}
-                {index < solutionSteps.length - 1 && (
-                  <div className="absolute left-7 top-[72px] w-[2px] h-4 bg-accent/30" />
-                )}
-
-                <div className="bg-background border border-border/50 rounded-2xl p-5 space-y-4">
-                  <div className="flex items-start gap-4">
-                    {/* Icon */}
-                    <div className="shrink-0 w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center">
-                      <item.Icon size={26} className="text-accent" animation="default" loop />
-                    </div>
-
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs font-bold text-accent">Step {item.step}</span>
-                      </div>
-                      <h3 className="font-serif text-lg mb-1">{item.title}</h3>
-                      <p className="text-sm text-muted-foreground">{item.description}</p>
-                    </div>
-                  </div>
-
-                  {/* Visual Mockup */}
-                  <div className="p-3 rounded-lg bg-muted/30 border border-border/50 min-h-[70px] flex items-center">
-                    {item.mockup(true)}
-                  </div>
-
-                  {/* Stats */}
-                  <div className="pt-4 border-t border-border/30">
-                    <div className="flex items-end gap-2">
-                      <span className="font-serif text-3xl text-accent">{item.detail}</span>
-                      <span className="text-xs text-muted-foreground mb-1">{item.detailLabel}</span>
-                    </div>
-                  </div>
+              <div key={item.step} className="relative pl-8">
+                {/* Timeline dot */}
+                <div className={`absolute -left-[1.2rem] top-0 w-8 h-8 rounded-full border-4 border-background flex items-center justify-center transition-colors ${activeStep === index ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground"
+                  }`}>
+                  <span className="text-[10px] font-bold">{item.step}</span>
                 </div>
-              </motion.div>
+
+                <div className="mb-4">
+                  <h3 className="font-serif text-xl mb-1">{item.title}</h3>
+                  <p className="text-sm text-muted-foreground">{item.description}</p>
+                </div>
+
+                <div className="rounded-xl bg-muted/20 border border-white/5 p-6 mb-4">
+                  {item.mockup(true)}
+                </div>
+              </div>
             ))}
           </div>
         </motion.div>
+
+        {/* Orchestrator / Capabilities Section */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          transition={{ delay: 0.4 }}
+          className="mt-24 pt-16 border-t border-border/40"
+        >
+          <div className="text-center mb-12">
+            <h3 className="font-serif text-3xl mb-4">We Orchestrate Your Business Logic</h3>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              Need to capture deposits? Enforce strict cancellation policies? Verify insurance?
+              We build custom logic adapters to handle your specific business complexity.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-8">
+            {/* Card 1: Payments */}
+            <div className="bg-muted/20 border border-border/50 p-8 rounded-2xl">
+              <div className="w-12 h-12 bg-background rounded-xl flex items-center justify-center mb-6 border border-border shadow-sm">
+                <CreditCard size={24} className="text-foreground" />
+              </div>
+              <h4 className="font-serif text-xl mb-3">Secure Payments</h4>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Auto generation of payment links and pre-auth capture to secure every booking. We act as your financial safety net.
+              </p>
+            </div>
+
+            {/* Card 2: Custom Workflows */}
+            <div className="bg-muted/20 border border-border/50 p-8 rounded-2xl">
+              <div className="w-12 h-12 bg-background rounded-xl flex items-center justify-center mb-6 border border-border shadow-sm">
+                <Workflow size={24} className="text-foreground" />
+              </div>
+              <h4 className="font-serif text-xl mb-3">Custom Workflows</h4>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Flexible logic that adapts to your unique operational rules by building custom workflows around your business.
+              </p>
+            </div>
+
+            {/* Card 3: Revenue Protection */}
+            <div className="bg-muted/20 border border-border/50 p-8 rounded-2xl">
+              <div className="w-12 h-12 bg-background rounded-xl flex items-center justify-center mb-6 border border-border shadow-sm">
+                <ShieldCheck size={24} className="text-foreground" />
+              </div>
+              <h4 className="font-serif text-xl mb-3">Revenue Protection</h4>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Enforce deposits, manage strict cancellation policies, and gap fill efficiently. We protect your bottom line.
+              </p>
+            </div>
+          </div>
+        </motion.div>
+
       </div >
     </section >
   )

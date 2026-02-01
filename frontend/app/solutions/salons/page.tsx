@@ -16,7 +16,7 @@ export default function SalonsPage() {
                 </>
             }
             heroFocusSentence="{Creative|Artistic|Styled} {Beauty|Vision|Craft}"
-            heroSubtitle="Eliminate the complexity of booking chemical services and enforcing deposits. Ovela understands service durations and protects your revenue."
+            heroSubtitle="Eliminate the complexity of booking chemical services and enforcing deposits. Native integration with Timely, Vagaro and Square to protect your revenue."
             painPoints={[
                 {
                     label: "Booking Complexity",
@@ -34,22 +34,22 @@ export default function SalonsPage() {
             valueProps={[
                 {
                     title: "Service Duration Logic",
-                    description: "Ovela asks the right qualifying questions to ensure the correct time slot is booked for complex services.",
+                    description: "Ovela understands your Timely/Vagaro service menu, ensuring the correct time slot is booked for complex coloring or treatments.",
                     icon: <Clock className="w-5 h-5" />
                 },
                 {
                     title: "Deposit Enforcement",
-                    description: "Politely informs clients of deposit policies during booking, ensuring commitment before they hang up.",
+                    description: "Politely informs clients of deposit policies during booking, helping you secure commitment before they hang up.",
                     icon: <CreditCard className="w-5 h-5" />
                 },
                 {
                     title: "Squeeze-In Management",
-                    description: "Handling \"Can you just squeeze me in?\" requests with firm, polite availability checks based on your real calendar.",
+                    description: "Handling \"Can you just squeeze me in?\" requests with firm, polite availability checks synced to your real calendar.",
                     icon: <Scissors className="w-5 h-5" />
                 }
             ]}
             workflowTitle="The Digital Front of House"
-            workflowDescription="Like a trained salon coordinator, Ovela manages the flow of the book, protecting your time and maximizing daily revenue."
+            workflowDescription="Like a trained salon coordinator, Ovela manages the book, enforcing your specific Timely or Vagaro booking rules to maximize daily revenue."
             ctaText="Upgrade Your Salon"
         />
     )

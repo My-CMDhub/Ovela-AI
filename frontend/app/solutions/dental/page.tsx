@@ -16,7 +16,7 @@ export default function DentalPage() {
                 </>
             }
             heroFocusSentence="{Precision|Gentle|Quality} {Dentistry|Treatment|Trust}"
-            heroSubtitle="Stop interrupting procedures to answer the phone. Ovela triages emergencies, filters price shoppers, and fills your calendar with high-value appointments."
+            heroSubtitle="Stop interrupting procedures to answer the phone. Ovela triages emergencies, filters price shoppers, and integrates directly with Cliniko, Dentrix, and Core Practice."
             painPoints={[
                 {
                     label: "The Chair-Side Interruption",
@@ -39,17 +39,17 @@ export default function DentalPage() {
                 },
                 {
                     title: "Gap Filling",
-                    description: "Got a last-minute cancellation? Ovela can actively reach out to your waitlist to fill the slot (Coming Soon).",
+                    description: "Got a last-minute cancellation? Ovela notes it and offers the slot to urgent inquiries, syncing instantly with your PMS.",
                     icon: <CalendarClock className="w-5 h-5" />
                 },
                 {
                     title: "High-Value Conversion",
-                    description: "The AI is trained to convert inquiries into consultations, not just give out prices. It secures the booking.",
+                    description: "The AI is trained to convert inquiries into consultations. It knows your private vs. insurance pricing structures.",
                     icon: <DollarSign className="w-5 h-5" />
                 }
             ]}
             workflowTitle="The Silent Partner"
-            workflowDescription="Seamlessly integrated with Practice Management Software. Ovela handles the intake, checks availability, and inserts the appointment directly into your book."
+            workflowDescription="Seamlessly integrated with Cliniko and Dentrix. Ovela handles the intake, checks availability, and inserts the appointment directly into your book."
             ctaText="Optimize Your Clinic"
         />
     )

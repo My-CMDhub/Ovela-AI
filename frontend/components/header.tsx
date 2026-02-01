@@ -154,24 +154,7 @@ export function Header() {
                             desc="Deposit enforcement."
                             icon={<Scissors size={16} className="text-pink-500" />}
                           />
-                          <DropdownItem
-                            href="/solutions/real-estate"
-                            title="Real Estate"
-                            desc="Tenant screening."
-                            icon={<Home size={16} className="text-blue-500" />}
-                          />
-                          <DropdownItem
-                            href="/solutions/energy"
-                            title="Energy & Utilities"
-                            desc="Rebate eligibility checks."
-                            icon={<Zap size={16} className="text-yellow-500" />}
-                          />
-                          <DropdownItem
-                            href="/solutions/legal"
-                            title="Legal Services"
-                            desc="Confidential client intake."
-                            icon={<Scale size={16} className="text-zinc-500" />}
-                          />
+                          {/* Removed unsupported industries: Real Estate, Energy, Legal */}
                         </div>
                       </div>
 
@@ -294,9 +277,6 @@ export function Header() {
                           { name: "Dental Clinics", href: "/solutions/dental" },
                           { name: "Physio & Massage", href: "/solutions/physio" },
                           { name: "Salons & Barbers", href: "/solutions/salons" },
-                          { name: "Energy & Utilities", href: "/solutions/energy" },
-                          { name: "Real Estate", href: "/solutions/real-estate" },
-                          { name: "Legal Services", href: "/solutions/legal" },
                         ].map((item) => (
                           <Link
                             key={item.name}

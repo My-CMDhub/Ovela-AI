@@ -51,7 +51,7 @@ export function Pricing() {
 
             {/* 7-Day Trial Highlight */}
             <div className="mb-6 p-3 rounded-xl bg-accent/10 border border-accent/20">
-              <p className="text-sm text-accent font-medium">✨ 7-Day Free Trial Included</p>
+              <p className="text-sm text-accent font-medium">✨ 21-Day Free Trial Included</p>
               <p className="text-xs text-muted-foreground mt-1">Test after setup. Cancel if not satisfied.</p>
             </div>
 

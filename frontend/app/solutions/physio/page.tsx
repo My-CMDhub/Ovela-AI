@@ -16,7 +16,7 @@ export default function PhysioPage() {
                 </>
             }
             heroFocusSentence="{Hands-on|Clinical|Expert} {Therapy|Recovery|Care}"
-            heroSubtitle="Your hands should be on the patient, not the phone. Automate rescheduling, intake forms, and FAQs without hiring a full-time receptionist."
+            heroSubtitle="Your hands should be on the patient, not the phone. Automate rescheduling, patient intake, and EPC referrals with deep Halaxy, Nookal, and Cliniko integration."
             painPoints={[
                 {
                     label: "Session Fragmentation",
@@ -39,17 +39,17 @@ export default function PhysioPage() {
                 },
                 {
                     title: "Smart Rescheduling",
-                    description: "Patients can converse naturally to find a new time. \"Can I come in later?\" is handled instantly, updating your calendar.",
+                    description: "Patients can converse naturally to find a new time. \"Can I come in later?\" is handled instantly, syncing with Halaxy/Nookal.",
                     icon: <Timer className="w-5 h-5" />
                 },
                 {
                     title: "Intake Automation",
-                    description: "Ovela collects key injury details during the call, so you have a preliminary SOAP note before they walk in.",
+                    description: "Ovela collects key injury details and insurance info during the call, creating a draft file before they walk in.",
                     icon: <FileText className="w-5 h-5" />
                 }
             ]}
             workflowTitle="Seamless Practice Flow"
-            workflowDescription="From the initial injury inquiry to the booked appointment, Ovela manages the administrative patient journey."
+            workflowDescription="From the initial injury inquiry to the booked appointment, Ovela manages the administrative patient journey, populating your PMS automatically."
             ctaText="Focus on Treatment"
         />
     )

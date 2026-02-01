@@ -12,8 +12,8 @@ const features: FeatureCardData[] = [
   },
   {
     icon: Database,
-    title: "Works With Your Systems",
-    description: "Integrates with your existing booking and management tools. No forced migration.",
+    title: "Eco-System Native",
+    description: "We don't hack it together. Official integrations with ServiceM8, Tradify, RMS Cloud, and Cliniko.",
   },
   {
     icon: Clock,

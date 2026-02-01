@@ -11,7 +11,7 @@ export default function MotelsPage() {
             heroVisual={<MotelVisual />}
             heroTitle="The Front Desk That"
             heroFocusSentence="{Never|Always|Truly} {Sleeps|Welcomes|Works}"
-            heroSubtitle="Automate 24/7 guest support, booking inquiries, and check-out coordination with an AI agent that sounds exactly like your best staff member."
+            heroSubtitle="Automate 24/7 guest support, booking inquiries, and check-out coordination. Native 2-way sync with RMS Cloud, Cloudbeds, and Apaleo."
             painPoints={[
                 {
                     label: "The 2:00 AM Lockout",
@@ -29,12 +29,12 @@ export default function MotelsPage() {
             valueProps={[
                 {
                     title: "After-Hours Gatekeeper",
-                    description: "Ovela handles late arrivals, verifies details, and can dispatch digital key codes (via integration) without waking you up.",
+                    description: "Ovela handles late arrivals, verifies details in RMS Cloud/Cloudbeds, and can dispatch digital key codes without waking you up.",
                     icon: <Moon className="w-5 h-5" />
                 },
                 {
                     title: "OTA Commission Defense",
-                    description: "Capture guests calling to check rates. Ovela books them directly into your PMS, saving 15-20% in commissions.",
+                    description: "Capture guests calling to check rates. Ovela books them directly into your PMS (RMS/Cloudbeds), saving 15-20% in commissions.",
                     icon: <ShieldCheck className="w-5 h-5" />
                 },
                 {
@@ -44,7 +44,7 @@ export default function MotelsPage() {
                 }
             ]}
             workflowTitle="Night Audit Mode"
-            workflowDescription="When your staff goes home, Ovela wakes up. It acts as a full tier-1 support agent, handling 90% of inquiries and only escalating genuine emergencies to your mobile."
+            workflowDescription="When your staff goes home, Ovela wakes up. It acts as a full tier-1 support agent, handling 90% of inquiries and entering data directly into RMS Cloud or Cloudbeds."
             ctaText="Secure Your Front Desk"
         />
     )

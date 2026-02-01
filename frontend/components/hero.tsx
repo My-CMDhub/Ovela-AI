@@ -3,8 +3,10 @@
 import type React from "react"
 import { motion, useMotionValue, useSpring, AnimatePresence } from "framer-motion"
 import { useState, useEffect } from "react"
+import { EcosystemLoop } from "@/components/ecosystem-loop"
+import { TextRotator } from "@/components/text-rotator"
 import { VoiceDemoForm } from "@/components/VoiceDemoForm"
-import { ArrowRight, X } from "lucide-react"
+import { ArrowRight, X, Check, ShieldCheck } from "lucide-react"
 import Link from "next/link"
 import Image from "next/image"
 
@@ -352,7 +354,7 @@ export function Hero() {
 
 
   return (
-    <section className="relative min-h-screen flex items-center justify-center pt-20 pb-12 overflow-hidden">
+    <section className="relative min-h-screen flex flex-col pt-20 overflow-hidden">
       <FloatingParticles />
 
       <div className="relative z-10 max-w-6xl mx-auto px-6">
@@ -379,7 +381,7 @@ export function Hero() {
             className="mb-6 inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-sm text-primary backdrop-blur-sm"
           >
             <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse"> </span>
-            Voice-First AI • Works While You Work
+            Native Integrations • ServiceM8 • RMS Cloud • Vagaro
           </motion.div>
 
           {/* Main Heading */}
@@ -394,8 +396,13 @@ export function Hero() {
             animate="visible"
             className="mx-auto max-w-4xl font-serif text-5xl font-medium tracking-tight text-foreground sm:text-7xl"
           >
-            The Receptionist That <br />
-            <span className="italic text-muted-foreground"> Never Sleeps.</span>
+            The AI Front Desk for <br />
+            <span className="text-muted-foreground">
+              <TextRotator
+                texts={["ServiceM8", "RMS Cloud", "Tradify", "Cliniko", "Fergus", "Xero", "Halaxy", "Apaleo", "Zoho CRM", "Vagaro"]}
+                className="font-serif italic"
+              />
+            </span>
           </motion.h1>
 
           {/* Subtitle */}
@@ -410,7 +417,7 @@ export function Hero() {
             animate="visible"
             className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground sm:text-xl"
           >
-            Every missed call is lost revenue. <strong className="text-foreground font-medium">Our AI answers, books, and syncs</strong>—so you can focus on what you do best.
+            Answering calls, qualifying leads, and <strong className="text-foreground font-medium">injecting bookings directly</strong> into your schedule. No double-entry.
           </motion.p>
 
           {/* CTA Buttons */}
@@ -434,115 +441,42 @@ export function Hero() {
             </Link>
 
 
-            {/* Insanely Attention-Grabbing Demo Button */}
-            <div className="relative">
-              {/* Animated pulsing rings - multiple layers for intensity */}
-              <motion.div
-                className="absolute inset-0 rounded-full"
-                animate={{
-                  boxShadow: [
-                    "0 0 0 0 rgba(236, 72, 153, 0.7)",
-                    "0 0 0 20px rgba(236, 72, 153, 0)",
-                  ],
-                }}
-                transition={{
-                  duration: 1.5,
-                  repeat: Infinity,
-                  ease: "easeOut",
-                }}
-              />
-              <motion.div
-                className="absolute inset-0 rounded-full"
-                animate={{
-                  boxShadow: [
-                    "0 0 0 0 rgba(236, 72, 153, 0.5)",
-                    "0 0 0 30px rgba(236, 72, 153, 0)",
-                  ],
-                }}
-                transition={{
-                  duration: 1.5,
-                  repeat: Infinity,
-                  ease: "easeOut",
-                  delay: 0.3,
-                }}
-              />
-              <motion.div
-                className="absolute inset-0 rounded-full"
-                animate={{
-                  boxShadow: [
-                    "0 0 0 0 rgba(236, 72, 153, 0.3)",
-                    "0 0 0 40px rgba(236, 72, 153, 0)",
-                  ],
-                }}
-                transition={{
-                  duration: 1.5,
-                  repeat: Infinity,
-                  ease: "easeOut",
-                  delay: 0.6,
-                }}
-              />
+            {/* Premium 'View Demo' Button with High-Class Motion Border */}
+            <motion.button
+              onClick={() => setIsDemoOpen(true)}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className="relative inline-flex h-12 overflow-hidden rounded-full p-[1px] focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
+            >
+              {/* Spinning Gradient Border - Brighter and smoother */}
+              <span className="absolute inset-[-1000%] animate-[spin_3s_linear_infinite] bg-[conic-gradient(from_90deg_at_50%_50%,#0000_0%,#7c3aed_50%,#0000_100%)] opacity-100 transition-opacity duration-500 group-hover:opacity-100" />
 
-              {/* Main button with enhanced effects */}
-              <motion.button
-                onClick={() => setIsDemoOpen(true)}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className="relative inline-flex h-12 items-center justify-center rounded-full border border-input bg-background px-8 text-base font-medium shadow-lg transition-all duration-300 hover:bg-accent hover:text-accent-foreground hover:border-pink-500/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 disabled:pointer-events-none disabled:opacity-50 overflow-hidden group"
-              >
-                {/* Animated gradient background on hover */}
-                <motion.div
-                  className="absolute inset-0 bg-gradient-to-r from-pink-500/10 via-purple-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100"
-                  animate={{
-                    backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"],
-                  }}
-                  transition={{
-                    duration: 3,
-                    repeat: Infinity,
-                    ease: "linear",
-                  }}
-                  style={{
-                    backgroundSize: "200% 100%",
-                  }}
-                />
-
-                {/* Shimmer effect */}
-                <div className="absolute inset-0 overflow-hidden rounded-full">
-                  <motion.div
-                    className="absolute inset-0 bg-gradient-to-r from-transparent via-pink-500/20 to-transparent -translate-x-full"
-                    animate={{
-                      translateX: ["-100%", "100%"],
-                    }}
-                    transition={{
-                      duration: 2,
-                      repeat: Infinity,
-                      ease: "linear",
-                      repeatDelay: 1,
-                    }}
-                  />
-                </div>
-
-                {/* Animated text with character reveal */}
-                <span className="relative z-10 inline-flex overflow-hidden">
-                  {"View Demo".split("").map((char, index) => (
-                    <motion.span
-                      key={index}
-                      initial={{ y: 20, opacity: 0 }}
-                      animate={{ y: 0, opacity: 1 }}
-                      transition={{
-                        duration: 0.5,
-                        delay: 0.6 + index * 0.05,
-                        ease: "easeOut",
-                        repeat: Infinity,
-                        repeatDelay: 3,
-                      }}
-                      className="inline-block"
-                    >
-                      {char === " " ? "\u00A0" : char}
-                    </motion.span>
-                  ))}
+              {/* Inner Background */}
+              <span className="inline-flex h-full w-full items-center justify-center rounded-full bg-background/95 px-8 backdrop-blur-3xl transition-colors hover:bg-background/90">
+                <span className="relative flex items-center gap-2 text-foreground font-medium">
+                  {/* Text Reveal Animation */}
+                  <span className="relative z-10 inline-flex overflow-hidden">
+                    {"View Demo".split("").map((char, index) => (
+                      <motion.span
+                        key={index}
+                        initial={{ y: 20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{
+                          duration: 0.5,
+                          delay: 0.6 + index * 0.05,
+                          ease: "easeOut",
+                          repeat: Infinity,
+                          repeatDelay: 3,
+                        }}
+                        className="inline-block"
+                      >
+                        {char === " " ? "\u00A0" : char}
+                      </motion.span>
+                    ))}
+                  </span>
                 </span>
-              </motion.button>
-            </div>
+              </span>
+            </motion.button>
 
           </motion.div>
         </motion.div>
