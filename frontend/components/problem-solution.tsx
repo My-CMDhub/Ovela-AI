@@ -85,10 +85,10 @@ const solutionSteps = [
                 className="text-sm font-medium leading-relaxed"
               >
                 <motion.span
-                  initial={{ width: 0 }}
-                  animate={{ width: "100%" }}
-                  transition={{ duration: 1.5, delay: 0.4, ease: "linear" }}
-                  className="inline-block overflow-hidden whitespace-nowrap"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 1.5, delay: 0.4 }}
+                  className="inline-block max-w-[240px] sm:max-w-full break-words"
                 >
                   "Hi, do you have a room for 2 people on the 24th?"
                 </motion.span>
@@ -465,8 +465,11 @@ export function ProblemSolution() {
                   <p className="text-sm text-muted-foreground">{item.description}</p>
                 </div>
 
-                <div className="rounded-xl bg-muted/20 border border-white/5 p-6 mb-4">
-                  {item.mockup(true)}
+                <div className={`rounded-xl border transition-all duration-500 ${activeStep === index
+                  ? "bg-accent/5 border-accent/20 shadow-lg shadow-accent/5"
+                  : "bg-muted/20 border-white/5 opacity-70"
+                  } p-6 mb-4`}>
+                  {item.mockup(activeStep === index)}
                 </div>
               </div>
             ))}

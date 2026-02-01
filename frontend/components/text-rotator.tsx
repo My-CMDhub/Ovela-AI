@@ -19,7 +19,7 @@ export function TextRotator({ texts, className = "" }: TextRotatorProps) {
     }, [texts.length])
 
     return (
-        <div className={`relative inline-block overflow-hidden align-top h-[1.3em] min-w-[500px] text-center mx-auto ${className}`}>
+        <div className={`relative inline-block overflow-hidden align-top h-[1.3em] min-w-[280px] sm:min-w-[500px] text-center mx-auto ${className}`}>
             <AnimatePresence mode="popLayout" initial={false}>
                 <motion.span
                     key={index}

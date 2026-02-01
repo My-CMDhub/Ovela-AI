@@ -378,10 +378,10 @@ export function Hero() {
             initial={{ opacity: 0, scale: 0.9, filter: "blur(4px)" }}
             animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
             transition={{ duration: 0.5, ease: "easeOut" }}
-            className="mb-6 inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-sm text-primary backdrop-blur-sm"
+            className="mb-6 inline-flex flex-row items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs sm:text-sm text-primary backdrop-blur-sm max-w-full text-left"
           >
-            <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse"> </span>
-            Native Integrations • ServiceM8 • RMS Cloud • Vagaro
+            <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse shrink-0"> </span>
+            <span className="whitespace-nowrap overflow-hidden text-ellipsis">Native Integrations • ServiceM8 • RMS Cloud • Vagaro</span>
           </motion.div>
 
           {/* Main Heading */}
@@ -394,7 +394,7 @@ export function Hero() {
             }
             initial="hidden"
             animate="visible"
-            className="mx-auto max-w-4xl font-serif text-5xl font-medium tracking-tight text-foreground sm:text-7xl"
+            className="mx-auto max-w-4xl font-serif text-4xl font-medium tracking-tight text-foreground sm:text-7xl"
           >
             The AI Front Desk for <br />
             <span className="text-muted-foreground">
@@ -632,7 +632,7 @@ export function Hero() {
                 </div>
 
                 {/* Stats */}
-                <div className="grid grid-cols-3 gap-3 mb-5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
                   {
                     stats.map((stat, i) => (
                       <motion.div
