@@ -61,6 +61,7 @@ const partnerLogos = [
   { src: "/logo/apaleo-logo-dark.webp", srcDark: "/logo/apaleo-logo-white.png", alt: "Apaleo", width: 120, height: 40, className: "!h-[50px]" },
   { src: "/logo/zoho-logo.png", alt: "Zoho CRM", width: 150, height: 40, className: "!h-[55px]" },
   { src: "/logo/Vagaro-Logo.png", alt: "Vagaro", width: 130, height: 40, className: "!h-[50px]" },
+  { src: "/logo/cloudbeds-logo.avif", alt: "CloudBeds", width: 130, height: 40, className: "!h-[70px] dark:brightness-0 dark:invert" }
 ]
 
 export default function Home() {
