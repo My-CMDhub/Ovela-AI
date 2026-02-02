@@ -7,6 +7,7 @@ import { Header } from "@/components/header"
 import { Hero } from "@/components/hero"
 import { Preloader } from "@/components/preloader"
 import { ExitPopup } from "@/components/ui/ExitPopup"
+import { Footer } from "@/components/footer"
 
 // Lazy load heavy components to improve initial load time
 const StudioImagery = dynamic(() => import("@/components/studio-imagery").then(mod => ({ default: mod.StudioImagery })), {
@@ -44,18 +45,29 @@ const Contact = dynamic(() => import("@/components/contact").then(mod => ({ defa
   ssr: false,
 })
 
-const Footer = dynamic(() => import("@/components/footer").then(mod => ({ default: mod.Footer })), {
-  loading: () => <div className="min-h-[200px]" />,
+const LogoLoop = dynamic(() => import("@/components/logo-loop").then(mod => ({ default: mod.LogoLoop })), {
+  loading: () => <div className="h-20" />,
   ssr: false,
 })
+
+const partnerLogos = [
+  { src: "/logo/servicem8-logo.png", alt: "ServiceM8", width: 150, height: 40, className: "!h-[60px]" },
+  { src: "/logo/RMS logo .webp", alt: "RMS Cloud", width: 120, height: 40, className: "!h-[55px]" },
+  { src: "/logo/Tradify-Logo.png", alt: "Tradify", width: 140, height: 40, className: "!h-[60px]" },
+  { src: "/logo/cliniko-logo.png", alt: "Cliniko", width: 130, height: 40, className: "!h-[50px]" },
+  { src: "/logo/fergus-logo-black.png", srcDark: "/logo/Fergus-logo.png", alt: "Fergus", width: 140, height: 40, className: "!h-[75px] dark:!h-[100px]" },
+  { src: "/logo/xero-logo.png", alt: "Xero", width: 100, height: 40, className: "!h-[65px]" },
+  { src: "/logo/Halaxy-logo.png", alt: "Halaxy", width: 120, height: 40, className: "!h-[60px]" },
+  { src: "/logo/apaleo-logo-dark.webp", srcDark: "/logo/apaleo-logo-white.png", alt: "Apaleo", width: 120, height: 40, className: "!h-[50px]" },
+  { src: "/logo/zoho-logo.png", alt: "Zoho CRM", width: 150, height: 40, className: "!h-[55px]" },
+  { src: "/logo/Vagaro-Logo.png", alt: "Vagaro", width: 130, height: 40, className: "!h-[50px]" },
+]
 
 export default function Home() {
   const [isLoading, setIsLoading] = useState(true)
 
-  // Handle hash navigation after loading completes
   useEffect(() => {
     if (!isLoading) {
-      // Prevent browser from trying to restore scroll position automatically which fights our scroll
       if ('scrollRestoration' in window.history) {
         window.history.scrollRestoration = 'manual'
       }
@@ -124,6 +136,30 @@ export default function Home() {
                 <Hero />
               </motion.div>
             </div>
+
+            {/* Logo Loop - Social Proof */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 1, duration: 1 }}
+              className="py-16 border-b border-white/5 bg-background/50 backdrop-blur-sm"
+            >
+              <div className="container mx-auto px-6 mb-10 text-center">
+                <p className="text-sm font-medium text-muted-foreground">Trusted by forward-thinking businesses</p>
+              </div>
+              <LogoLoop
+                logos={partnerLogos}
+                speed={30}
+                direction="left"
+                logoHeight={50}
+                gap={80}
+                pauseOnHover={true}
+                scaleOnHover={true}
+                fadeOut={true}
+                fadeOutColor="var(--background)"
+                className="opacity-80 hover:opacity-100 transition-opacity duration-300"
+              />
+            </motion.div>
 
             <StudioImagery />
 

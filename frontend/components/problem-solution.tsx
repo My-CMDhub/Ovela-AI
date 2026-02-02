@@ -261,9 +261,9 @@ const solutionSteps = [
                 <span className="text-[10px] font-bold text-blue-500">SMS</span>
               </div>
               <div className="space-y-1">
-                <p className="text-xs text-foreground font-medium">Ovela Motel</p>
+                <p className="text-xs text-foreground font-medium">Ovela AI</p>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Hi! Your booking for <span className="text-foreground font-medium">Oct 24</span> is confirmed. Check-in is at 2pm. Reply HELP for info.
+                  Hi! Your booking for <span className="text-foreground font-medium">Oct 24</span> is confirmed. Check-in is at 2pm. Call us for more info.
                 </p>
               </div>
             </div>
