@@ -55,7 +55,7 @@ const partnerLogos = [
   { src: "/logo/RMS logo .webp", alt: "RMS Cloud", width: 120, height: 40, className: "!h-[55px]" },
   { src: "/logo/Tradify-Logo.png", alt: "Tradify", width: 140, height: 40, className: "!h-[60px]" },
   { src: "/logo/cliniko-logo.png", alt: "Cliniko", width: 130, height: 40, className: "!h-[50px]" },
-  { src: "/logo/fergus-logo-black.png", srcDark: "/logo/Fergus-logo.png", alt: "Fergus", width: 140, height: 40, className: "!h-[75px] dark:!h-[100px]" },
+  { src: "/logo/Fergus-logo-black.png", srcDark: "/logo/Fergus-logo.png", alt: "Fergus", width: 140, height: 40, className: "!h-[75px] dark:!h-[100px]" },
   { src: "/logo/xero-logo.png", alt: "Xero", width: 100, height: 40, className: "!h-[65px]" },
   { src: "/logo/Halaxy-logo.png", alt: "Halaxy", width: 120, height: 40, className: "!h-[60px]" },
   { src: "/logo/apaleo-logo-dark.webp", srcDark: "/logo/apaleo-logo-white.png", alt: "Apaleo", width: 120, height: 40, className: "!h-[50px]" },
