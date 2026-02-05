@@ -74,6 +74,9 @@ app.include_router(actions.router, prefix="/api", tags=["actions"])
 app.include_router(saranda.router, prefix="/api/saranda", tags=["saranda"])
 app.include_router(stripe.router, prefix="/api", tags=["stripe"])
 
+from api import cold_calling
+app.include_router(cold_calling.router, prefix="/api/cold-calling", tags=["cold_calling"])
+
 @app.get("/")
 def read_root():
     return {"message": "Ovela AI Backend is running 🚀"}

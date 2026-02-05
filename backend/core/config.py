@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Ovela AI Backend"
     BACKEND_URL: str = "https://ovela-12c561a30285.herokuapp.com"  # Production URL
+    API_DOMAIN: Optional[str] = None # Overrides BACKEND_URL for local dev (ngrok)
     ENVIRONMENT: str = "demo"  # 'demo' or 'production'
 
     # Meta (WhatsApp Cloud API)
