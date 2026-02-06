@@ -19,7 +19,20 @@ def get_coalcreek_functions() -> list:
         # =================================================================
         {
             "name": "check_availability",
-            "description": "Check if a room type is available for specific dates. READ-ONLY operation. Does NOT hold the room. Use this first when guest asks about dates.",
+            "description": """Check real-time room availability for Coal Creek Motel.
+            
+CRITICAL - DEAD AIR PREVENTION:
+1. BEFORE calling this function, say: "Let me check that for you" or similar
+2. The system will automatically activate 4-second 'Go Deaf' mode to prevent user interruptions
+3. This function may take 3-10 seconds for multi-night stays
+4. When you receive the result, respond IMMEDIATELY with the availability info
+
+Multi-Night Logic:
+- Validates EACH night in the date range (not just check-in)
+- A room is only available if free for ALL nights
+- Returns blocked_dates if any nights unavailable
+
+Use this when guest asks about availability or pricing for specific dates.""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -29,12 +42,12 @@ def get_coalcreek_functions() -> list:
                     },
                     "check_out_date": {
                         "type": "string",
-                        "description": "Check-out date in YYYY-MM-DD format (optional, defaults to next day)"
+                        "description": "Check-out date in YYYY-MM-DD format (if not provided, assumes 1-night stay)"
                     },
                     "room_type": {
                         "type": "string",
-                        "enum": ["queen", "twin", "family", "suite"],
-                        "description": "Room type to check (Standard Queen, Twin, Family, Deluxe Spa Suite)"
+                        "enum": ["queen", "twin", "family", "suite", "any"],
+                        "description": "Specific room type to check, or 'any' for all rooms"
                     }
                 },
                 "required": ["check_in_date"]

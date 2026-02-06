@@ -46,6 +46,7 @@ async def handle_voice_webhook(
     # Resolve tenant_id
     # 1. Check Query Param explicitly from request (override)
     tenant_id = request.query_params.get("tenant_id")
+    transfer_failed = request.query_params.get("transfer_failed", "false")
     
     if not tenant_id:
         # 2. Check Phone Mapping (Ingress Number)
@@ -69,6 +70,7 @@ async def handle_voice_webhook(
             <Parameter name="user_phone" value="{From}" />
             <Parameter name="tenant_id" value="{tenant_id}" />
             <Parameter name="user_to" value="{To}" />
+            <Parameter name="transfer_failed" value="{transfer_failed}" />
         </Stream>
     </Connect>
     <Say voice="Polly.Nicole">I'm sorry, we seem to have lost connection. Please call back. Goodbye!</Say>

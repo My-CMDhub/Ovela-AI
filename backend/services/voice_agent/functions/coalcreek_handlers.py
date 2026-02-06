@@ -13,6 +13,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
+import asyncio
 
 # Import knowledge base services
 from services.motel_knowledge_base import (
@@ -32,23 +33,29 @@ logger = logging.getLogger(__name__)
 
 async def handle_check_availability(args: dict, db_service) -> dict:
     """
-    Check room availability.
+    Check room availability using real-time scraping.
     
-    Strategy: 
-    1. If PMS configured → Real-time check (VERIFIED)
-    2. If PMS unavailable → Fallback to "unverified" (staff confirms)
+    Features:
+    - Multi-night validation (checks EACH night)
+    - Efficient data handling (minimal context)
+    - Dead air prevention compatible (function designed for 3-10s latency)
+    
+    Returns compact result for AI to parse quickly.
     """
     # Ensure KB knows we are acting as Coal Creek
     set_tenant_context("coalcreek")
     
-    from services.pms import get_pms_client, is_pms_configured
-    
     check_in = args.get("check_in_date", "")
     check_out = args.get("check_out_date", "")
-    room_type = args.get("room_type", "queen")
+    room_type_arg = args.get("room_type", "any")
     
     if not check_in:
-        return {"available": False, "verified": False, "message": "Please provide check-in date"}
+        return {
+            "available": False, 
+            "verified": False, 
+            "message": "Please provide check-in date",
+            "ai_should_say": "What date were you looking to check in?"
+        }
     
     # 1. Basic Date Validation
     try:
@@ -57,64 +64,186 @@ async def handle_check_availability(args: dict, db_service) -> dict:
             return {
                 "available": False,
                 "verified": True,
-                "message": "That date has already passed. What dates were you looking at?"
+                "message": "Date in the past",
+                "ai_should_say": "That date has already passed. What dates were you looking at?"
             }
     except ValueError:
         return {
             "available": False,
             "verified": False,
-            "message": "I didn't catch the date properly. Could you repeat that?"
+            "message": "Invalid date format",
+            "ai_should_say": "I didn't catch the date properly. Could you repeat that in month-day format?"
         }
-
-    # 2. Check if PMS is configured for real-time verification
-    if is_pms_configured("coalcreek"):
-        pms = get_pms_client("coalcreek")
+    
+    # Set checkout if not provided (1 night)
+    if not check_out:
+        check_out = (check_in_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # Calculate nights
+    try:
+        check_out_dt = datetime.strptime(check_out, "%Y-%m-%d")
+        nights = (check_out_dt - check_in_dt).days
+        if nights < 1:
+            nights = 1
+            check_out = (check_in_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    except:
+        nights = 1
+        check_out = (check_in_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+    
+    # 2. Map room type to scraper format
+    room_map = {
+        "queen": "Queen/Double",
+        "standard": "Queen/Double",
+        "twin": "Twin Room",
+        "family": "Family Suite",
+        "suite": "Deluxe Spa Suite",
+        "spa": "Deluxe Spa Suite",
+        "deluxe": "Deluxe Spa Suite",
+        "any": None  # Check all rooms
+    }
+    
+    search_key = room_type_arg.lower()
+    target_room = room_map.get(search_key)
+    
+    # 3. Call multi-night scraper with RETRY LOGIC (Max 2 Attempts)
+    try:
+        # Import the scraper
+        import sys
+        from scripts.test_multinight_availability import check_multinight_availability
         
-        try:
-            # Real-time PMS check
-            result = await pms.check_availability(check_in, check_out, room_type)
+        logger.info(f"🔍 Checking availability: {check_in} to {check_out} ({nights} nights), room={target_room or 'any'}")
+        
+        result = None
+        MAX_RETRIES = 2
+        
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                # Call the scraper
+                result = await check_multinight_availability(
+                    check_in_str=check_in,
+                    check_out_str=check_out,
+                    room_type=target_room
+                )
+                
+                if result.get("success"):
+                    logger.info(f"✅ Scraping success on attempt {attempt}")
+                    break
+                else:
+                    logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
+                    
+            except Exception as scrape_err:
+                logger.error(f"⚠️ Scraping exception on attempt {attempt}: {scrape_err}")
+                result = {"success": False, "error": str(scrape_err)}
             
-            if result.is_verified:
-                # PMS confirmed availability
+            # Small delay before retry if not last attempt
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(1.0)
+        
+        # Check final result
+        if not result or not result.get("success"):
+            # Scraping failed after retries - TRANSPARENT FALLBACK
+            logger.error(f"❌ All scraping attempts failed. Triggering fallback.")
+            return {
+                "available": "unknown",
+                "verified": False,
+                "message": "Technical issue accessing live calendar",
+                # Transparent honesty + Immediate solution + Go Deaf trigger via text analysis (if enabled)
+                # Note: "I'm having a technical issue" sets expectations. "Transfer you" offers solution.
+                "ai_should_say": "I'm sorry, I'm actually having a technical issue accessing the live calendar right now. To make sure you get the right information, I'd like to transfer you to reception. One moment please."
+            }
+        
+        # 4. Parse result efficiently
+        available_all_nights = result.get("available_all_nights", False)
+        blocked_dates = result.get("blocked_dates", [])
+        available_rooms = result.get("available_rooms", [])
+        
+        # 5. Build compact AI response
+        if available_all_nights and target_room:
+            # Specific room is available
+            # Get pricing from first night
+            first_night_data = result.get("per_night_results", {})
+            first_date = list(first_night_data.keys())[0] if first_night_data else None
+            price = None
+            
+            if first_date:
+                for room in first_night_data[first_date]:
+                    if room.get("room_type") == target_room:
+                        price = room.get("price_per_night")
+                        break
+            
+            return {
+                "available": True,
+                "verified": True,
+                "room_type": target_room,
+                "check_in": check_in,
+                "check_out": check_out,
+                "nights": nights,
+                "price_per_night": price,
+                "total": price * nights if price else None,
+                "ai_should_say": f"Great news! The {target_room} is available for {check_in if nights == 1 else f'{nights} nights from {check_in}'}. The rate is ${price} per night{f', total ${price * nights}' if nights > 1 else ''}. Would you like me to place a hold?"
+            }
+            
+        elif available_all_nights and not target_room:
+            # Guest asked for "any" room - show what's available
+            prices = {}
+            first_night_data = result.get("per_night_results", {})
+            first_date = list(first_night_data.keys())[0] if first_night_data else None
+            
+            if first_date:
+                for room in first_night_data[first_date]:
+                    room_name = room.get("room_type")
+                    if room_name in available_rooms:
+                        prices[room_name] = room.get("price_per_night")
+            
+            room_list = ", ".join([f"{r} (${prices.get(r)}/night)" for r in available_rooms if r in prices])
+            
+            return {
+                "available": True,
+                "verified": True,
+                "available_rooms": available_rooms,
+                "check_in": check_in,
+                "check_out": check_out,
+                "nights": nights,
+                "rooms_with_pricing": prices,
+                "ai_should_say": f"I have {len(available_rooms)} room types available for those dates: {room_list}. Which would you prefer?"
+            }
+            
+        else:
+            # NOT available - explain why
+            if target_room:
+                # Specific room requested but blocked
+                blocked_str = ", ".join(blocked_dates)
                 return {
-                    "available": result.available,
-                    "rooms_left": result.rooms_left,
+                    "available": False,
                     "verified": True,
-                    "room_type": room_type,
-                    "check_in_date": check_in,
-                    "message": f"I've checked our booking system and {room_type} rooms are {'available' if result.available else 'fully booked'} for those dates."
+                    "room_type": target_room,
+                    "blocked_dates": blocked_dates,
+                    "check_in": check_in,
+                    "check_out": check_out,
+                    "nights": nights,
+                    "ai_should_say": f"I'm sorry, the {target_room} isn't available for all {nights} night{'s' if nights > 1 else ''} - it's sold out on {blocked_str}. However, I have other room types available. Would you like to hear those options?"
                 }
-        except Exception as e:
-            logger.error(f"PMS availability check failed: {e}")
-            # Fall through to unverified fallback
-
-    # 3. Fallback: Unverified (PMS not configured or failed)
-    # Get room data from KB for pricing
-    rooms_data = COALCREEK_DATA["rooms"]
-    
-    # Simple key matching
-    key_map = {
-        "queen": "queen",
-        "standard": "queen",
-        "twin": "twin",
-        "family": "family",
-        "spa": "spa",
-        "deluxe": "spa"
-    }
-    
-    search_key = room_type.lower().split()[0]  # First word
-    final_key = key_map.get(search_key, "queen")
-    target_room = rooms_data.get(final_key, rooms_data["queen"])
-
-    # "Soft Hold" messaging - staff will verify
-    return {
-        "available": "unknown",
-        "verified": False,
-        "room_type": target_room["name"],
-        "price_per_night": target_room["price"],
-        "check_in_date": check_in,
-        "message": f"I'll need to check with the team on availability for the {target_room['name']}. Can I take your details and have someone confirm?"
-    }
+            else:
+                # All rooms sold out
+                blocked_str = ", ".join(blocked_dates)
+                return {
+                    "available": False,
+                    "verified": True,
+                    "blocked_dates": blocked_dates,
+                    "check_in": check_in,
+                    "check_out": check_out,
+                    "nights": nights,
+                    "ai_should_say": f"I'm sorry, we're fully booked on {blocked_str}. Would you like to check different dates, or can I have someone call you if we get a cancellation?"
+                }
+        
+    except Exception as e:
+        logger.error(f"Availability check error: {e}", exc_info=True)
+        return {
+            "available": "unknown",
+            "verified": False,
+            "error": str(e),
+            "ai_should_say": "I'm having a system issue checking availability. Let me get you to reception who can help - one moment."
+        }
 
 
 async def handle_create_booking_request(args: dict, user_phone: str, save_reservation_fn) -> dict:
@@ -199,7 +328,6 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         
         # Trigger staff notification
         try:
-            import asyncio
             from services.staff_notifications import staff_notification_service
             asyncio.create_task(
                 staff_notification_service.notify_new_booking_request(
