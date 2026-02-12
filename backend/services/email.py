@@ -1,9 +1,10 @@
 
 """
-Email Service via Resend
+Email Service via Zoho SMTP
 Handles sending transactional emails for bookings with Ovela-branded design.
 """
-import httpx
+import aiosmtplib
+from email.message import EmailMessage
 from core.config import settings
 import logging
 from datetime import datetime
@@ -15,15 +16,11 @@ MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
 
 class EmailService:
-    API_URL = "https://api.resend.com/emails"
-    
-    def __init__(self):
-        self.api_key = settings.RESEND_API_KEY
-        self.default_from_email = settings.RESEND_FROM_EMAIL or "Ovela <appointments@ovela.dev>"
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
+        self.smtp_host = settings.SMTP_HOST
+        self.smtp_port = settings.SMTP_PORT
+        self.smtp_user = settings.SMTP_USER
+        self.smtp_password = settings.SMTP_PASSWORD
+        self.default_from_email = settings.MAIL_FROM
 
     def _base_template(self, badge: str, title: str, content: str, business_name: str = "Ovela Business", steps: list = None, button_text: str = None, button_url: str = None, closing_text: str = "") -> str:
         """Generate Ovela-branded email HTML matching the waitlist design."""
@@ -105,7 +102,7 @@ class EmailService:
 
     async def send_email(self, to_email: Union[str, List[str]], subject: str, html_content: str, from_email: str = None):
         """
-        Send an email via Resend API.
+        Send an email via Zoho SMTP.
         to_email: can be a single email string or a list of email strings.
         """
         try:
@@ -117,28 +114,35 @@ class EmailService:
             else:
                 recipients = to_email
 
-            payload = {
-                "from": sender,
-                "to": recipients,
-                "subject": subject,
-                "html": html_content
-            }
+            if not recipients:
+                logger.warning("No recipients provided for email")
+                return False
+
+            message = EmailMessage()
+            message["From"] = sender
+            message["To"] = ", ".join(recipients)
+            message["Subject"] = subject
+            message.set_content(html_content, subtype="html")
+
+            # SMTP Settings
+            use_tls = (self.smtp_port == 587)
             
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    self.API_URL,
-                    headers=self.headers,
-                    json=payload
-                )
+            async with aiosmtplib.SMTP(
+                hostname=self.smtp_host,
+                port=self.smtp_port,
+                use_tls=not use_tls  # Port 465 uses SSL/TLS directly
+            ) as smtp:
+                if use_tls:
+                    await smtp.starttls()
                 
-                if response.status_code in [200, 201]:
-                    logger.info(f"Email sent to {to_email}")
-                    return True
-                else:
-                    logger.error(f"Resend Error: {response.text}")
-                    return False
+                await smtp.login(self.smtp_user, self.smtp_password)
+                await smtp.send_message(message)
+                
+            logger.info(f"Email sent successfully to {recipients} via Zoho SMTP")
+            return True
+
         except Exception as e:
-            logger.error(f"Email Exception: {e}")
+            logger.error(f"Zoho SMTP Error: {e}")
             return False
 
     async def send_booking_confirmation(self, name: str, email: str, date: str, time: str, service: str = "Beauty Consultation", business_name: str = "ibrow threading"):
@@ -158,8 +162,8 @@ class EmailService:
             closing_text="Need to reschedule? Just message us on WhatsApp anytime."
         )
         
-        # Use appointments alias for customer communications
-        sender = f"{business_name} via Ovela <appointments@ovela.dev>"
+        # Use bookings alias for customer communications
+        sender = f"{business_name} via Ovela <{settings.MAIL_BOOKINGS.split('<')[-1][:-1]}>"
         return await self.send_email(email, subject, html, from_email=sender)
 
     async def send_owner_notification(self, owner_email: str, customer_phone: str, business_name: str, source: str = "Missed Call"):
@@ -182,7 +186,7 @@ class EmailService:
         )
         
         # Use notifications alias for system alerts
-        sender = "Ovela Notifications <notifications@ovela.dev>"
+        sender = settings.MAIL_NOTIFICATIONS
         return await self.send_email(owner_email, subject, html, from_email=sender)
 
     async def send_reschedule_confirmation(self, email: str = None, booking_id: str = None, new_time: str = None, name: str = "there", location: str = None):
@@ -214,8 +218,8 @@ class EmailService:
             steps=steps,
             closing_text="Need to make more changes? Just message us on WhatsApp — happy to help!"
         )
-        # Use appointments alias for customer communications
-        sender = "Ovela Appointments <appointments@ovela.dev>"
+        # Use bookings alias for customer communications
+        sender = settings.MAIL_BOOKINGS
         return await self.send_email(email, subject, html, from_email=sender)
 
     async def send_cancellation_confirmation(self, email: str = None, booking_id: str = None, name: str = "there", business_name: str = "Your Business"):
@@ -236,7 +240,7 @@ class EmailService:
             closing_text="Ready to book again? Just message us on WhatsApp anytime — we're here for you."
         )
         # Use business name for white-label customer experience
-        sender = f"{business_name} via Ovela <appointments@ovela.dev>"
+        sender = f"{business_name} via Ovela <{settings.MAIL_BOOKINGS.split('<')[-1][:-1]}>"
         return await self.send_email(email, subject, html, from_email=sender)
 
     async def send_owner_cancellation_notification(self, owner_email: str, customer_name: str, customer_phone: str, service_name: str, booking_date: str, booking_time: str):
@@ -271,7 +275,7 @@ class EmailService:
             closing_text="This time slot is now available for other customers."
         )
         # Use notifications alias for owner/platform communications
-        sender = "Ovela Notifications <notifications@ovela.dev>"
+        sender = settings.MAIL_NOTIFICATIONS
         return await self.send_email(owner_email, subject, html, from_email=sender)
 
     async def send_human_callback_request(
@@ -381,7 +385,7 @@ class EmailService:
 </body>
 </html>'''
         
-        sender = "Ovela Notifications <notifications@ovela.dev>"
+        sender = settings.MAIL_NOTIFICATIONS
         return await self.send_email(owner_email, subject, html, from_email=sender)
 
 
@@ -508,7 +512,7 @@ class EmailService:
 </body>
 </html>'''
         
-        sender = "Ovela Notifications <notifications@ovela.dev>"
+        sender = settings.MAIL_NOTIFICATIONS
         return await self.send_email(owner_email, subject, html, from_email=sender)
 
 
@@ -546,9 +550,9 @@ class EmailService:
         
         # Fallback if empty
         if not recipients:
-            recipients = ["notifications@ovela.dev"]
+            recipients = [settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]]
             
-        sender = "Ovela System <notifications@ovela.dev>"
+        sender = settings.MAIL_NOTIFICATIONS
         return await self.send_email(recipients, subject, html, from_email=sender)
 
     async def send_demo_approval_request(self, lead_details: dict):
@@ -627,9 +631,9 @@ class EmailService:
         recipients = [email.strip() for email in recipients_str.split(",") if email.strip()]
         
         if not recipients:
-            recipients = ["notifications@ovela.dev"]
+            recipients = [settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]]
             
-        sender = "Ovela System <notifications@ovela.dev>"
+        sender = settings.MAIL_NOTIFICATIONS
         return await self.send_email(recipients, subject, html, from_email=sender)
 
 
@@ -719,7 +723,7 @@ class EmailService:
 </body>
 </html>'''
         
-        sender = "Coal Creek Motel <notifications@ovela.dev>"
+        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
         success = await self.send_email(guest_email, subject, html, from_email=sender)
         
         if success:
@@ -813,7 +817,7 @@ class EmailService:
 </body>
 </html>'''
         
-        sender = "Ovela Bookings <notifications@ovela.dev>"
+        sender = settings.MAIL_BOOKINGS
         success = await self.send_email(staff_email, subject, html, from_email=sender)
         
         if success:
@@ -973,7 +977,7 @@ class EmailService:
             action_buttons_html=action_buttons_html
         )
         
-        sender = "Coal Creek Motel <notifications@ovela.dev>"
+        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
         return await self.send_email(staff_email, subject, html, from_email=sender)
 
     async def send_coalcreek_guest_confirmation(
@@ -1021,7 +1025,7 @@ class EmailService:
             button_url="tel:0492897718"
         )
         
-        sender = "Coal Creek Motel <notifications@ovela.dev>"
+        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
         success = await self.send_email(guest_email, subject, html, from_email=sender)
         
         if success:
@@ -1083,7 +1087,7 @@ class EmailService:
             action_buttons_html=action_html
         )
         
-        sender = "Coal Creek Motel <notifications@ovela.dev>"
+        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
         success = await self.send_email(staff_email, subject, html, from_email=sender)
         
         if success:

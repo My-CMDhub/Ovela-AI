@@ -1,4 +1,4 @@
-import { Client, Databases } from "node-appwrite";
+import nodemailer from "nodemailer";
 
 export default async ({ req, res, log, error }) => {
   // ---------- 1️⃣ Debug start ----------
@@ -24,13 +24,16 @@ export default async ({ req, res, log, error }) => {
   log(`📧 New waitlist signup: ${Name} from ${StudioName || 'Unknown Studio'} (${email})`);
 
   // ---------- 4️⃣ Env vars ----------
-  const RESEND_API_KEY = process.env.RESEND_API_KEY;
+  const SMTP_HOST = process.env.SMTP_HOST || "smtp.zoho.com";
+  const SMTP_PORT = parseInt(process.env.SMTP_PORT || "465");
+  const SMTP_USER = process.env.SMTP_USER;
+  const SMTP_PASSWORD = process.env.SMTP_PASSWORD;
   const FROM_EMAIL = process.env.FROM_EMAIL || "hello@ovela.dev";
   const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
-  if (!RESEND_API_KEY) {
-    error("❌ RESEND_API_KEY not set in environment");
-    return res.json({ success: false, error: "Missing RESEND_API_KEY" }, 500);
+  if (!SMTP_USER || !SMTP_PASSWORD) {
+    error("❌ SMTP credentials not set in environment (SMTP_USER/SMTP_PASSWORD)");
+    return res.json({ success: false, error: "Missing SMTP credentials" }, 500);
   }
 
   // ---------- 5️⃣ Email template ----------
@@ -130,7 +133,7 @@ export default async ({ req, res, log, error }) => {
         <p class="intro-text">
           ${content.intro}
         </p>
-
+        
         <h2 class="sub-heading">${content.subHeading}</h2>
         
         <div class="highlight-box">
@@ -178,63 +181,52 @@ export default async ({ req, res, log, error }) => {
 </html>`;
 
   // ---------- 6️⃣ Send welcome email ----------
+  const transporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465, // true for 465, false for other ports
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASSWORD,
+    },
+  });
+
   try {
-    const resp = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${RESEND_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: FROM_EMAIL,
-        to: email,
-        subject: "✨ You’re on the early access list for Ovela",
-        html: welcomeEmailHtml,
-      }),
+    // Send welcome email
+    const info = await transporter.sendMail({
+      from: FROM_EMAIL,
+      to: email,
+      subject: emailSubject,
+      html: welcomeEmailHtml,
     });
 
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      error(`❌ Resend API error: ${JSON.stringify(data)}`);
-      return res.json({ success: false, error: data }, 500);
-    }
-
-    log(`✅ Welcome email sent to ${email} (Resend ID: ${data.id})`);
+    log(`✅ Welcome email sent to ${email} (Message ID: ${info.messageId})`);
 
     // ---------- 7️⃣ Optional admin notification ----------
     if (ADMIN_EMAIL) {
-      const adminResp = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${RESEND_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      try {
+        const adminInfo = await transporter.sendMail({
           from: FROM_EMAIL,
           to: ADMIN_EMAIL,
           subject: `🔔 New Waitlist Signup: ${Name} from ${StudioName || 'Studio'}`,
           html: `<h2>New waitlist signup!</h2>
                  <ul>
-                   <li><strong>Name:</strong> ${Name}</li>
-                   <li><strong>Email:</strong> ${email}</li>
-                   <li><strong>Phone:</strong> ${phoneNumber || 'Not provided'}</li>
-                   <li><strong>Studio Name:</strong> ${StudioName || 'Not provided'}</li>
-                   <li><strong>Studio Size:</strong> ${StudioSize}</li>
+                    <li><strong>Name:</strong> ${Name}</li>
+                    <li><strong>Email:</strong> ${email}</li>
+                    <li><strong>Phone:</strong> ${phoneNumber || 'Not provided'}</li>
+                    <li><strong>Studio Name:</strong> ${StudioName || 'Not provided'}</li>
+                    <li><strong>Studio Size:</strong> ${StudioSize}</li>
                  </ul>`,
-        }),
-      });
-      const adminData = await adminResp.json();
-      if (adminResp.ok) {
-        log(`✅ Admin notification sent (Resend ID: ${adminData.id})`);
-      } else {
-        error(`❌ Admin notification failed: ${JSON.stringify(adminData)}`);
+        });
+        log(`✅ Admin notification sent (Message ID: ${adminInfo.messageId})`);
+      } catch (adminErr) {
+        error(`❌ Admin notification failed: ${adminErr.message}`);
       }
     }
 
-    return res.json({ success: true, emailId: data.id, message: "Welcome email sent" });
+    return res.json({ success: true, messageId: info.messageId, message: "Welcome email sent" });
   } catch (e) {
-    error(`❌ Unexpected error: ${e.message}`);
+    error(`❌ SMTP error: ${e.message}`);
     return res.json({ success: false, error: e.message }, 500);
   }
 };

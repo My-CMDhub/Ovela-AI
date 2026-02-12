@@ -13,6 +13,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional
 
+from core.config import settings
 from services.email import EmailService
 from .config import COALCREEK_CONFIG
 
@@ -160,7 +161,7 @@ class CoalCreekEmailService(EmailService):
             action_buttons_html=action_html
         )
         
-        sender = f"Coal Creek Motel <notifications@ovela.dev>"
+        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
         return await self.send_email(staff_email, subject, html, from_email=sender)
 
     async def send_guest_confirmation(
@@ -206,7 +207,7 @@ class CoalCreekEmailService(EmailService):
             button_url=f"tel:{self.config['phone'].replace(' ', '')}"
         )
         
-        sender = "Coal Creek Motel <notifications@ovela.dev>"
+        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
         return await self.send_email(guest_email, subject, html, from_email=sender)
 
     async def send_payment_notification(
@@ -269,7 +270,7 @@ class CoalCreekEmailService(EmailService):
             action_buttons_html=action_html
         )
         
-        sender = "Coal Creek Motel <notifications@ovela.dev>"
+        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
         return await self.send_email(staff_email, subject, html, from_email=sender)
 
     async def send_expiry_notification(
@@ -301,7 +302,7 @@ class CoalCreekEmailService(EmailService):
             details=details
         )
         
-        sender = "Coal Creek Motel <notifications@ovela.dev>"
+        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
         return await self.send_email(staff_email, subject, html, from_email=sender)
 
     async def send_payment_link(
@@ -357,7 +358,7 @@ class CoalCreekEmailService(EmailService):
             button_url=payment_link
         )
         
-        sender = "Coal Creek Motel <notifications@ovela.dev>"
+        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
         return await self.send_email(to_email, subject, html, from_email=sender)
 
 
