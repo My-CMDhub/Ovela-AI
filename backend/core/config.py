@@ -25,11 +25,21 @@ class Settings(BaseSettings):
     # Optional Security Keys
     DASHBOARD_API_KEY: Optional[str] = None  # Internal key for dashboard access
 
-    # Resend
+    # SMTP
+    SMTP_HOST: str = "smtppro.zoho.com.au"
+    SMTP_PORT: int = 465
+    SMTP_USER: str = "hello@ovela.dev"
+    SMTP_PASSWORD: str
+    MAIL_FROM: str = "Ovela <hello@ovela.dev>"
+    
+    # Internal aliases
+    MAIL_NOTIFICATIONS: str = "Ovela Notifications <notifications@ovela.dev>"
+    MAIL_BOOKINGS: str = "Ovela Bookings <bookings@ovela.dev>"
+
+    # Resend (Deprecated, kept for compatibility if needed)
     RESEND_API_KEY: str = ""
-    RESEND_FROM_EMAIL: str = "hello@ovela.dev"
     # Comma-separated list of emails to receive demo alerts
-    DEMO_ALERT_RECIPIENTS: str = "demo@ovela.dev"
+    DEMO_ALERT_RECIPIENTS: str = "hello@ovela.dev"
     # Comma-separated list of emails for staff notifications (callbacks, approvals)
     STAFF_NOTIFICATION_RECIPIENTS: str = "officialcoalcreek@gmail.com"
 
