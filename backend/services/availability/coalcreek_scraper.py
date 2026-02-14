@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-SCRAPPINGBEE_API_KEY = os.getenv("SCRAPPINGBEE_API_KEY")
+SCRAPPINGBEE_API_KEY = os.getenv("SCRAPPINGBEE_API_KEY", "").strip() or None
 SCRAPPINGBEE_URL = "https://app.scrapingbee.com/api/v1/"
 
 PROPERTY_ID = "2626"

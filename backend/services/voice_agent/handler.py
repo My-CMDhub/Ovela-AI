@@ -847,14 +847,14 @@ class VoiceAgentHandler:
         STATE MACHINE: AgentAudioDone means Deepgram finished sending audio.
         We now switch to "awaiting user utterance" state.
         """
-        logger.info("🔇 Agent audio done")
+        logger.info("🔇 Agent audio done (transfer_pending=%s)", self._transfer_pending)
         
         # Mark AI as not speaking - transition to awaiting user
         self._ai_is_speaking = False
         
         # If we're waiting for transfer TTS to complete, signal it's done
         if self._transfer_pending:
-            logger.info("✅ Transfer TTS playback completed")
+            logger.info("✅ Transfer TTS playback completed – signalling _transfer_tts_done")
             self._transfer_tts_done.set()
             return  # Don't start silence monitoring during transfer
         
@@ -1000,7 +1000,11 @@ class VoiceAgentHandler:
         if function_name == "check_availability" and result.get("available") == "unknown":
             message = result.get("ai_should_say") or get_preset_phrase(self.tenant_id, "availability_fail")
             await self._speak_and_wait_for_tts(message, timeout=4.0, min_wait=2.0)
-            await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER, play_transfer_message=False)
+            await self._execute_twilio_transfer(
+                settings.STAFF_PHONE_NUMBER,
+                play_transfer_message=False,
+                backup_tts_message="Transferring you to reception now. One moment please.",
+            )
             return
 
         # Check for transfer signal
@@ -1333,17 +1337,32 @@ class VoiceAgentHandler:
         await asyncio.sleep(delay)
 
     async def _speak_and_wait_for_tts(self, content: str, timeout: float = 3.0, min_wait: float = 1.0):
-        """Speak a message and wait for AgentAudioDone or timeout."""
+        """
+        Speak a message and wait for AgentAudioDone or timeout.
+        
+        If Deepgram never fires AgentAudioDone for InjectAgentMessage
+        (observed in production), the timeout path guarantees we still
+        wait long enough for TTS to reach the caller before proceeding.
+        """
         if not content:
             return
         async with self._tts_lock:
             self._transfer_pending = True
             self._transfer_tts_done.clear()
+            logger.info(f"🗣️ _speak_and_wait_for_tts: injecting '{content[:60]}…' (timeout={timeout}s, min_wait={min_wait}s)")
             await self._inject_message(content)
             try:
                 await asyncio.wait_for(self._transfer_tts_done.wait(), timeout=timeout)
+                logger.info("✅ AgentAudioDone received for injected message")
             except asyncio.TimeoutError:
-                await asyncio.sleep(min_wait)
+                # Deepgram may not emit AgentAudioDone for InjectAgentMessage.
+                # Estimate delay from content length so TTS has time to play.
+                estimated_tts_delay = max(min_wait, len(content) * 0.07 + 0.5)
+                logger.warning(
+                    f"⏱️ AgentAudioDone timeout – falling back to estimated delay "
+                    f"({estimated_tts_delay:.1f}s) for '{content[:40]}…'"
+                )
+                await asyncio.sleep(estimated_tts_delay)
             finally:
                 self._transfer_pending = False
                 self._transfer_tts_done.clear()
@@ -1481,17 +1500,31 @@ class VoiceAgentHandler:
         
         # 4. Transfer
         staff_number = settings.STAFF_PHONE_NUMBER
-        await self._execute_twilio_transfer(staff_number, play_transfer_message=False)
+        await self._execute_twilio_transfer(
+            staff_number,
+            play_transfer_message=False,
+            backup_tts_message="Transferring you now. One moment.",
+        )
         
         # 5. Log outcome
         self.call_outcome = "system_failure_transfer"
 
-    async def _execute_twilio_transfer(self, transfer_to: str, skip_summary_sms: bool = False, play_transfer_message: bool = True):
+    async def _execute_twilio_transfer(
+        self,
+        transfer_to: str,
+        skip_summary_sms: bool = False,
+        play_transfer_message: bool = True,
+        backup_tts_message: str | None = None,
+    ):
         """
         Execute Twilio call transfer using TwiML update.
         
         Uses <Say> then <Dial> to ensure transfer message is heard.
         Falls back to AI if no answer within TRANSFER_TIMEOUT.
+        
+        Args:
+            backup_tts_message: Optional safety-net message played via Twilio
+                TTS if Deepgram/Cartesia TTS may not have been audible.
         """
         if not self.call_sid:
             logger.warning("Cannot transfer: No Call SID")
@@ -1537,6 +1570,10 @@ class VoiceAgentHandler:
                     "Sure, I'll transfer you to our team now. Please hold.",
                     voice="Polly.Joanna"  # AWS Polly voice for natural sound
                 )
+            elif backup_tts_message:
+                # Safety-net: if AI TTS might not have been audible, play a
+                # short Twilio TTS so the caller isn't transferred in silence.
+                twiml.say(backup_tts_message, voice="Polly.Joanna")
             
             # Dial staff with timeout
             dial = Dial(
