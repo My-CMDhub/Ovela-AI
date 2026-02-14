@@ -244,8 +244,7 @@ class VoiceAgentHandler:
                         "model": "claude-3-haiku-20240307",
                     },
                     "prompt": self._get_active_prompt(),
-                    "functions": self._get_active_functions(),
-                    "function_call_instructions": self._get_function_call_instructions()
+                    "functions": self._get_active_functions()
                 }
             else:
                 logger.error("❌ ANTHROPIC_API_KEY not set - falling back to GPT-4.1-mini")
@@ -259,8 +258,7 @@ class VoiceAgentHandler:
                 "temperature": 0.7
             },
             "prompt": self._get_active_prompt(),
-            "functions": self._get_active_functions(),
-            "function_call_instructions": self._get_function_call_instructions()
+            "functions": self._get_active_functions()
         }
     
     
@@ -310,7 +308,12 @@ class VoiceAgentHandler:
                 memory_context += f"• Desired Pickup: {self.memory['pickup_time']}\n"
             memory_context += "========================================\n"
         
-        return base_prompt + memory_context
+        # Append function-call speaking rules to the prompt.
+        # These go into agent.think.prompt (the ONLY valid place for 
+        # LLM behavioral instructions in the Deepgram API).
+        func_instructions = self._get_function_call_instructions()
+        
+        return base_prompt + memory_context + "\n\n" + func_instructions
     
     def _get_active_functions(self) -> list:
         """Get the correct function definitions based on tenant."""
