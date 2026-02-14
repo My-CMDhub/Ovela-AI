@@ -112,6 +112,7 @@ class VoiceAgentHandler:
         self._transfer_pending = False
         self._transfer_tts_done = asyncio.Event()
         self._transfer_target = None
+        self._tts_lock = asyncio.Lock()
         
         # Latency tracking (for debugging/analytics)
         self.user_speech_start_time = None
@@ -952,10 +953,11 @@ class VoiceAgentHandler:
             if function_name in SLOW_TOOLS:
                 if function_name == "check_availability":
                     filler = get_preset_phrase(self.tenant_id, "availability_checking")
+                    await self._speak_and_wait_for_tts(filler, timeout=3.0, min_wait=1.2)
                 else:
                     filler = get_random_filler_prompt()
-                await self._inject_message(filler)
-                await asyncio.sleep(0.7)
+                    await self._inject_message(filler)
+                    await asyncio.sleep(0.7)
             
             # Execute via dispatcher
             ctx = {"pending_order": self.pending_order}
@@ -997,7 +999,7 @@ class VoiceAgentHandler:
         # Availability fallback: if live calendar is unavailable, apologize and transfer
         if function_name == "check_availability" and result.get("available") == "unknown":
             message = result.get("ai_should_say") or get_preset_phrase(self.tenant_id, "availability_fail")
-            await self._speak_and_wait(message, min_wait=2.5)
+            await self._speak_and_wait_for_tts(message, timeout=4.0, min_wait=2.0)
             await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER, play_transfer_message=False)
             return
 
@@ -1014,7 +1016,7 @@ class VoiceAgentHandler:
                  
             logger.info(f"📞 Transfer requested to {transfer_to}")
             message = result.get("message") or get_preset_phrase(self.tenant_id, "transfering")
-            await self._speak_and_wait(message, min_wait=2.0)
+            await self._speak_and_wait_for_tts(message, timeout=3.0, min_wait=1.8)
             await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
             return  # Don't send function response, call is being transferred
         
@@ -1260,7 +1262,7 @@ class VoiceAgentHandler:
                     
                     # 1. Honest Message
                     msg = "This is getting a bit complex. I'll put you through to the team now."
-                    await self._speak_and_wait(msg, min_wait=2.5)
+                    await self._speak_and_wait_for_tts(msg, timeout=4.0, min_wait=2.0)
                     
                     # 2. PROACTIVE SUMMARY SMS (Blocking/Sync)
                     try:
@@ -1329,6 +1331,22 @@ class VoiceAgentHandler:
         await self._inject_message(content)
         delay = max(min_wait, (len(content) * 0.08) + 0.8)
         await asyncio.sleep(delay)
+
+    async def _speak_and_wait_for_tts(self, content: str, timeout: float = 3.0, min_wait: float = 1.0):
+        """Speak a message and wait for AgentAudioDone or timeout."""
+        if not content:
+            return
+        async with self._tts_lock:
+            self._transfer_pending = True
+            self._transfer_tts_done.clear()
+            await self._inject_message(content)
+            try:
+                await asyncio.wait_for(self._transfer_tts_done.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                await asyncio.sleep(min_wait)
+            finally:
+                self._transfer_pending = False
+                self._transfer_tts_done.clear()
     
     async def _scheduled_hangup(self, delay: float):
         """Wait for a delay (TTS to finish) then hangup."""
@@ -1455,7 +1473,7 @@ class VoiceAgentHandler:
         
         # 1. Apologize
         apology = "Sorry, I'm having a technical issue. I'll put you through to a human now."
-        await self._speak_and_wait(apology, min_wait=2.5)
+        await self._speak_and_wait_for_tts(apology, timeout=4.0, min_wait=2.0)
         
         # 2. Prevent further AI processing
         self._is_hanging_up = True # Block new text
