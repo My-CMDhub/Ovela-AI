@@ -16,6 +16,7 @@ MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
 
 class EmailService:
+    def __init__(self):
         self.smtp_host = settings.SMTP_HOST
         self.smtp_port = settings.SMTP_PORT
         self.smtp_user = settings.SMTP_USER
