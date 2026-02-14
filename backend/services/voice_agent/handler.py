@@ -244,7 +244,8 @@ class VoiceAgentHandler:
                         "model": "claude-3-haiku-20240307",
                     },
                     "prompt": self._get_active_prompt(),
-                    "functions": self._get_active_functions()
+                    "functions": self._get_active_functions(),
+                    "function_call_instructions": self._get_function_call_instructions()
                 }
             else:
                 logger.error("❌ ANTHROPIC_API_KEY not set - falling back to GPT-4.1-mini")
@@ -258,9 +259,36 @@ class VoiceAgentHandler:
                 "temperature": 0.7
             },
             "prompt": self._get_active_prompt(),
-            "functions": self._get_active_functions()
+            "functions": self._get_active_functions(),
+            "function_call_instructions": self._get_function_call_instructions()
         }
     
+    
+    def _get_function_call_instructions(self) -> str:
+        """
+        Instructions the LLM follows when making function calls.
+        
+        The LLM speaks these phrases NATURALLY through TTS before the 
+        FunctionCallRequest fires. This eliminates the need for manual 
+        InjectAgentMessage (which races with LLM output).
+        
+        The Go Deaf mechanism mutes user audio during function execution,
+        so the LLM's phrase plays uninterrupted.
+        """
+        return (
+            "FUNCTION CALL SPEAKING RULES (MANDATORY):\n"
+            "When you call a function, you MUST say the exact phrase listed below — word for word, no variation.\n"
+            "- check_availability → Say: \"One moment, checking availability now.\"\n"
+            "- create_booking_request → Say: \"Let me place that hold for you now.\"\n"
+            "- lookup_booking → Say: \"One moment, let me look that up.\"\n"
+            "- request_human_callback → Say: \"I'll arrange that callback for you now.\"\n"
+            "- report_missing_booking → Say: \"Let me flag that with the team now.\"\n"
+            "- submit_order → Say: \"Placing your order now.\"\n"
+            "- get_menu_info → Say: \"Let me check the menu for you.\"\n"
+            "- For ANY other function: Say: \"Just a moment.\"\n"
+            "NEVER paraphrase, rephrase, or embellish these phrases. Use them exactly as written.\n"
+            "After the function returns a result, respond naturally with the information."
+        )
     
     def _get_active_prompt(self) -> str:
         """Get the active prompt based on tenant."""
@@ -975,26 +1003,26 @@ class VoiceAgentHandler:
         if "pickup_time" in function_args:
             self.memory["pickup_time"] = function_args["pickup_time"]
         
-        # Inject acknowledgment for slow/database tools to avoid silence
+        # ─────────────────────────────────────────────────────────────────
+        # LLM-NATIVE FILLER: The LLM speaks preset phrases itself (via
+        # function_call_instructions in Settings). We just need a brief
+        # pause to let the LLM's TTS audio flush through to Twilio before
+        # Go Deaf blocks further audio frames.  No InjectAgentMessage needed.
+        # ─────────────────────────────────────────────────────────────────
         SLOW_TOOLS = [
             "report_missing_booking", 
             "create_booking", 
             "request_human_callback",
             "lookup_booking",
             "check_availability",
-            "submit_order",     # Added for immediate feedback
-            "get_menu_info"     # Added for immediate feedback
+            "submit_order",
+            "get_menu_info"
         ]
         
         try:
             if function_name in SLOW_TOOLS:
-                if function_name == "check_availability":
-                    filler = get_preset_phrase(self.tenant_id, "availability_checking")
-                    await self._speak_and_wait_for_tts(filler, timeout=5.0, min_wait=1.5)
-                else:
-                    filler = get_random_filler_prompt()
-                    await self._inject_message(filler)
-                    await asyncio.sleep(0.7)
+                # Let the LLM's filler TTS audio flush to Twilio
+                await asyncio.sleep(0.5)
             
             # Execute via dispatcher
             ctx = {"pending_order": self.pending_order}

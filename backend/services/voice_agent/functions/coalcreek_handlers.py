@@ -475,9 +475,22 @@ class CoalCreekFunctionDispatcher:
     async def execute(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Execute a function with basic error handling."""
         import asyncio
-        # ScrapingBee with render_js=true typically takes 6-10s; 18s allows
-        # for occasional slow responses without false timeouts.
+        
+        # Dynamic timeout: scale with nights for availability checks.
+        # Parallel scraping completes in ~10s, but we add headroom.
         TIMEOUT = 18.0
+        if function_name == "check_availability":
+            try:
+                ci = args.get("check_in_date", "")
+                co = args.get("check_out_date", "")
+                if ci and co:
+                    from datetime import datetime as dt
+                    nights = max(1, (dt.strptime(co, "%Y-%m-%d") - dt.strptime(ci, "%Y-%m-%d")).days)
+                    # Parallel: base 15s + 3s per extra night (safety margin)
+                    TIMEOUT = max(18.0, 15.0 + nights * 3.0)
+                    logger.info(f"⏱️ Dynamic timeout for {nights}-night check: {TIMEOUT}s")
+            except Exception:
+                pass
         
         # Refresh context just in case
         set_tenant_context("coalcreek")

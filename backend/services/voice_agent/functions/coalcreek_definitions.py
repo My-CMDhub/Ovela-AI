@@ -20,18 +20,17 @@ def get_coalcreek_functions() -> list:
         {
             "name": "check_availability",
             "description": """Check live room availability for Coal Creek Motel (via website scraping).
-            
-CRITICAL - DEAD AIR PREVENTION:
-1. BEFORE calling this function, say: "Let me check that for you" or similar
-2. The system will automatically activate 4-second 'Go Deaf' mode to prevent user interruptions
-3. This function may take 3-10 seconds for multi-night stays
-4. When you receive the result, respond IMMEDIATELY with the availability info
-5. If availability cannot be verified, apologize briefly and transfer to staff
+
+SPEAKING RULE: When calling this function, say EXACTLY: "One moment, checking availability now." — no other phrase, no variation.
 
 Multi-Night Logic:
 - Validates EACH night in the date range (not just check-in)
 - A room is only available if free for ALL nights
 - Returns blocked_dates if any nights unavailable
+- This function may take 3-10 seconds for multi-night stays
+
+When you receive the result, respond IMMEDIATELY with the availability info.
+If availability cannot be verified, apologize briefly and transfer to staff.
 
 Use this when guest asks about availability or pricing for specific dates.""",
             "parameters": {

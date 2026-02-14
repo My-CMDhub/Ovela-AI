@@ -5,6 +5,7 @@ Production scraper using ScrapingBee for live availability.
 """
 
 import os
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
@@ -149,6 +150,8 @@ def parse_calendar_availability(html: str) -> List[Dict[str, object]]:
     return rooms
 
 
+
+
 async def check_multinight_availability(
     check_in_str: str,
     check_out_str: str,
@@ -156,27 +159,44 @@ async def check_multinight_availability(
 ) -> dict:
     """
     Check availability for EACH night in a multi-night stay.
+    Scrapes all nights in PARALLEL via asyncio.gather().
     """
     check_in = datetime.strptime(check_in_str, "%Y-%m-%d")
     check_out = datetime.strptime(check_out_str, "%Y-%m-%d")
     nights = (check_out - check_in).days
 
+    # Build parallel scrape tasks for every night
+    tasks = []
+    night_dates = []
+    for i in range(nights):
+        night_date = check_in + timedelta(days=i)
+        next_day = night_date + timedelta(days=1)
+        night_str = night_date.strftime("%Y-%m-%d")
+        next_str = next_day.strftime("%Y-%m-%d")
+        night_dates.append(night_str)
+        tasks.append(scrape_availability(night_str, next_str, nights=1))
+
+    logger.info(f"🚀 Launching {nights} parallel scrape tasks for {check_in_str} → {check_out_str}")
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Process results
     per_night_results = {}
     blocked_dates = []
     room_availability_tracker = {}
 
-    for i in range(nights):
-        night_date = check_in + timedelta(days=i)
-        next_day = night_date + timedelta(days=1)
+    for idx, (night_str, result) in enumerate(zip(night_dates, results)):
+        # Handle exceptions from individual tasks
+        if isinstance(result, Exception):
+            logger.error(f"Night {idx+1} ({night_str}) scrape exception: {result}")
+            return {
+                "success": False,
+                "error": f"Failed to check night {idx + 1} ({night_str}): {str(result)}"
+            }
 
-        night_str = night_date.strftime("%Y-%m-%d")
-        next_str = next_day.strftime("%Y-%m-%d")
-
-        result = await scrape_availability(night_str, next_str, nights=1)
         if not result.get("success"):
             return {
                 "success": False,
-                "error": f"Failed to check night {i + 1}: {result.get('error')}"
+                "error": f"Failed to check night {idx + 1}: {result.get('error')}"
             }
 
         availability = result.get("availability", [])
@@ -216,6 +236,7 @@ async def check_multinight_availability(
 
         available_all_nights = len(available_all_nights_rooms) > 0
 
+    logger.info(f"✅ Parallel scrape complete: {nights} nights, blocked={blocked_dates}")
     return {
         "success": True,
         "check_in": check_in_str,
