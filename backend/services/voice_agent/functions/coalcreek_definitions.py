@@ -2,7 +2,7 @@
 Coal Creek Motel Function Definitions
 =====================================
 OpenAI-compatible function definitions for the Deepgram Voice Agent.
-Specific to Coal Creek Motel's "Read-Only + Soft Hold" booking strategy.
+Specific to Coal Creek Motel's "Live Availability + Soft Hold" booking strategy.
 """
 
 def get_coalcreek_functions() -> list:
@@ -10,7 +10,7 @@ def get_coalcreek_functions() -> list:
     Returns list of function definitions for Coal Creek Motel.
     
     Strategy:
-    1. READ-ONLY Availability: AI checks if room is available but promises nothing.
+    1. LIVE Availability: AI checks the live calendar via website scraping.
     2. SOFT HOLD Booking: AI creates a request, sends to staff, tells user "temporary hold".
     """
     return [
@@ -19,13 +19,14 @@ def get_coalcreek_functions() -> list:
         # =================================================================
         {
             "name": "check_availability",
-            "description": """Check real-time room availability for Coal Creek Motel.
+            "description": """Check live room availability for Coal Creek Motel (via website scraping).
             
 CRITICAL - DEAD AIR PREVENTION:
 1. BEFORE calling this function, say: "Let me check that for you" or similar
 2. The system will automatically activate 4-second 'Go Deaf' mode to prevent user interruptions
 3. This function may take 3-10 seconds for multi-night stays
 4. When you receive the result, respond IMMEDIATELY with the availability info
+5. If availability cannot be verified, apologize briefly and transfer to staff
 
 Multi-Night Logic:
 - Validates EACH night in the date range (not just check-in)

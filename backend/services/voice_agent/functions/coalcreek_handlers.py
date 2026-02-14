@@ -147,9 +147,7 @@ async def handle_check_availability(args: dict, db_service) -> dict:
                 "available": "unknown",
                 "verified": False,
                 "message": "Technical issue accessing live calendar",
-                # Transparent honesty + Immediate solution + Go Deaf trigger via text analysis (if enabled)
-                # Note: "I'm having a technical issue" sets expectations. "Transfer you" offers solution.
-                "ai_should_say": "I'm sorry, I'm actually having a technical issue accessing the live calendar right now. To make sure you get the right information, I'd like to transfer you to reception. One moment please."
+                "ai_should_say": "Sorry, I can't access the live calendar right now. I'll transfer you to reception."
             }
         
         # 4. Parse result efficiently
@@ -242,7 +240,7 @@ async def handle_check_availability(args: dict, db_service) -> dict:
             "available": "unknown",
             "verified": False,
             "error": str(e),
-            "ai_should_say": "I'm having a system issue checking availability. Let me get you to reception who can help - one moment."
+            "ai_should_say": "Sorry, I can't check availability right now. I'll transfer you to reception."
         }
 
 
