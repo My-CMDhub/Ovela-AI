@@ -13,6 +13,7 @@ twilio
 websocket-client
 websockets
 aiohttp
+beautifulsoup4
 PyJWT
 newrelic>=11.0.0
 squareup
