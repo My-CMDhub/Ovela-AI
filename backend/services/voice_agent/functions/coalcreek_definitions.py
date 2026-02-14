@@ -15,7 +15,7 @@ def get_coalcreek_functions() -> list:
     """
     return [
         # =================================================================
-        # BOOKING OPERATIONS (Read-Only + Soft Hold)
+        # BOOKING OPERATIONS (Live Availability + Soft Hold)
         # =================================================================
         {
             "name": "check_availability",

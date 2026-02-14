@@ -988,6 +988,14 @@ class VoiceAgentHandler:
         finally:
             self._is_processing_function = False
         
+        # Availability fallback: if live calendar is unavailable, apologize and transfer
+        if function_name == "check_availability" and result.get("available") == "unknown":
+            message = result.get("ai_should_say") or "Sorry, I can't access the live calendar right now. I'll transfer you to reception."
+            await self._inject_message(message)
+            await asyncio.sleep(1.5)
+            await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER)
+            return
+
         # Check for transfer signal
         if result.get("action") == "transfer":
             # Determine transfer number
