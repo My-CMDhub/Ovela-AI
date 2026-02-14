@@ -50,6 +50,20 @@ FILLER_PROMPTS = [
     "Okay, let me see what I can find...",
 ]
 
+# Preset phrases to keep critical moments consistent and concise.
+PRESET_PHRASES = {
+    "coalcreek": {
+        "availability_checking": "One moment, checking availability now.",
+        "availability_fail": "Sorry, I can't access the live calendar right now. I'll transfer you to reception.",
+        "transfering": "I'll put you through now.",
+    },
+    "default": {
+        "availability_checking": "One moment, checking availability now.",
+        "availability_fail": "Sorry, I can't check that right now. I'll transfer you to the team.",
+        "transfering": "I'll put you through now.",
+    },
+}
+
 # =============================================================================
 # SILENCE DETECTION THRESHOLDS (seconds)
 # =============================================================================
@@ -134,11 +148,11 @@ def get_random_greeting(tenant_id: str = "coalcreek") -> str:
     # Coal Creek Motel
     if tenant_id == "coalcreek":
         greetings = [
-            "G'day! Coal Creek Motel, Ovela speaking. Please note this call is recorded for quality and training purposes. How can I help you today?",
-            "Hello! Thanks for calling Coal Creek Motel. Just letting you know this call is recorded for quality and training purposes. What can I do for you?",
-            "Hi there! Coal Creek Motel speaking. Please note calls are recorded for quality and training purposes. Are you after a room or some information?",
-            "Good day! You've reached Coal Creek Motel in Korumburra. Calls are recorded for quality and training purposes. How can I help?",
-            "Welcome to Coal Creek Motel! This is Ovela. Please note this call is recorded for quality and training purposes. What can I assist you with?",
+            "Coal Creek Motel. This call is recorded. How can I help?",
+            "Coal Creek Motel, this call is recorded. How can I help you today?",
+            "Coal Creek Motel. Calls are recorded. What can I do for you?",
+            "Coal Creek Motel here. This call is recorded. How can I help?",
+            "Coal Creek Motel. Calls are recorded. Are you after a room or info?",
         ]
         return random.choice(greetings)
     
@@ -189,4 +203,10 @@ def get_random_soft_warning(tenant_id: str = "coalcreek") -> str:
 def get_random_filler_prompt() -> str:
     """Returns a random filler prompt to hold the floor."""
     return random.choice(FILLER_PROMPTS)
+
+
+def get_preset_phrase(tenant_id: str, key: str) -> str:
+    """Return a preset phrase for consistent critical messaging."""
+    tenant_map = PRESET_PHRASES.get(tenant_id, PRESET_PHRASES["default"])
+    return tenant_map.get(key, PRESET_PHRASES["default"].get(key, ""))
 

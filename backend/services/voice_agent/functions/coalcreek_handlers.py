@@ -108,7 +108,6 @@ async def handle_check_availability(args: dict, db_service) -> dict:
     # 3. Call multi-night scraper with RETRY LOGIC (Max 2 Attempts)
     try:
         # Import the scraper
-        import sys
         from scripts.test_multinight_availability import check_multinight_availability
         
         logger.info(f"🔍 Checking availability: {check_in} to {check_out} ({nights} nights), room={target_room or 'any'}")

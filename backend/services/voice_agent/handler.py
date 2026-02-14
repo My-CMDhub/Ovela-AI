@@ -39,6 +39,7 @@ from .config import (
     get_random_farewell,
     get_random_silence_prompt,
     get_random_filler_prompt,
+    get_preset_phrase,
 )
 from .prompts import get_system_prompt
 from .abuse_protection import AbuseProtection
@@ -949,7 +950,12 @@ class VoiceAgentHandler:
         
         try:
             if function_name in SLOW_TOOLS:
-                await self._inject_message(get_random_filler_prompt())
+                if function_name == "check_availability":
+                    filler = get_preset_phrase(self.tenant_id, "availability_checking")
+                else:
+                    filler = get_random_filler_prompt()
+                await self._inject_message(filler)
+                await asyncio.sleep(0.7)
             
             # Execute via dispatcher
             ctx = {"pending_order": self.pending_order}
@@ -990,10 +996,9 @@ class VoiceAgentHandler:
         
         # Availability fallback: if live calendar is unavailable, apologize and transfer
         if function_name == "check_availability" and result.get("available") == "unknown":
-            message = result.get("ai_should_say") or "Sorry, I can't access the live calendar right now. I'll transfer you to reception."
-            await self._inject_message(message)
-            await asyncio.sleep(1.5)
-            await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER)
+            message = result.get("ai_should_say") or get_preset_phrase(self.tenant_id, "availability_fail")
+            await self._speak_and_wait(message, min_wait=2.5)
+            await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER, play_transfer_message=False)
             return
 
         # Check for transfer signal
@@ -1008,10 +1013,9 @@ class VoiceAgentHandler:
                  transfer_to = self.tenant_config["business_phone"]
                  
             logger.info(f"📞 Transfer requested to {transfer_to}")
-            
-            # Execute transfer immediately - TwiML <Say> handles the message
-            # (No need to inject via Deepgram - that causes race conditions)
-            await self._execute_twilio_transfer(transfer_to)
+            message = result.get("message") or get_preset_phrase(self.tenant_id, "transfering")
+            await self._speak_and_wait(message, min_wait=2.0)
+            await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
             return  # Don't send function response, call is being transferred
         
         # Check for end_call signal (LLM explicitly requested call termination)
@@ -1255,8 +1259,8 @@ class VoiceAgentHandler:
                     self._is_hanging_up = True
                     
                     # 1. Honest Message
-                    msg = "I've realized this is getting a bit complex and I want to make sure you get the best help. I'm going to pass you to a manager now. I'm just summarizing our chat for them so you don't have to repeat yourself. One moment please."
-                    await self._inject_message(msg)
+                    msg = "This is getting a bit complex. I'll put you through to the team now."
+                    await self._speak_and_wait(msg, min_wait=2.5)
                     
                     # 2. PROACTIVE SUMMARY SMS (Blocking/Sync)
                     try:
@@ -1291,11 +1295,8 @@ class VoiceAgentHandler:
                         logger.error(f"Failed to send hard cap summary: {e}")
 
                     # 3. Wait for TTS to play (Extended Delay)
-                    logger.info("⏳ Waiting 12s for TTS to complete before transfer...")
-                    await asyncio.sleep(12.0)
-                    
                     # 4. Transfer (Skip internal SMS since we just sent it)
-                    await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER, skip_summary_sms=True)
+                    await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER, skip_summary_sms=True, play_transfer_message=False)
                 else:
                     logger.info(f"🚫 Hard time cap reached - ending call [{call_type}]")
                     await self._hangup_with_farewell(duration_result.get("farewell", "Thanks for calling!"))
@@ -1320,6 +1321,14 @@ class VoiceAgentHandler:
             logger.info(f"📨 Injected: '{content[:50]}...'")
         except Exception as e:
             logger.warning(f"Failed to inject message: {e}")
+
+    async def _speak_and_wait(self, content: str, min_wait: float = 2.0):
+        """Speak a short message and wait for TTS to finish."""
+        if not content:
+            return
+        await self._inject_message(content)
+        delay = max(min_wait, (len(content) * 0.08) + 0.8)
+        await asyncio.sleep(delay)
     
     async def _scheduled_hangup(self, delay: float):
         """Wait for a delay (TTS to finish) then hangup."""
@@ -1445,24 +1454,21 @@ class VoiceAgentHandler:
         logger.error(f"🚨 Handling System Failure: {error_msg}")
         
         # 1. Apologize
-        apology = "I'm so sorry, I'm having a bit of technical trouble on my end right now. Let me pass you to a human who can help you out straight away."
-        await self._inject_message(apology)
+        apology = "Sorry, I'm having a technical issue. I'll put you through to a human now."
+        await self._speak_and_wait(apology, min_wait=2.5)
         
         # 2. Prevent further AI processing
         self._is_hanging_up = True # Block new text
         self._is_processing_function = True # Block new functions
         
-        # 3. Wait for TTS
-        await asyncio.sleep(5)
-        
         # 4. Transfer
         staff_number = settings.STAFF_PHONE_NUMBER
-        await self._execute_twilio_transfer(staff_number)
+        await self._execute_twilio_transfer(staff_number, play_transfer_message=False)
         
         # 5. Log outcome
         self.call_outcome = "system_failure_transfer"
 
-    async def _execute_twilio_transfer(self, transfer_to: str, skip_summary_sms: bool = False):
+    async def _execute_twilio_transfer(self, transfer_to: str, skip_summary_sms: bool = False, play_transfer_message: bool = True):
         """
         Execute Twilio call transfer using TwiML update.
         
@@ -1507,11 +1513,12 @@ class VoiceAgentHandler:
             # Build TwiML for transfer
             twiml = VoiceResponse()
             
-            # CRITICAL: Say transfer message FIRST via Twilio's TTS
-            twiml.say(
-                "Sure, I'll transfer you to our team now. Please hold.",
-                voice="Polly.Joanna"  # AWS Polly voice for natural sound
-            )
+            # Optional transfer message via Twilio's TTS
+            if play_transfer_message:
+                twiml.say(
+                    "Sure, I'll transfer you to our team now. Please hold.",
+                    voice="Polly.Joanna"  # AWS Polly voice for natural sound
+                )
             
             # Dial staff with timeout
             dial = Dial(
