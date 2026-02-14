@@ -475,7 +475,9 @@ class CoalCreekFunctionDispatcher:
     async def execute(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Execute a function with basic error handling."""
         import asyncio
-        TIMEOUT = 10.0
+        # ScrapingBee with render_js=true typically takes 6-10s; 18s allows
+        # for occasional slow responses without false timeouts.
+        TIMEOUT = 18.0
         
         # Refresh context just in case
         set_tenant_context("coalcreek")
@@ -487,7 +489,16 @@ class CoalCreekFunctionDispatcher:
              )
              return result
         except asyncio.TimeoutError:
-             logger.error(f"Function {function_name} timed out")
+             logger.error(f"Function {function_name} timed out after {TIMEOUT}s")
+             # For availability checks, return "unknown" so handler transfers
+             # to reception instead of letting the AI hallucinate a response.
+             if function_name == "check_availability":
+                 return {
+                     "available": "unknown",
+                     "verified": False,
+                     "message": "Live calendar timed out",
+                     "ai_should_say": "Sorry, I can't access the live calendar right now. I'll transfer you to reception."
+                 }
              return {"success": False, "message": "I'm having a connection issue. One moment."}
         except Exception as e:
              logger.error(f"Function error {function_name}: {e}")

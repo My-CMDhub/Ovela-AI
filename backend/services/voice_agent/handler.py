@@ -542,6 +542,13 @@ class VoiceAgentHandler:
         if getattr(self, '_is_hanging_up', False):
             return  # Silently drop audio - user won't be heard after farewell
         
+        # GO DEAF DURING FUNCTION CALLS: Prevent Deepgram VAD from detecting user
+        # speech while we're injecting TTS messages.  Without this, the user saying
+        # "Hello?" triggers UserStartedSpeaking which sends a Twilio 'clear' event
+        # that wipes the injected TTS audio buffer before it plays.
+        if self._is_processing_function:
+            return
+        
         if not self.deepgram_ws:
             return
         
@@ -649,7 +656,16 @@ class VoiceAgentHandler:
             await self._handle_agent_audio_done()
             
         elif event_type == "FunctionCallRequest":
-            await self._handle_function_call(event)
+            # NON-BLOCKING: Run function handler as a task so the receive loop
+            # continues forwarding audio frames to Twilio.  Without this, binary
+            # TTS audio from InjectAgentMessage is buffered and never heard.
+            asyncio.create_task(self._handle_function_call(event))
+            
+        elif event_type == "InjectionRefused":
+            logger.warning("⚠️ InjectAgentMessage refused (user speaking or agent already responding)")
+            # If we're waiting for TTS playback, unblock so flow continues
+            if self._transfer_pending:
+                self._transfer_tts_done.set()
             
         elif event_type == "Error":
             logger.error(f"❌ Deepgram Agent error: {event}")
@@ -788,6 +804,17 @@ class VoiceAgentHandler:
     
     async def _handle_user_started_speaking(self):
         """Handle VAD detection of user speech."""
+        # ─────────────────────────────────────────────────────────────────
+        # GO DEAF DURING FUNCTION CALLS: If a function is in progress we
+        # are injecting TTS ("One moment...").  VAD may still fire from
+        # residual audio in Deepgram's buffer.  Do NOT send the Twilio
+        # 'clear' event — it would wipe the injected TTS audio buffer
+        # and the caller would hear silence.
+        # ─────────────────────────────────────────────────────────────────
+        if self._is_processing_function:
+            logger.debug("🙉 Go Deaf: ignoring UserStartedSpeaking during function call")
+            return
+        
         logger.info("🎤 User started speaking (VAD)")
         
         # Track timing
@@ -904,7 +931,21 @@ class VoiceAgentHandler:
             logger.error(f"❌ FunctionCallRequest missing name or id. Event: {event}")
             return
         
+        # DEDUP GUARD: Prevent cascading duplicate calls while one is in progress.
+        # When the receive loop was blocking, user retries ("Hello?") would pile up
+        # and each trigger another function call on replay.
+        if self._is_processing_function:
+            logger.warning(f"⏭️ Skipping duplicate {function_name} – another function already in progress")
+            await self._send_function_response(call_id, function_name, {
+                "skipped": True,
+                "message": "I'm already working on your request. One moment please."
+            })
+            return
+        
         logger.info(f"🔧 Function call: {function_name}({function_args})")
+        
+        # Mark as processing BEFORE any async work to block duplicates immediately
+        self._is_processing_function = True
 
         # SMART MEMORY UPDATE
         # Capture details from function args to persist in prompt
@@ -935,7 +976,6 @@ class VoiceAgentHandler:
             self.memory["pickup_time"] = function_args["pickup_time"]
         
         # Inject acknowledgment for slow/database tools to avoid silence
-        # Inject acknowledgment for slow/database tools to avoid silence
         SLOW_TOOLS = [
             "report_missing_booking", 
             "create_booking", 
@@ -946,14 +986,11 @@ class VoiceAgentHandler:
             "get_menu_info"     # Added for immediate feedback
         ]
         
-        # Track function processing state
-        self._is_processing_function = True
-        
         try:
             if function_name in SLOW_TOOLS:
                 if function_name == "check_availability":
                     filler = get_preset_phrase(self.tenant_id, "availability_checking")
-                    await self._speak_and_wait_for_tts(filler, timeout=3.0, min_wait=1.2)
+                    await self._speak_and_wait_for_tts(filler, timeout=5.0, min_wait=1.5)
                 else:
                     filler = get_random_filler_prompt()
                     await self._inject_message(filler)
@@ -993,96 +1030,91 @@ class VoiceAgentHandler:
                                 "function": function_name
                             }
                         )
+        except Exception as func_err:
+            logger.error(f"❌ Unexpected error in function call handling: {func_err}")
+            result = {"success": False, "message": "I encountered a technical issue."}
+        
+        # ─────────────────────────────────────────────────────────────────
+        # POST-FUNCTION LOGIC: Still under Go Deaf (_is_processing_function = True)
+        # so injected speech cannot be wiped by Twilio 'clear' events.
+        # Go Deaf is released in the finally block below.
+        # ─────────────────────────────────────────────────────────────────
+        
+        try:
+            # Availability fallback: if live calendar is unavailable, apologize and transfer
+            if function_name == "check_availability" and result.get("available") == "unknown":
+                message = result.get("ai_should_say") or get_preset_phrase(self.tenant_id, "availability_fail")
+                await self._speak_and_wait_for_tts(message, timeout=4.0, min_wait=2.0)
+                await self._execute_twilio_transfer(
+                    settings.STAFF_PHONE_NUMBER,
+                    play_transfer_message=False,
+                    backup_tts_message="Transferring you to reception now. One moment please.",
+                )
+                return
+
+            # Check for transfer signal
+            if result.get("action") == "transfer":
+                transfer_to = getattr(settings, 'SARANDA_STAFF_PHONE', settings.STAFF_PHONE_NUMBER)
+                if not transfer_to and self.tenant_config.get("business_phone"):
+                     transfer_to = self.tenant_config["business_phone"]
+                logger.info(f"📞 Transfer requested to {transfer_to}")
+                message = result.get("message") or get_preset_phrase(self.tenant_id, "transfering")
+                await self._speak_and_wait_for_tts(message, timeout=3.0, min_wait=1.8)
+                await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
+                return
+
+            # Check for end_call signal (LLM explicitly requested call termination)
+            if result.get("action") == "end_call":
+                logger.info("👋 end_call function called - injecting farewell + scheduling hangup")
+                self._is_hanging_up = True
+                message = result.get("message")
+                if not message:
+                    message = get_random_farewell(self.tenant_id)
+                    logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
+                await self._inject_message(message)
+                delay = max(4.0, (len(message) * 0.1) + 2.0)
+                logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
+                asyncio.create_task(self._scheduled_hangup(delay))
+                return
+
+            # Check for hangup signal from flag_off_topic
+            if result.get("should_hangup"):
+                logger.info(f"🚫 Flag off-topic limit reached - hanging up")
+                self.call_outcome = "abuse_timeout"
+                asyncio.create_task(self._hangup_with_farewell(
+                    result.get("farewell", "Thanks for calling! Take care!")
+                ))
+
+            # Check if booking was completed
+            if function_name == "create_booking" and result.get("success"):
+                self.booking_completed = True
+
+            # Check for order completion (Saranda)
+            if function_name == "submit_order":
+                 if result.get("success") and result.get("action") == "hold":
+                     self.pending_order = result.get("order_details")
+                     logger.info(f"📝 Order Held in Batch: {len(self.pending_order.get('items', []))} items")
+                 elif result.get("success") and result.get("order_id"):
+                     self.order_id = result.get("order_id")
+                     self.call_reference = self.order_id
+                     logger.info(f"🛒 Order captured (Immediate): {self.order_id}")
+
+            # Check for booking completion (Motel)
+            if function_name == "create_booking_request" and result.get("success"):
+                self.call_reference = result.get("booking_reference")
+                logger.info(f"🏨 Booking captured: {self.call_reference}")
+
+            # SMART MEMORY UPDATE: Capture Customer ID from Lookup
+            if function_name == "lookup_customer" and result.get("found") and result.get("customer_id"):
+                self.customer_id = result.get("customer_id")
+                logger.info(f"🆔 Captured Customer ID: {self.customer_id}")
+
+            # Send response back to Deepgram
+            await self._send_function_response(call_id, function_name, result)
+        
         finally:
+            # Release Go Deaf AFTER all post-function speech & transfers are done
             self._is_processing_function = False
-        
-        # Availability fallback: if live calendar is unavailable, apologize and transfer
-        if function_name == "check_availability" and result.get("available") == "unknown":
-            message = result.get("ai_should_say") or get_preset_phrase(self.tenant_id, "availability_fail")
-            await self._speak_and_wait_for_tts(message, timeout=4.0, min_wait=2.0)
-            await self._execute_twilio_transfer(
-                settings.STAFF_PHONE_NUMBER,
-                play_transfer_message=False,
-                backup_tts_message="Transferring you to reception now. One moment please.",
-            )
-            return
-
-        # Check for transfer signal
-        if result.get("action") == "transfer":
-            # Determine transfer number
-            # PRIORITIZE Config (Env Var) for testing/safety override
-            # typically we'd use DB, but user wants to ensure it goes to the specific updated number
-            transfer_to = getattr(settings, 'SARANDA_STAFF_PHONE', settings.STAFF_PHONE_NUMBER)
-            
-            # Only fallback to DB if config is missing (rare)
-            if not transfer_to and self.tenant_config.get("business_phone"):
-                 transfer_to = self.tenant_config["business_phone"]
-                 
-            logger.info(f"📞 Transfer requested to {transfer_to}")
-            message = result.get("message") or get_preset_phrase(self.tenant_id, "transfering")
-            await self._speak_and_wait_for_tts(message, timeout=3.0, min_wait=1.8)
-            await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
-            return  # Don't send function response, call is being transferred
-        
-        # Check for end_call signal (LLM explicitly requested call termination)
-        if result.get("action") == "end_call":
-            logger.info("👋 end_call function called - injecting farewell + scheduling hangup")
-            self._is_hanging_up = True
-            
-            # Use pre-configured farewell for consistency (or custom message if provided)
-            message = result.get("message")
-            if not message:
-                # Use tenant-specific pre-configured farewell (like greetings)
-                message = get_random_farewell(self.tenant_id)
-                logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
-            
-            # Inject the farewell message
-            await self._inject_message(message)
-            
-            # Schedule hangup after TTS completes (Calculated Buffer)
-            # Formula: 0.1s per char + 2.0s buffer (Min 4s)
-            delay = max(4.0, (len(message) * 0.1) + 2.0)
-            logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
-            asyncio.create_task(self._scheduled_hangup(delay))
-            return  # Don't send function response, call is ending
-        
-        # Check for hangup signal from flag_off_topic
-        if result.get("should_hangup"):
-            logger.info(f"🚫 Flag off-topic limit reached - hanging up")
-            self.call_outcome = "abuse_timeout"
-            asyncio.create_task(self._hangup_with_farewell(
-                result.get("farewell", "Thanks for calling! Take care!")
-            ))
-        
-        # Check if booking was completed
-        if function_name == "create_booking" and result.get("success"):
-            self.booking_completed = True
-        
-        # Check for order completion (Saranda) - NOW LOGIC CHANGED
-        if function_name == "submit_order":
-             if result.get("success") and result.get("action") == "hold":
-                 # BATCH STRATEGY: Store in pending_order, do NOT submit yet
-                 self.pending_order = result.get("order_details")
-                 logger.info(f"📝 Order Held in Batch: {len(self.pending_order.get('items', []))} items")
-             
-             elif result.get("success") and result.get("order_id"):
-                 # Legacy/Instant Submit path
-                 self.order_id = result.get("order_id")
-                 self.call_reference = self.order_id
-                 logger.info(f"🛒 Order captured (Immediate): {self.order_id}")
-        
-        # Check for booking completion (Motel)
-        if function_name == "create_booking_request" and result.get("success"):
-            self.call_reference = result.get("booking_reference")
-            logger.info(f"🏨 Booking captured: {self.call_reference}")
-
-        # SMART MEMORY UPDATE: Capture Customer ID from Lookup
-        if function_name == "lookup_customer" and result.get("found") and result.get("customer_id"):
-            self.customer_id = result.get("customer_id")
-            logger.info(f"🆔 Captured Customer ID: {self.customer_id}")
-        
-        # Send response back to Deepgram
-        await self._send_function_response(call_id, function_name, result)
     
     async def _send_function_response(self, call_id: str, function_name: str, result: dict):
         """Send function result back to Deepgram (V1 API format)."""
@@ -1336,13 +1368,17 @@ class VoiceAgentHandler:
         delay = max(min_wait, (len(content) * 0.08) + 0.8)
         await asyncio.sleep(delay)
 
-    async def _speak_and_wait_for_tts(self, content: str, timeout: float = 3.0, min_wait: float = 1.0):
+    async def _speak_and_wait_for_tts(self, content: str, timeout: float = 5.0, min_wait: float = 1.0):
         """
         Speak a message and wait for AgentAudioDone or timeout.
         
-        If Deepgram never fires AgentAudioDone for InjectAgentMessage
-        (observed in production), the timeout path guarantees we still
-        wait long enough for TTS to reach the caller before proceeding.
+        With the non-blocking receive loop, AgentAudioDone will arrive for
+        InjectAgentMessage if the injection succeeded.  The timeout path
+        covers InjectionRefused or edge cases where the event is lost.
+        
+        After AgentAudioDone fires the audio bytes have been *sent* to Twilio,
+        but Twilio still needs to play them over the phone line.  The min_wait
+        adds a floor to ensure the caller actually hears the message.
         """
         if not content:
             return
@@ -1350,19 +1386,23 @@ class VoiceAgentHandler:
             self._transfer_pending = True
             self._transfer_tts_done.clear()
             logger.info(f"🗣️ _speak_and_wait_for_tts: injecting '{content[:60]}…' (timeout={timeout}s, min_wait={min_wait}s)")
+            start = time.monotonic()
             await self._inject_message(content)
             try:
                 await asyncio.wait_for(self._transfer_tts_done.wait(), timeout=timeout)
-                logger.info("✅ AgentAudioDone received for injected message")
+                elapsed = time.monotonic() - start
+                logger.info(f"✅ AgentAudioDone received in {elapsed:.2f}s for injected message")
+                # Ensure caller has time to hear the audio before we proceed
+                remaining = min_wait - elapsed
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
             except asyncio.TimeoutError:
-                # Deepgram may not emit AgentAudioDone for InjectAgentMessage.
-                # Estimate delay from content length so TTS has time to play.
-                estimated_tts_delay = max(min_wait, len(content) * 0.07 + 0.5)
+                # InjectionRefused or event lost — fall back to a short wait
                 logger.warning(
-                    f"⏱️ AgentAudioDone timeout – falling back to estimated delay "
-                    f"({estimated_tts_delay:.1f}s) for '{content[:40]}…'"
+                    f"⏱️ AgentAudioDone timeout after {timeout}s for '{content[:40]}…' "
+                    f"— falling back to min_wait ({min_wait}s)"
                 )
-                await asyncio.sleep(estimated_tts_delay)
+                await asyncio.sleep(min_wait)
             finally:
                 self._transfer_pending = False
                 self._transfer_tts_done.clear()
