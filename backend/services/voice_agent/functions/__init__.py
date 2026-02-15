@@ -8,12 +8,11 @@ Function definitions are here, implementations are in handlers.py.
 """
 
 from .handlers import FunctionDispatcher
-from .saranda_handlers import SarandaFunctionDispatcher
 from .coalcreek_handlers import CoalCreekFunctionDispatcher
-from .saranda_definitions import get_saranda_functions
 from .coalcreek_definitions import get_coalcreek_functions
 
-__all__ = ['get_booking_functions', 'FunctionDispatcher', 'SarandaFunctionDispatcher', 'CoalCreekFunctionDispatcher', 'get_saranda_functions', 'get_coalcreek_functions']
+__all__ = ['get_booking_functions', 'FunctionDispatcher', 'CoalCreekFunctionDispatcher', 'get_coalcreek_functions']
+
 
 
 def get_booking_functions() -> list:

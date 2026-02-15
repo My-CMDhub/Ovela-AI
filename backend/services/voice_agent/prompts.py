@@ -4,7 +4,6 @@ Voice Agent Prompts Module.
 Contains system prompts, message templates, and conversation guidance.
 """
 
-from services.voice_agent.prompts_saranda import get_saranda_prompt
 from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt
 
 def get_system_prompt(current_date: str = None, current_time: str = None, tenant_id: str = "coalcreek") -> str:
@@ -17,12 +16,9 @@ def get_system_prompt(current_date: str = None, current_time: str = None, tenant
     Args:
         current_date: Current date string
         current_time: Current time string
-        tenant_id: Tenant identifier (saranda, coalcreek)
+        tenant_id: Tenant identifier (currently only coalcreek is active)
     """
-    # Saranda Restaurant (pickup orders, WhatsApp HITL)
-    if tenant_id == "saranda":
-        return get_saranda_prompt(current_date, current_time)
-    
-    # Coal Creek Motel (Default/Primary)
-    # Also handles fallback if tenant_id is unknown or legacy
+    # Coal Creek Motel (Primary tenant)
+    # Multi-tenant architecture preserved for future expansion
     return get_coalcreek_prompt(current_date, current_time)
+

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     META_ACCESS_TOKEN: str = ""
     META_PHONE_NUMBER_ID: str = ""
     META_VERIFY_TOKEN: str = ""  # For incoming webhooks
-    WHATSAPP_TEMPLATE_NAME: str = "saranda_approval_v1"
+
 
     # OpenAI
     OPENAI_API_KEY: str
@@ -49,11 +49,9 @@ class Settings(BaseSettings):
     TWILIO_PHONE_NUMBER: str = "+61468088990"  # Your purchased Twilio number
     TWILIO_WHATSAPP_NUMBER: str = "+14155238886"  # Twilio WhatsApp Sandbox number
     
-    # Saranda Restaurant Staff WhatsApp
-    SARANDA_STAFF_WHATSAPP: str = "+61475677771"  # Test: your number | Prod: +61452557167
+
     
-    # WhatsApp Button Support (hybrid approach)
-    USE_WHATSAPP_BUTTONS: bool = True  # True = buttons (testing), False = text (production)
+
 
     # Deepgram
     DEEPGRAM_API_KEY: str

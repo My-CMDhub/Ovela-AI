@@ -21,7 +21,15 @@ def get_coalcreek_functions() -> list:
             "name": "check_availability",
             "description": """Check live room availability for Coal Creek Motel (via website scraping).
 
-SPEAKING RULE: When calling this function, say EXACTLY: "One moment, checking availability now." — no other phrase, no variation.
+SPEAKING RULE: Say ONE of these (vary naturally):
+  - "One moment , let me check..."
+  - "Let me check that for you."
+  - "Just a second, I'll look that up."
+
+CRITICAL EFFICIENCY RULE:
+- If user asks "what's available?" or "other options" → use room_type='any' to check ALL rooms in ONE call
+- NEVER call this function multiple times for different room types
+- Only use a specific room_type if the user explicitly requests that exact room
 
 Multi-Night Logic:
 - Validates EACH night in the date range (not just check-in)

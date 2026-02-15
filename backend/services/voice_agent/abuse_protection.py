@@ -49,16 +49,14 @@ class AbuseProtection:
         # Tenant-specific details
         self.tenant_id = tenant_id
         
-        if tenant_id == "saranda":
-            self.property_name = "Saranda Restaurant"
-            self.short_name = "Saranda"
-        elif tenant_id == "coalcreek":
+        if tenant_id == "coalcreek":
             self.property_name = "Coal Creek Motel"
             self.short_name = "Coal Creek"
         else:
             # Generic Fallback for unknown tenants
             self.property_name = "Our Business"
             self.short_name = "Staff"
+
     
     def set_call_start_time(self, start_time: float):
         """Set when the call started for duration monitoring."""

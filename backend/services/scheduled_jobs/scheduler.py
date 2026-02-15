@@ -43,16 +43,6 @@ def start_scheduler():
             replace_existing=True
         )
 
-        # Register Square Polling job (every 1 minute) for Saranda
-        from .square_polling import square_polling_job
-        scheduler.add_job(
-            square_polling_job,
-            trigger=CronTrigger(minute="*"),  # Every minute
-            id="square_polling_job",
-            name="Square Order Polling",
-            replace_existing=True
-        )
-        
         # Start the scheduler
         scheduler.start()
         logger.info("✅ Scheduler started successfully")

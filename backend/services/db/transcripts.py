@@ -16,8 +16,8 @@ class TranscriptsMixin:
     # Tenant isolation: Each client gets their own transcript collection
     TENANT_TRANSCRIPT_COLLECTIONS = {
         "coalcreek": "call_transcripts_coalcreek",
-        "saranda": "call_transcripts_saranda",
     }
+
     
     async def get_transcript_collection_for_tenant(self, tenant_id: str) -> str:
         """
@@ -171,8 +171,7 @@ class TranscriptsMixin:
                 queries.append(AppwriteQuery.less_than_equal("created_at", end_date))
             
             # Tenant specific field names
-            phone_field = "caller_phone" # Both schemas use this or similar?
-            # saranda: caller_phone / motel: caller_phone. It matches.
+            phone_field = "caller_phone"
             if phone:
                 queries.append(AppwriteQuery.equal("caller_phone", phone))
                 
