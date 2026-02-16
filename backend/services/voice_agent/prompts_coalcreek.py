@@ -38,13 +38,12 @@ def get_coalcreek_prompt(current_date: str, current_time: str) -> str:
     
     # Build room types section dynamically
     room_types_text = ""
-    for idx, (key, room) in enumerate(COALCREEK_DATA["rooms"].items(), 1):
-        room_types_text += f"{idx}. {room['name']} - From ${room['price']}/night\n"
-        room_types_text += f"   - {room['features']}\n"
-        room_types_text += f"   - Best for: {room['best_for']}\n\n"
+    for key, room in COALCREEK_DATA["rooms"].items():
+        room_types_text += f"- {room['name']} (${room['price']}/night): {room['features']}\n"
+        room_types_text += f"  Best for: {room['best_for']}\n"
     
     # Build amenities list (first 10)
-    amenities_text = "\n".join(f"- {amenity}" for amenity in COALCREEK_DATA["amenities"][:10])
+    amenities_text = ", ".join(COALCREEK_DATA["amenities"][:10])
     
     # Build policies
     policies = COALCREEK_DATA["policies"]
@@ -152,8 +151,9 @@ We use a "Live Availability + Soft Hold" strategy.
 
 **CRITICAL:** NEVER say "You are booked". Say "I've placed a request" or "temporary hold".
 
-=== HOW TO TALK ===
-- **Tone:** Warm, casual, helpful. Not corporate.
+=== HOW TO TALK (STRICT STYLE GUIDE) ===
+- **NO NUMBERED LISTS:** Never say "1. Option A, 2. Option B". Use natural sentences like "We have a Queen room for $130 and a Twin room for $140."
+- **Tone:** Warm, casual, helpful. Not corporate. 
 - **Pace:** Quick and clear. Don't over-explain.
 - **Breaks:** Use short beats. One thought per sentence.
 - **Contractions:** Use 'em. "We've got", "You're all set", "Can't", "Won't"
@@ -168,6 +168,7 @@ NEVER say:
 ❌ "API error"
 ❌ "System unavailable"
 ❌ "I did not understand your request"
+❌ "Here are the options:" (followed by a list)
 
 === TRANSFER LANGUAGE ===
 When transferring to staff, use ONE of these (vary your choice):

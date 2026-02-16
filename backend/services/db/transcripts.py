@@ -129,10 +129,10 @@ class TranscriptsMixin:
             now = datetime.now(MELBOURNE_TZ).isoformat()
             
             # STANDARDIZED SCHEMA (Consistent across all tenants)
+            # STANDARDIZED SCHEMA (Consistent across all tenants)
             data = {
                 "call_sid": call_sid,
                 "caller_phone": caller_phone or "",
-                "transcript_json": transcript, 
                 "duration_seconds": duration or 0,
                 "outcome": status or "completed",
                 "pms_reference": booking_ref or "",
@@ -141,6 +141,13 @@ class TranscriptsMixin:
                 "metadata_json": json.dumps(metadata) if metadata else "{}",
                 "created_at": now
             }
+            
+            # Add transcript specifically based on tenant schema support
+            # For Coal Creek, we use the old 'transcript' field, not 'transcript_json'
+            if tenant_id == "coalcreek":
+                data["transcript"] = transcript[:10000] if transcript else ""
+            else:
+                data["transcript_json"] = transcript
 
             # BACKWARD COMPATIBILITY for Coal Creek (until pms_reference is added to Appwrite)
             if tenant_id == "coalcreek":
