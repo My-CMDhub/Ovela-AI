@@ -348,9 +348,9 @@ class VoiceAgentHandler:
         voice_id = voice_settings.get("voice_id", CARTESIA_VOICE_ID)
         
         # MAP SLUGS TO UUIDS
-        # Users might put readable names in DB config
+        # put readable names in DB config
         if voice_id == "cartesia-sonic-3-thalia":
-            voice_id = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+            voice_id = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
         elif len(voice_id) < 30: # Simple check for non-UUID
             logger.warning(f"⚠️ Invalid Voice ID format: {voice_id} - falling back to default")
             voice_id = CARTESIA_VOICE_ID
