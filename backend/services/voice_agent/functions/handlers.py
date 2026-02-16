@@ -598,7 +598,7 @@ class FunctionDispatcher:
             user_phone: Caller's phone number
             save_reservation_fn: Function to save reservations
             abuse_protection: AbuseProtection instance for flag_off_topic
-            tenant_id: Multi-tenant identifier (e.g., "coalcreek", "saranda")
+            tenant_id: Multi-tenant identifier (e.g., "coalcreek")
         """
         self.db_service = db_service
         self.user_phone = user_phone

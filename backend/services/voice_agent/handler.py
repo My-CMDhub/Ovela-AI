@@ -44,7 +44,7 @@ from .config import (
 from .prompts import get_system_prompt
 from .abuse_protection import AbuseProtection
 from .silence_detection import SilenceMonitor
-from .functions import get_booking_functions, get_saranda_functions, SarandaFunctionDispatcher, get_coalcreek_functions
+from .functions import get_booking_functions, get_coalcreek_functions
 from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
 from .text_utils import prepare_for_tts, clean_tts_output
 from services.motel_knowledge_base import set_tenant_context
@@ -304,8 +304,8 @@ class VoiceAgentHandler:
     def _get_active_prompt(self) -> str:
         """Get the active prompt based on tenant."""
         base_prompt = get_system_prompt(
-            current_date=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%A, %d %B %Y"),
-            current_time=datetime.now(ZoneInfo("Australia/Perth" if self.tenant_id == "saranda" else "Australia/Melbourne")).strftime("%I:%M %p"),
+            current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
+            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p"),
             tenant_id=self.tenant_id
         )
         
@@ -330,9 +330,7 @@ class VoiceAgentHandler:
     
     def _get_active_functions(self) -> list:
         """Get the correct function definitions based on tenant."""
-        if self.tenant_id == "saranda":
-            return get_saranda_functions()
-        elif self.tenant_id == "coalcreek":
+        if self.tenant_id == "coalcreek":
             return get_coalcreek_functions()
         return get_booking_functions()
     
@@ -487,16 +485,7 @@ class VoiceAgentHandler:
         
         logger.info(f"🧩 Configuring Dispatcher | PMS: {pms_provider} | Type: {tenant_type}")
     
-        if self.tenant_id == "saranda" or tenant_type == "restaurant":
-            self.function_dispatcher = SarandaFunctionDispatcher(
-                user_phone=self.user_phone,
-                abuse_protection=self.abuse_protection,
-                tenant_config=self.tenant_config,
-                call_sid=self.call_sid
-            )
-            logger.info("✅ Using Saranda/Restaurant Dispatcher")
-            
-        elif self.tenant_id == "coalcreek" or pms_provider == "update 247":
+        if self.tenant_id == "coalcreek" or pms_provider == "update 247":
             from .functions import CoalCreekFunctionDispatcher
             self.function_dispatcher = CoalCreekFunctionDispatcher(
                 db_service=db_service,
@@ -1098,7 +1087,9 @@ class VoiceAgentHandler:
 
             # Check for transfer signal
             if result.get("action") == "transfer":
-                transfer_to = getattr(settings, 'SARANDA_STAFF_PHONE', settings.STAFF_PHONE_NUMBER)
+                import logging
+                logging.getLogger(__name__).warning("⚠️ No specific staff phone for tenant %s, using default.", self.tenant_id)
+                transfer_to = settings.STAFF_PHONE_NUMBER
                 if not transfer_to and self.tenant_config.get("business_phone"):
                      transfer_to = self.tenant_config["business_phone"]
                 logger.info(f"📞 Transfer requested to {transfer_to}")
@@ -1720,102 +1711,12 @@ class VoiceAgentHandler:
         """
         Submit the held batch order to Square/Database.
         Called on cleanup (hangup/end_call).
+        
+        NOTE: This was previously used for Saranda Restaurant.
+        Coal Creek Motel does not use batch orders like this.
+        Retained as a stub for future use if needed, but safe for now.
         """
-        if not self.pending_order:
-            return
-            
-        logger.info("🚀 Finalizing Batch Order...")
-        try:
-            from services.tenants.saranda.square_client import SquareClient, SquareOrderItem
-            from services.tenants.saranda.square_flows import saranda_approval_tracker, SquareOrderRequest
-            
-            # Reconstruct objects
-            items_data = self.pending_order.get("items", [])
-            customer_name = self.pending_order.get("customer_name")
-            pickup_time = self.pending_order.get("pickup_time")
-            user_phone = self.pending_order.get("user_phone")
-            
-            if not items_data:
-                logger.warning("⚠️ Pending order is empty, skipping.")
-                return
-
-            square_items = []
-            for i in items_data:
-                square_items.append(SquareOrderItem(
-                    name=i["name"],
-                    quantity=i["quantity"],
-                    price_cents=i["price_cents"],
-                    modifiers=i.get("modifiers", [])
-                ))
-            
-            # Execute Square API
-            square_client = SquareClient()
-            # Use call_sid as ID to link call
-            req_id = f"ovela:{ID.unique()}"
-            
-            # Robustness: Ensure we have a Customer ID
-            if not self.customer_id and customer_name and user_phone:
-                logger.info(f"👤 No Customer ID linked. Attempting to create/find for {customer_name}...")
-                try:
-                    # Try find first (simple check)
-                    custs = await square_client.search_customers(phone=user_phone, limit=1)
-                    if custs:
-                        # Handle object vs dict
-                        c = custs[0]
-                        self.customer_id = c.id if hasattr(c, 'id') else c.get('id')
-                        logger.info(f"✅ Found existing customer: {self.customer_id}")
-                    else:
-                        # Create new
-                        parts = customer_name.strip().split(" ", 1)
-                        given = parts[0]
-                        family = parts[1] if len(parts) > 1 else ""
-                        self.customer_id = await square_client.create_customer(given, family, user_phone)
-                        logger.info(f"✅ Created new customer: {self.customer_id}")
-                except Exception as e:
-                    logger.warning(f"Failed to resolve customer ID: {e}")
-            
-            order = await square_client.create_pickup_order(
-                customer_name=customer_name,
-                customer_phone=user_phone,
-                items=square_items,
-                pickup_time=pickup_time,
-                call_id=self.call_sid,
-                reference_id=req_id,
-                customer_id=self.customer_id
-            )
-            
-            logger.info(f"✅ Batch Order Submitted to Square: {order.order_id}")
-            
-            # HITL / SMS Notification
-            items_summary = ", ".join([f"{item.quantity}x {item.name}" for item in square_items])
-            
-            request = SquareOrderRequest(
-                square_order_id=order.order_id,
-                square_order_version=order.version,
-                call_id=self.call_sid,
-                request_id=req_id,
-                customer_name=customer_name,
-                customer_phone=user_phone,
-                pickup_time=pickup_time,
-                total_cents=int(order.total_cents),
-                items_summary=items_summary
-            )
-            saranda_approval_tracker.track(request)
-            
-            # Send SMS Confirmation to User (If not handled by HITL flow immediately)
-            # The HITL tracker usually handles the "Pending Approval" SMS.
-            # We trust saranda_approval_tracker to do its job.
-            
-        except Exception as e:
-            logger.error(f"❌ Failed to finalize batch order: {e}")
-            # Fallback: Log critical alert
-            await db_service.create_system_alert(
-                title="Batch Order Failure",
-                message=f"Failed to submit batch order for {self.user_phone}: {e}",
-                severity="critical",
-                component="voice_agent",
-                tenant_id=self.tenant_id
-            )
+        pass
 
     async def _cleanup(self):
         """Clean up connections and save transcript."""

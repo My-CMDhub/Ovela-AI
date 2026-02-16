@@ -1,17 +1,16 @@
 """
-Coal Creek Motel - Multi-Tenant Knowledge Base
-==============================================
+Coal Creek Motel - Knowledge Base
+=================================
 This module provides searchable functions for the voice agent to lookup
-specific motel information on-demand, handling multiple properties.
-
-Strategy: Agent calls these functions with a tenant_id context (or defaults)
-to get the correct info for the current property.
+specific motel information on-demand.
 """
 
 from typing import Optional, Dict, List, Any
 from .knowledge_base.data_types import MotelData
 from .knowledge_base.coalcreek import COALCREEK_DATA
-
+from contextvars import ContextVar
+import httpx
+import os
 
 
 # Global context to store current tenant for the request scope
@@ -20,10 +19,6 @@ from .knowledge_base.coalcreek import COALCREEK_DATA
 # Ideally, the functions themselves should accept tenant_id, but the OpenAI tools 
 # schema is fixed. We'll use a ContextVar for thread-safety.
 
-from contextvars import ContextVar
-import random
-import httpx
-import os
 
 
 _current_tenant: ContextVar[str] = ContextVar("current_tenant", default="coalcreek")
@@ -34,14 +29,7 @@ def set_tenant_context(tenant_id: str):
 
 def get_active_data() -> MotelData:
     """Get the knowledge base data for the active tenant."""
-    tenant = _current_tenant.get()
-    
-    # Only Coal Creek is active for motel operations
-    # Saranda uses a different knowledge base system
-    if tenant == "coalcreek":
-        return COALCREEK_DATA
-    
-    # Default to Coal Creek for motel-related queries
+    # Currently defaults to Coal Creek Motel data
     return COALCREEK_DATA
 
 # =============================================================================

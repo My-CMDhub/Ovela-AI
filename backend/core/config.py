@@ -5,13 +5,14 @@ class Settings(BaseSettings):
     # App Settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Ovela AI Backend"
-    BACKEND_URL: str = "https://ovela-12c561a30285.herokuapp.com"  # Production URL
+    BACKEND_URL: str = "https://ovela-12c561a30285.herokuapp.com"  
     ENVIRONMENT: str = "demo"  # 'demo' or 'production'
+    TENANT_ID: str = "coalcreek"  
 
     # Meta (WhatsApp Cloud API)
     META_ACCESS_TOKEN: str = ""
     META_PHONE_NUMBER_ID: str = ""
-    META_VERIFY_TOKEN: str = ""  # For incoming webhooks
+    META_VERIFY_TOKEN: str = ""  
 
 
     # OpenAI
@@ -46,8 +47,8 @@ class Settings(BaseSettings):
     # Twilio (Missed Call → WhatsApp)
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_PHONE_NUMBER: str = "+61468088990"  # Your purchased Twilio number
-    TWILIO_WHATSAPP_NUMBER: str = "+14155238886"  # Twilio WhatsApp Sandbox number
+    TWILIO_PHONE_NUMBER: str = "+61468088990"  # my purchased number
+    TWILIO_WHATSAPP_NUMBER: str = "+14155238886"  
     
 
     

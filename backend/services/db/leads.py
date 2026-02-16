@@ -11,7 +11,7 @@ class LeadsMixin:
     ENFORCED: Multi-tenant isolation at DB level.
     """
 
-    async def create_demo_lead(self, phone: str, name: str = None, tenant_id: str = "saranda"):
+    async def create_demo_lead(self, phone: str, name: str = None, tenant_id: str = "coalcreek"):
         """Create a new lead from a demo request."""
         try:
             doc_id = ID.unique()

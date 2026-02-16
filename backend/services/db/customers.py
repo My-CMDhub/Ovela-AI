@@ -114,7 +114,7 @@ class CustomersMixin:
         
         return results
 
-    async def create_customer(self, phone: str, name: str = None, tenant_id: str = "saranda"):
+    async def create_customer(self, phone: str, name: str = None, tenant_id: str = "coalcreek"):
         """Create a new customer profile."""
         try:
             doc_id = ID.unique()

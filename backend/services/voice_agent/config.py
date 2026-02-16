@@ -134,17 +134,6 @@ MIN_SUBSTANTIVE_LENGTH = 3
 # =============================================================================
 def get_random_greeting(tenant_id: str = "coalcreek") -> str:
     """Returns a random Australian-tone greeting for the specified tenant."""
-    # Saranda Restaurant
-    if tenant_id == "saranda":
-        greetings = [
-            "Good day! You've reached Saranda Cafe and Pizzeria. Calls are recorded for quality assurance. How can I help you today?",
-            "Hello! Thanks for calling Saranda. Just letting you know this call is recorded for quality purposes. What can I get for you?",
-            "Hi there! Saranda Cafe speaking. Please note calls are recorded for quality and training purposes. Are you after a pickup order or a reservation?",
-            "Welcome to Saranda! This call is recorded for quality training purposes. How may I assist you today?",
-            "Good to hear from you! This is Saranda Cafe. Calls are recorded. What can I do for you?",
-        ]
-        return random.choice(greetings)
-    
     # Coal Creek Motel
     if tenant_id == "coalcreek":
         greetings = [
@@ -184,16 +173,6 @@ def get_random_soft_warning(tenant_id: str = "coalcreek") -> str:
             "If you need a moment, no problem. I'm here to help with enquiries about Coal Creek Motel.",
             "Just checking - were you after information about Coal Creek Motel or making a booking?",
             "I'm here to help with Coal Creek Motel enquiries. What dates were you thinking of staying?",
-        ]
-        return random.choice(warnings)
-    
-    # Saranda Restaurant
-    if tenant_id == "saranda":
-        warnings = [
-            "I notice you might be having trouble. Is there something specific I can help with about Saranda Cafe?",
-            "If you need a moment, no problem. I'm here to help with orders and reservations.",
-            "Just checking - were you after a pickup order or a table reservation?",
-            "I'm here to help with Saranda enquiries. What can I get for you?",
         ]
         return random.choice(warnings)
     
