@@ -26,11 +26,11 @@ FAREWELL_STYLES = [
 
 # Coal Creek Motel-specific farewells (motel hospitality style)
 COALCREEK_FAREWELLS = [
-    "Thanks for calling Coal Creek Motel! Have a great stay. Bye!",
-    "Perfect! We look forward to seeing you. Take care!",
-    "All sorted! Safe travels, and see you soon. Bye!",
-    "You're all set! Thanks for choosing Coal Creek. Bye!",
-    "Cheers! We'll have your room ready. Goodbye!",
+    "Thanks for calling Coal Creek. Have a great stay.",
+    "Perfect — we'll see you soon. Take care.",
+    "All sorted. Safe travels.",
+    "You're all set. Thanks for calling.",
+    "Cheers — we'll have your room ready.",
 ]
 
 SILENCE_PROMPTS = [
@@ -153,6 +153,8 @@ def get_random_greeting(tenant_id: str = "coalcreek") -> str:
             "Coal Creek Motel. Calls are recorded. What can I do for you?",
             "Coal Creek Motel here. This call is recorded. How can I help?",
             "Coal Creek Motel. Calls are recorded. Are you after a room or info?",
+            "Coal Creek Motel — calls are recorded. What can I help with?",
+            "Coal Creek Motel. This call's recorded. How can I help?",
         ]
         return random.choice(greetings)
     

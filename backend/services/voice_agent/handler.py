@@ -49,7 +49,13 @@ from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
 from .text_utils import prepare_for_tts, clean_tts_output
 from services.motel_knowledge_base import set_tenant_context
 
-CARTESIA_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
+# CARTESIA_VOICE_ID = "3e1ed423-17e5-4773-b87c-25b031106e41" - Paul AU
+# CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab" - Blake US
+# CARTESIA_VOICE_ID = "47c38ca4-5f35-497b-b1a3-415245fb35e1" - Daniel US
+# CARTESIA_VOICE_ID = "999df508-4de5-40a7-8bd3-8c12f678c284" - Layla US
+# CARTESIA_VOICE_ID = "41f3c367-e0a8-4a85-89e0-c27bae9c9b6d" - Liam AU
+# CARTESIA_VOICE_ID = "c63361f8-d142-4c62-8da7-8f8149d973d6" - Krishna IN
 
 logger = logging.getLogger(__name__)
 
