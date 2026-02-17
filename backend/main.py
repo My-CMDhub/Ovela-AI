@@ -27,7 +27,7 @@ from services.scheduled_jobs.scheduler import start_scheduler, shutdown_schedule
 async def startup_event():
     """Initialize services on application startup."""
     logging.info("🚀 Starting Coal Creek CRM backend...")
-    start_scheduler()
+    # start_scheduler() # Disabled to eliminate background noise/latency (Saranda legacy)
     logging.info("✅ Application startup complete")
 
 @app.on_event("shutdown")

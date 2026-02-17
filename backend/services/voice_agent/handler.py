@@ -1138,7 +1138,7 @@ class VoiceAgentHandler:
             if function_name == "create_booking" and result.get("success"):
                 self.booking_completed = True
 
-            # Check for order completion (Saranda)
+            # Check for order completion
             if function_name == "submit_order":
                  if result.get("success") and result.get("action") == "hold":
                      self.pending_order = result.get("order_details")
@@ -1732,30 +1732,12 @@ class VoiceAgentHandler:
             logger.error(f"Error saving reservation: {e}")
             return None
 
-    async def _finalize_batch_order(self):
-        """
-        Submit the held batch order to Square/Database.
-        Called on cleanup (hangup/end_call).
-        
-        NOTE: This was previously used for Saranda Restaurant.
-        Coal Creek Motel does not use batch orders like this.
-        Retained as a stub for future use if needed, but safe for now.
-        """
-        pass
 
     async def _cleanup(self):
         """Clean up connections and save transcript."""
         logger.info("🧹 Cleaning up VoiceAgentHandler")
         self.is_running = False
         
-        # [NEW] FINALIZE BATCH ORDER (Anti-Race Condition)
-        if self.pending_order:
-            logger.info("💾 Finalizing Batch Order on Cleanup...")
-            try:
-                # Use shielding to prevent cancellation if we are shutting down
-                await asyncio.shield(self._finalize_batch_order())
-            except Exception as e:
-                logger.error(f"Failed to finalize batch order: {e}")
 
         # Close Deepgram connection
         if self.deepgram_ws:
