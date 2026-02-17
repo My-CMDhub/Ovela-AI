@@ -806,12 +806,15 @@ class VoiceAgentHandler:
                 # TRUE TTFT: Log only for FIRST sentence after user spoke
                 if hasattr(self, '_stt_complete_time') and not getattr(self, '_first_ai_response_logged', False):
                     ttft_ms = int((time.time() - self._stt_complete_time) * 1000)
-                    logger.info(f"[AI]: {clean_content} (TTFT: {ttft_ms}ms)")
+                    logger.info(f"[Ovela]: {clean_content} (TTFT: {ttft_ms}ms)")
                     self._first_ai_response_logged = True
                 else:
-                    logger.info(f"[AI]: {clean_content} (Response latency: {latency_ms}ms)")
+                    logger.info(f"[Ovela]: {clean_content} (inter-sentence: {latency_ms}ms)")
+                
+                # Reset for per-sentence measurement (prevents compounding)
+                self.ai_response_start_time = time.time()
             else:
-                logger.info(f"[AI]: {clean_content}")
+                logger.info(f"[Ovela]: {clean_content}")
             
             # Save clean content to transcript (not raw with signals)
             self.last_ai_message = clean_content
@@ -842,6 +845,11 @@ class VoiceAgentHandler:
         # ─────────────────────────────────────────────────────────────────
         if self._is_processing_function:
             logger.debug("🙉 Go Deaf: ignoring UserStartedSpeaking during function call")
+            return
+        
+        # FILLER PROTECTION: Ignore user noise during injected filler playback
+        if getattr(self, '_blocking_interruptions', False):
+            logger.info("🎤 User started speaking during filler - IGNORING (Block Interruptions)")
             return
         
         logger.info("🎤 User started speaking (VAD)")
@@ -1025,13 +1033,16 @@ class VoiceAgentHandler:
             fn_done_event = None
 
             if function_name in SLOW_TOOLS:
+                # Block interruptions so filler isn't cut off by user noise/"mhm"
+                self._blocking_interruptions = True
                 # Let the LLM's filler TTS audio flush to Twilio
                 await asyncio.sleep(0.5)
                 # Safety net: inject filler if LLM didn't speak one
                 if not getattr(self, '_ai_is_speaking', False):
                     filler = random.choice(FILLER_PROMPTS)
                     await self._inject_message(filler)
-                    await asyncio.sleep(0.3)  # Let filler start playing
+                # Unlock interruptions after filler TTS plays (~2.5s)
+                asyncio.create_task(self._unlock_interruptions(2.5))
                 
                 # Schedule progressive "still checking" for very long waits
                 fn_done_event = asyncio.Event()
@@ -1090,8 +1101,8 @@ class VoiceAgentHandler:
         try:
             # Availability fallback: if live calendar is unavailable, apologize and transfer
             if function_name == "check_availability" and result.get("available") == "unknown":
-                message = result.get("ai_should_say") or get_preset_phrase(self.tenant_id, "availability_fail")
-                await self._speak_and_wait_for_tts(message, timeout=4.0, min_wait=2.0)
+                message = result.get("hint") or get_preset_phrase(self.tenant_id, "availability_fail")
+                await self._inject_and_wait(message)
                 await self._execute_twilio_transfer(
                     settings.STAFF_PHONE_NUMBER,
                     play_transfer_message=False,
@@ -1108,7 +1119,7 @@ class VoiceAgentHandler:
                      transfer_to = self.tenant_config["business_phone"]
                 logger.info(f"📞 Transfer requested to {transfer_to}")
                 message = result.get("message") or get_preset_phrase(self.tenant_id, "transfering")
-                await self._speak_and_wait_for_tts(message, timeout=3.0, min_wait=1.8)
+                await self._inject_and_wait(message)
                 await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
                 return
 
@@ -1347,7 +1358,7 @@ class VoiceAgentHandler:
                     
                     # 1. Honest Message
                     msg = "This is getting a bit complex. I'll put you through to the team now."
-                    await self._speak_and_wait_for_tts(msg, timeout=4.0, min_wait=2.0)
+                    await self._inject_and_wait(msg)
                     
                     # 2. PROACTIVE SUMMARY SMS (Blocking/Sync)
                     try:
@@ -1389,7 +1400,7 @@ class VoiceAgentHandler:
                     # GO DEAF: Stop processing user audio to prevent InjectionRefused
                     self._is_hanging_up = True
                     farewell = duration_result.get("farewell", "Thanks for calling!")
-                    await self._speak_and_wait_for_tts(farewell, timeout=5.0, min_wait=2.5)
+                    await self._inject_and_wait(farewell)
                     await self._hangup_call()
                 
                 break
@@ -1408,14 +1419,25 @@ class VoiceAgentHandler:
                     "Still checking, won't be long.",
                     "Almost there, one more moment.",
                 ]
+                self._blocking_interruptions = True
                 await self._inject_message(random.choice(fillers))
+                asyncio.create_task(self._unlock_interruptions(2.5))
         except asyncio.CancelledError:
             pass
     
-    async def _inject_message(self, content: str):
-        """Inject a message for the agent to speak."""
+    async def _unlock_interruptions(self, delay: float):
+        """Helper to unlock interruptions after a delay (lets filler TTS play fully)."""
+        try:
+            await asyncio.sleep(delay)
+            self._blocking_interruptions = False
+        except asyncio.CancelledError:
+            pass
+    
+    async def _inject_message(self, content: str) -> bool:
+        """Inject a message for the agent to speak. Returns True if sent."""
         if not self.deepgram_ws:
-            return
+            logger.warning("📨 Inject SKIP: websocket closed")
+            return False
         
         try:
             inject_message = {
@@ -1423,9 +1445,11 @@ class VoiceAgentHandler:
                 "content": content
             }
             await self.deepgram_ws.send(json.dumps(inject_message))
-            logger.info(f"📨 Injected: '{content[:50]}...'")
+            logger.info(f"📨 Injected ({len(content)} chars): '{content[:50]}...'")
+            return True
         except Exception as e:
-            logger.warning(f"Failed to inject message: {e}")
+            logger.error(f"📨 Inject FAILED: {e}")
+            return False
 
     async def _speak_and_wait(self, content: str, min_wait: float = 2.0):
         """Speak a short message and wait for TTS to finish."""
@@ -1435,44 +1459,33 @@ class VoiceAgentHandler:
         delay = max(min_wait, (len(content) * 0.08) + 0.8)
         await asyncio.sleep(delay)
 
-    async def _speak_and_wait_for_tts(self, content: str, timeout: float = 5.0, min_wait: float = 1.0):
+    async def _inject_and_wait(self, content: str):
         """
-        Speak a message and wait for AgentAudioDone or timeout.
+        Inject a message and wait estimated TTS duration.
         
-        With the non-blocking receive loop, AgentAudioDone will arrive for
-        InjectAgentMessage if the injection succeeded.  The timeout path
-        covers InjectionRefused or edge cases where the event is lost.
-        
-        After AgentAudioDone fires the audio bytes have been *sent* to Twilio,
-        but Twilio still needs to play them over the phone line.  The min_wait
-        adds a floor to ensure the caller actually hears the message.
+        Uses the Saranda-proven pattern: inject → sleep(estimated) → done.
+        More reliable than waiting for AgentAudioDone (which may not fire).
         """
-        if not content:
+        if not content or not self.deepgram_ws:
+            logger.warning(f"⚠️ _inject_and_wait: skipped (content={bool(content)}, ws={bool(self.deepgram_ws)})")
             return
-        async with self._tts_lock:
-            self._transfer_pending = True
-            self._transfer_tts_done.clear()
-            logger.info(f"🗣️ _speak_and_wait_for_tts: injecting '{content[:60]}…' (timeout={timeout}s, min_wait={min_wait}s)")
-            start = time.monotonic()
+        
+        start = time.monotonic()
+        # Estimate TTS duration: ~12 chars/sec + 1.5s latency buffer (min 3.0s)
+        estimated_tts = max(3.0, (len(content) / 12) + 1.5)
+        
+        try:
+            self._blocking_interruptions = True
             await self._inject_message(content)
-            try:
-                await asyncio.wait_for(self._transfer_tts_done.wait(), timeout=timeout)
-                elapsed = time.monotonic() - start
-                logger.info(f"✅ AgentAudioDone received in {elapsed:.2f}s for injected message")
-                # Ensure caller has time to hear the audio before we proceed
-                remaining = min_wait - elapsed
-                if remaining > 0:
-                    await asyncio.sleep(remaining)
-            except asyncio.TimeoutError:
-                # InjectionRefused or event lost — fall back to a short wait
-                logger.warning(
-                    f"⏱️ AgentAudioDone timeout after {timeout}s for '{content[:40]}…' "
-                    f"— falling back to min_wait ({min_wait}s)"
-                )
-                await asyncio.sleep(min_wait)
-            finally:
-                self._transfer_pending = False
-                self._transfer_tts_done.clear()
+            logger.info(f"🔊 _inject_and_wait: '{content[:50]}' — waiting {estimated_tts:.1f}s for TTS")
+            await asyncio.sleep(estimated_tts)
+            elapsed = time.monotonic() - start
+            logger.info(f"✅ _inject_and_wait: completed in {elapsed:.1f}s (est: {estimated_tts:.1f}s)")
+        except Exception as e:
+            elapsed = time.monotonic() - start
+            logger.error(f"❌ _inject_and_wait: FAILED after {elapsed:.1f}s — {e}")
+        finally:
+            self._blocking_interruptions = False
     
 
     async def _hangup_call(self):
@@ -1524,9 +1537,11 @@ class VoiceAgentHandler:
         # Set flag to stop silence detection during hangup
         self._is_hanging_up = True
         if not self.deepgram_ws:
+            logger.warning("🔊 _inject_farewell_and_hangup: ws closed, direct hangup")
             await self._hangup_call()
             return
         
+        start = time.monotonic()
         try:
             farewell_messages = [
                 "I can't seem to hear you anymore. Feel free to call back if you need help. Take care!",
@@ -1535,13 +1550,21 @@ class VoiceAgentHandler:
             ]
             
             farewell = random.choice(farewell_messages)
-            await self._inject_message(farewell)
+            self._blocking_interruptions = True
+            sent = await self._inject_message(farewell)
             
-            # Wait for farewell to be spoken
-            await asyncio.sleep(3.5)
+            # Dynamic wait based on message length
+            estimated_tts = max(3.5, (len(farewell) / 12) + 1.5)
+            logger.info(f"⏳ _inject_farewell_and_hangup: waiting {estimated_tts:.1f}s (sent={sent})")
+            await asyncio.sleep(estimated_tts)
+            elapsed = time.monotonic() - start
+            logger.info(f"✅ _inject_farewell_and_hangup: completed in {elapsed:.1f}s")
             
         except Exception as e:
-            logger.warning(f"Failed to inject farewell: {e}")
+            elapsed = time.monotonic() - start
+            logger.error(f"❌ _inject_farewell_and_hangup: FAILED after {elapsed:.1f}s — {e}")
+        finally:
+            self._blocking_interruptions = False
         
         # ─────────────────────────────────────────────────────────────────
         # ABORT HANGUP CHECK: If user spoke during farewell, don't hang up!
@@ -1559,19 +1582,25 @@ class VoiceAgentHandler:
         self._is_hanging_up = True
         
         if not self.deepgram_ws:
+            logger.warning("🔊 _hangup_with_farewell: ws closed, direct hangup")
             await self._hangup_call()
             return
         
+        start = time.monotonic()
         try:
-            await self._inject_message(farewell_message)
-            # Wait for TTS to complete - estimate based on message length
-            # Wait for TTS to complete - estimate based on message length
-            # Formula: 0.1s per char + 2.0s buffer (Min 4.0s)
-            estimated_tts_time = max(4.0, (len(farewell_message) * 0.1) + 2.0)
-            logger.info(f"⏳ Waiting {estimated_tts_time:.1f}s for farewell TTS")
+            self._blocking_interruptions = True
+            sent = await self._inject_message(farewell_message)
+            # Estimate: ~12 chars/sec + 1.5s buffer (min 3.5s)
+            estimated_tts_time = max(3.5, (len(farewell_message) / 12) + 1.5)
+            logger.info(f"⏳ _hangup_with_farewell: waiting {estimated_tts_time:.1f}s (sent={sent})")
             await asyncio.sleep(estimated_tts_time)
+            elapsed = time.monotonic() - start
+            logger.info(f"✅ _hangup_with_farewell: completed in {elapsed:.1f}s")
         except Exception as e:
-            logger.warning(f"Failed to send farewell: {e}")
+            elapsed = time.monotonic() - start
+            logger.error(f"❌ _hangup_with_farewell: FAILED after {elapsed:.1f}s — {e}")
+        finally:
+            self._blocking_interruptions = False
         
         # ─────────────────────────────────────────────────────────────────
         # ABORT HANGUP CHECK: If user spoke during farewell, don't hang up!
@@ -1591,7 +1620,7 @@ class VoiceAgentHandler:
         
         # 1. Apologize
         apology = "Sorry, I'm having a technical issue. I'll put you through to a human now."
-        await self._speak_and_wait_for_tts(apology, timeout=4.0, min_wait=2.0)
+        await self._inject_and_wait(apology)
         
         # 2. Prevent further AI processing
         self._is_hanging_up = True # Block new text

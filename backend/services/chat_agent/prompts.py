@@ -208,7 +208,7 @@ Represent this business warmly and professionally.
         if overrides:
             base_prompt += "\n# ===== BUSINESS CUSTOMIZATIONS =====\n"
             base_prompt += "\n".join(overrides)
-            logger.info(f"[AI] Applied {len(overrides)} business customizations")
+            logger.info(f"[Ovela] Applied {len(overrides)} business customizations")
     
     return base_prompt.format(
         current_datetime=current_datetime,
