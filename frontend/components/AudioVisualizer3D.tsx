@@ -2,58 +2,187 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 
 interface AudioVisualizer3DProps {
     audioStream: MediaStream | null;
     isActive: boolean;
 }
 
-// ── 3D Noise ──────────────────────────────────────────────────────────
-function mod289(x: number) { return x - Math.floor(x / 289) * 289; }
-function permute(x: number) { return mod289((x * 34 + 1) * x); }
-function fade(t: number) { return t * t * t * (t * (t * 6 - 15) + 10); }
-
-function noise3D(x: number, y: number, z: number): number {
-    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
-    x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
-    const u = fade(x), v = fade(y), w = fade(z);
-    const grad = (hash: number, gx: number, gy: number, gz: number) => {
-        const h = hash & 15;
-        const a = h < 8 ? gx : gy;
-        const b = h < 4 ? gy : h === 12 || h === 14 ? gx : gz;
-        return ((h & 1) === 0 ? a : -a) + ((h & 2) === 0 ? b : -b);
-    };
-    const p = (n: number) => permute(n);
-    const A = p(X) + Y, AA = p(A) + Z, AB = p(A + 1) + Z;
-    const B = p(X + 1) + Y, BA = p(B) + Z, BB = p(B + 1) + Z;
-    const lerp = (t: number, a: number, b: number) => a + t * (b - a);
-    return lerp(w,
-        lerp(v, lerp(u, grad(p(AA), x, y, z), grad(p(BA), x - 1, y, z)),
-            lerp(u, grad(p(AB), x, y - 1, z), grad(p(BB), x - 1, y - 1, z))),
-        lerp(v, lerp(u, grad(p(AA + 1), x, y, z - 1), grad(p(BA + 1), x - 1, y, z - 1)),
-            lerp(u, grad(p(AB + 1), x, y - 1, z - 1), grad(p(BB + 1), x - 1, y - 1, z - 1)))
-    );
-}
-
-function fbm(x: number, y: number, z: number, octaves = 4): number {
-    let value = 0, amplitude = 0.5, frequency = 1;
-    for (let i = 0; i < octaves; i++) {
-        value += amplitude * noise3D(x * frequency, y * frequency, z * frequency);
-        amplitude *= 0.5;
-        frequency *= 2.0;
-    }
-    return value;
-}
-
-// ── Types ─────────────────────────────────────────────────────────────
 interface Ripple { birthTime: number; group: THREE.Group; }
 
-interface FlareLayer {
-    mesh: THREE.Mesh;
-    origPositions: THREE.BufferAttribute;
-    baseRadius: number;
-    noiseOffset: number;
-}
+const noiseGLSL = `
+    vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+    vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+    vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+    vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+
+    float snoise(vec3 v) {
+        const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+        const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+
+        vec3 i  = floor(v + dot(v, C.yyy));
+        vec3 x0 = v - i + dot(i, C.xxx);
+
+        vec3 g = step(x0.yzx, x0.xyz);
+        vec3 l = 1.0 - g;
+        vec3 i1 = min(g.xyz, l.zxy);
+        vec3 i2 = max(g.xyz, l.zxy);
+
+        vec3 x1 = x0 - i1 + C.xxx;
+        vec3 x2 = x0 - i2 + C.yyy;
+        vec3 x3 = x0 - D.yyy;
+
+        i = mod289(i);
+        vec4 p = permute(permute(permute(
+                            i.z + vec4(0.0, i1.z, i2.z, 1.0))
+                        + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+                        + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+
+        float n_ = 0.142857142857;
+        vec3 ns = n_ * D.wyz - D.xzx;
+
+        vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+
+        vec4 x_ = floor(j * ns.z);
+        vec4 y_ = floor(j - 7.0 * x_);
+
+        vec4 x = x_ * ns.x + ns.yyyy;
+        vec4 y = y_ * ns.x + ns.yyyy;
+        vec4 h = 1.0 - abs(x) - abs(y);
+
+        vec4 b0 = vec4(x.xy, y.xy);
+        vec4 b1 = vec4(x.zw, y.zw);
+
+        vec4 s0 = floor(b0)*2.0 + 1.0;
+        vec4 s1 = floor(b1)*2.0 + 1.0;
+        vec4 sh = -step(h, vec4(0.0));
+
+        vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+        vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+
+        vec3 p0 = vec3(a0.xy,h.x);
+        vec3 p1 = vec3(a0.zw,h.y);
+        vec3 p2 = vec3(a1.xy,h.z);
+        vec3 p3 = vec3(a1.zw,h.w);
+
+        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+        p0 *= norm.x;
+        p1 *= norm.y;
+        p2 *= norm.z;
+        p3 *= norm.w;
+
+        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+        m = m * m;
+        return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+    }
+`;
+
+const vertexShader = `
+    ${noiseGLSL}
+
+    uniform float uTime;
+    uniform float uBassFrequency;
+    uniform float uMidFrequency;
+    uniform float uTrebleFrequency;
+    uniform float uAverageFrequency;
+    uniform float uActivity;
+    uniform float uRadiusOffset;
+
+    varying float vDisplacement;
+    varying vec3 vNormal;
+    varying vec3 vPosition;
+
+    void main() {
+        vNormal = normalize(normalMatrix * normal);
+        vec3 pos = position;
+
+        // Time: slow when idle, faster when active (sigma-level motion)
+        float t = uTime * mix(0.12, 0.28, uActivity);
+
+        // Multi-octave noise for classic sigma appearance with wider spikes
+        float n1 = snoise(pos * 1.0 + t);  // Reduced from 1.2 for wider spikes
+        float n2 = snoise(pos * 2.0 + t * 1.3) * 0.5;  // Reduced from 2.4
+        float n3 = snoise(pos * 4.2 + t * 1.7) * 0.25 * uActivity;  // Reduced from 4.8
+        float combined = n1 + n2 + n3;
+
+        // Shaping: round hills (idle) -> sharp spikes (active)
+        float expo = mix(1.0, 0.4, uActivity);
+        float shaped = pow(abs(combined), expo) * sign(combined);
+
+        // Audio-driven amplitude
+        float bassN = uBassFrequency / 255.0;
+        float midN  = uMidFrequency / 255.0;
+        float trebN = uTrebleFrequency / 255.0;
+
+        // Idle: more prominent base spikes (increased significantly)
+        float idleAmp = 0.24 + sin(uTime * 0.4) * 0.08;
+
+        // Active: strong response from audio
+        float audioAmp = bassN * 0.4 + midN * 0.5 + trebN * 0.15;
+        // Lift the audio signal to ensure visible response
+        float boostedAudio = audioAmp * 1.8 + uActivity * 0.15;
+
+        float amplitude = mix(idleAmp, boostedAudio, uActivity);
+
+        // Soft-clamp with tanh to prevent over-elongation (sigma control)
+        float maxH = mix(0.45, 0.7, uActivity);  // Increased idle max height significantly
+        float displacement = tanh(shaped * amplitude * 2.0) * maxH;  // Slightly reduced multiplier for better control
+
+        // Allow only tiny inward dimples
+        displacement = max(displacement, -0.03);
+
+        pos += normal * (displacement + uRadiusOffset);
+
+        vDisplacement = displacement;
+        vPosition = (modelViewMatrix * vec4(pos, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    }
+`;
+
+const fragmentShader = `
+    uniform float uTime;
+    uniform float uAverageFrequency;
+    uniform float uActivity;
+    uniform vec3 uBaseColor;
+    uniform vec3 uGlowColor;
+    uniform vec3 uPeakColor;
+
+    varying float vDisplacement;
+    varying vec3 vNormal;
+    varying vec3 vPosition;
+
+    void main() {
+        float height = smoothstep(0.0, 0.45, abs(vDisplacement));
+        float avgN = uAverageFrequency / 255.0;
+
+        vec3 viewDir = normalize(-vPosition);
+        float fresnel = 1.0 - max(dot(viewDir, vNormal), 0.0);
+        fresnel = pow(fresnel, 3.0);
+
+        // More cohesive color blending
+        vec3 color = mix(uBaseColor, uGlowColor, height * 0.8);
+        color = mix(color, uPeakColor, pow(height, 2.5) * 0.4);
+        color += uGlowColor * fresnel * (0.1 + uActivity * 0.12);
+        color *= 0.92 + uActivity * 0.08;
+
+        // Neon glow rim border for cohesive appearance
+        float neonRim = pow(fresnel, 2.2);
+        vec3 neonColor = uGlowColor * 1.4;
+        color += neonColor * neonRim * (0.25 + avgN * 0.2);
+
+        // Saturation-preserving clamp
+        float maxChannel = max(color.r, max(color.g, color.b));
+        if (maxChannel > 1.1) {
+            color = mix(color, color / maxChannel, 0.65);
+        }
+
+        float alpha = 0.6 - fresnel * 0.12;
+        gl_FragColor = vec4(color, alpha);
+    }
+`;
 
 export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DProps) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -62,10 +191,11 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
         scene: THREE.Scene;
         camera: THREE.PerspectiveCamera;
         renderer: THREE.WebGLRenderer;
-        sphere: THREE.Mesh;
-        innerFill: THREE.Mesh;
-        innerCore: THREE.Mesh;
-        flareLayers: FlareLayer[];
+        composer: EffectComposer;
+        solidSphere: THREE.Mesh;
+        wireSphere: THREE.Mesh;
+        solidMaterial: THREE.ShaderMaterial;
+        wireMaterial: THREE.ShaderMaterial;
         ripples: Ripple[];
         lastRippleTime: number;
         analyser: AnalyserNode | null;
@@ -92,78 +222,98 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.0;
+        renderer.toneMappingExposure = 0.92;
         containerRef.current.appendChild(renderer.domElement);
         camera.position.z = 16;
+        scene.background = new THREE.Color(0x030515);
 
-        // ── Constants ─────────────────────────────────────────────────
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        const bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(window.innerWidth, window.innerHeight),
+            0.65,
+            0.72,
+            0.22
+        );
+        composer.addPass(bloomPass);
+
         const RADIUS = 4;
-        const VIOLET = 0x8b5cf6;
+        const solidUniforms = {
+            uTime: { value: 0 },
+            uBassFrequency: { value: 0 },
+            uMidFrequency: { value: 0 },
+            uTrebleFrequency: { value: 0 },
+            uAverageFrequency: { value: 0 },
+            uActivity: { value: 0 },
+            uRadiusOffset: { value: 0 },
+            uBaseColor: { value: new THREE.Color(0x5b21b6) },
+            uGlowColor: { value: new THREE.Color(0x8b5cf6) },
+            uPeakColor: { value: new THREE.Color(0xa78bfa) },
+        };
 
-        // ── 1. Main wireframe sphere (lower poly for performance) ─────
-        const sphereGeo = new THREE.IcosahedronGeometry(RADIUS, 20);
-        const sphereMat = new THREE.MeshBasicMaterial({
-            color: VIOLET,
+        const wireUniforms = {
+            uTime: { value: 0 },
+            uBassFrequency: { value: 0 },
+            uMidFrequency: { value: 0 },
+            uTrebleFrequency: { value: 0 },
+            uAverageFrequency: { value: 0 },
+            uActivity: { value: 0 },
+            uRadiusOffset: { value: 0.003 },  // Reduced for more cohesive appearance
+            uBaseColor: { value: new THREE.Color(0x7c3aed) },
+            uGlowColor: { value: new THREE.Color(0xa855f7) },
+            uPeakColor: { value: new THREE.Color(0xc084fc) },
+        };
+
+        const solidGeometry = new THREE.IcosahedronGeometry(RADIUS * 0.98, 42);
+        const solidMaterial = new THREE.ShaderMaterial({
+            vertexShader,
+            fragmentShader,
+            uniforms: solidUniforms,
+            transparent: true,
+            depthWrite: true,
+            side: THREE.FrontSide,
+        });
+        const solidSphere = new THREE.Mesh(solidGeometry, solidMaterial);
+        scene.add(solidSphere);
+
+        const wireGeometry = new THREE.IcosahedronGeometry(RADIUS, 42);
+        const wireMaterial = new THREE.ShaderMaterial({
+            vertexShader,
+            fragmentShader,
+            uniforms: wireUniforms,
             wireframe: true,
             transparent: true,
-            opacity: 0.85,
-            blending: THREE.AdditiveBlending,
             depthWrite: false,
-        });
-        const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-        scene.add(sphere);
-
-        // ── 2. Solid inner fill (opaque violet energy) ────────────────
-        const innerFillGeo = new THREE.IcosahedronGeometry(RADIUS * 0.92, 3);
-        const innerFillMat = new THREE.MeshBasicMaterial({
-            color: 0x6d28d9,
-            transparent: true,
-            opacity: 0.55,
+            side: THREE.FrontSide,  // Changed from DoubleSide for better cohesion
             blending: THREE.AdditiveBlending,
-            depthWrite: false,
         });
-        const innerFill = new THREE.Mesh(innerFillGeo, innerFillMat);
-        scene.add(innerFill);
+        const wireSphere = new THREE.Mesh(wireGeometry, wireMaterial);
+        scene.add(wireSphere);
 
-        const innerCoreGeo = new THREE.IcosahedronGeometry(RADIUS * 0.6, 2);
-        const innerCoreMat = new THREE.MeshBasicMaterial({
-            color: 0x7c3aed,
-            transparent: true,
-            opacity: 0.7,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-        });
-        const innerCore = new THREE.Mesh(innerCoreGeo, innerCoreMat);
-        scene.add(innerCore);
-
-        // ── 3. Flare layers (distorted wireframe shells — NOT perfect
-        //    spheres). Each gets its own noise displacement so they
-        //    look like energy flares emanating from the surface. ────────
-        const flareLayers: FlareLayer[] = [];
-        const flareCount = 3;
-        for (let i = 0; i < flareCount; i++) {
-            const depth = (i + 1) / flareCount;
-            const r = RADIUS * (1.1 + depth * 0.5);
-            const detail = Math.max(12 - i * 3, 5);
-            const geo = new THREE.IcosahedronGeometry(r, detail);
-            const opacity = 0.35 * Math.pow(1 - depth, 1.4);
-            const mat = new THREE.MeshBasicMaterial({
-                color: VIOLET,
-                wireframe: true,
+        const starsGeo = new THREE.BufferGeometry();
+        const starCount = 1400;
+        const starPositions = new Float32Array(starCount * 3);
+        for (let i = 0; i < starCount; i++) {
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const r = 7 + Math.random() * 18;
+            starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+            starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            starPositions[i * 3 + 2] = r * Math.cos(phi);
+        }
+        starsGeo.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
+        const stars = new THREE.Points(
+            starsGeo,
+            new THREE.PointsMaterial({
+                color: 0xc084fc,
+                size: 0.02,
                 transparent: true,
-                opacity,
+                opacity: 0.35,
                 blending: THREE.AdditiveBlending,
                 depthWrite: false,
-            });
-            const mesh = new THREE.Mesh(geo, mat);
-            scene.add(mesh);
-            flareLayers.push({
-                mesh,
-                origPositions: geo.attributes.position.clone(),
-                baseRadius: r,
-                noiseOffset: i * 7.3, // unique phase
-            });
-        }
+            })
+        );
+        scene.add(stars);
 
         // ── 4. Ripple arcs (thin sharp lines, left + right) ───────────
         const MAX_RIPPLES = 4;
@@ -181,7 +331,7 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             }
             const geo = new THREE.BufferGeometry().setFromPoints(points);
             const mat = new THREE.LineBasicMaterial({
-                color: 0xc4b5fd,
+                color: 0xc4b5fd, // Light violet ripples
                 transparent: true,
                 opacity: 0,
                 blending: THREE.AdditiveBlending,
@@ -202,8 +352,16 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
         };
 
         sceneRef.current = {
-            scene, camera, renderer, sphere, innerFill, innerCore,
-            flareLayers, ripples: ripplePool, lastRippleTime: -5,
+            scene,
+            camera,
+            renderer,
+            composer,
+            solidSphere,
+            wireSphere,
+            solidMaterial,
+            wireMaterial,
+            ripples: ripplePool,
+            lastRippleTime: -5,
             analyser: null, dataArray: null, audioContext: null,
             smoothedAudio: 0, smoothedBass: 0, smoothedMid: 0, smoothedHigh: 0,
         };
@@ -211,72 +369,9 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
         // ── Animation ─────────────────────────────────────────────────
         let animId: number;
         const clock = new THREE.Clock();
-        const origPos = sphereGeo.attributes.position.clone();
         const RIPPLE_INTERVAL = 5.0;
         const RIPPLE_DURATION = 3.5;
         const RIPPLE_MAX_SCALE = 3.5;
-
-        // Helper: displace any icosahedron shell with noise + audio
-        const displaceShell = (
-            positions: THREE.BufferAttribute,
-            orig: THREE.BufferAttribute,
-            baseR: number,
-            t: number,
-            noiseOff: number,
-            idleAmp: number,
-            audioAmp: number,
-            audio: number,
-            bass: number,
-            mid: number,
-            high: number,
-            dataArr: Uint8Array | null,
-            active: boolean,
-        ) => {
-            const count = positions.count;
-            for (let i = 0; i < count; i++) {
-                const ox = orig.getX(i), oy = orig.getY(i), oz = orig.getZ(i);
-                const len = Math.sqrt(ox * ox + oy * oy + oz * oz);
-                const nx = ox / len, ny = oy / len, nz = oz / len;
-
-                // Organic idle noise — very subtle when silent
-                const n = fbm(
-                    nx * 2.0 + t * 0.12 + noiseOff,
-                    ny * 2.0 + t * 0.08 + noiseOff,
-                    nz * 2.0,
-                    2
-                );
-                let disp = n * idleAmp;
-
-                // Audio-driven sharp mountain spikes
-                if (active && dataArr) {
-                    const bin = i % (dataArr.length - 1);
-                    const freq = dataArr[bin] / 255;
-
-                    // Sharp spikes from frequency data (mountains!)
-                    const spike = Math.pow(freq, 1.5) * audio * audioAmp * 1.4;
-                    // Bass creates broad terrain bumps
-                    const bassBump = Math.pow(Math.max(0, Math.sin(t * 1.8 + ny * 6 + nx * 4)), 2.0) * bass * audioAmp * 0.5;
-                    // Mid ridges — higher frequency noise
-                    const midRidge = fbm(
-                        nx * 5 + t * 0.7 + noiseOff,
-                        ny * 5 + t * 0.5,
-                        nz * 5, 2
-                    ) * mid * audioAmp * 0.6;
-                    // High-freq micro spikes
-                    const hiSpk = noise3D(
-                        nx * 8 + t * 1.2,
-                        ny * 8 + t * 0.9,
-                        nz * 8 + noiseOff
-                    ) * high * audioAmp * 0.3;
-                    // Only additive — spikes outward, never inward
-                    disp += Math.max(0, spike + bassBump) + midRidge + hiSpk;
-                }
-
-                const r = baseR + disp;
-                positions.setXYZ(i, nx * r, ny * r, nz * r);
-            }
-            positions.needsUpdate = true;
-        };
 
         const animate = () => {
             animId = requestAnimationFrame(animate);
@@ -284,7 +379,7 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             const ctx = sceneRef.current;
             if (!ctx) return;
 
-            const { analyser, dataArray, sphere, innerFill, innerCore, flareLayers, ripples } = ctx;
+            const { analyser, dataArray, solidSphere, wireSphere, solidMaterial, wireMaterial, ripples } = ctx;
 
             // ── Audio analysis ────────────────────────────────────────
             let rawAudio = 0, rawBass = 0, rawMid = 0, rawHigh = 0;
@@ -305,7 +400,7 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
                 rawHigh = Math.min((hs / (hiEnd - hiStart) / 255) * 2.8, 1.0);
             }
 
-            const sf = 0.14;
+            const sf = 0.1;
             ctx.smoothedAudio += (rawAudio - ctx.smoothedAudio) * sf;
             ctx.smoothedBass += (rawBass - ctx.smoothedBass) * sf;
             ctx.smoothedMid += (rawMid - ctx.smoothedMid) * sf;
@@ -316,70 +411,36 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             const high = ctx.smoothedHigh;
             const active = isActiveRef.current;
 
-            // ── Rotation (near-still when silent) ───────────────────────
-            const rSpeed = 0.0004 + audio * 0.006;
-            sphere.rotation.y += rSpeed;
-            sphere.rotation.x += rSpeed * 0.15;
+            const idleBreath = active ? 0 : Math.sin(t * 0.4) * 28 + 42; // Increased significantly for more prominent spikes
+            const currentBass = active ? bass * 255 : idleBreath * 1.2;
+            const currentMid = active ? mid * 255 : idleBreath * 0.8;
+            const currentTreble = active ? high * 255 : idleBreath * 0.5;
+            const currentAvg = active ? audio * 255 : idleBreath;
 
-            // ── Inner fill energy ──────────────────────────────────────
-            const breath = Math.sin(t * 0.7) * 0.02 + 1;
-            innerCore.scale.setScalar(breath);
-            innerFill.scale.setScalar(breath * 0.99);
-            (innerFillMat as THREE.MeshBasicMaterial).opacity =
-                THREE.MathUtils.lerp(0.5, 0.75, audio);
-            (innerCoreMat as THREE.MeshBasicMaterial).opacity =
-                THREE.MathUtils.lerp(0.6, 0.85, audio);
+            // Sigma-level activity calculation
+            const activityLevel = active ? Math.min(1.0, audio * 2.5 + 0.1) : 0.0;
 
-            // ── Main sphere displacement (MOUNTAINS) ──────────────────
-            displaceShell(
-                sphere.geometry.attributes.position as THREE.BufferAttribute,
-                origPos, RADIUS, t, 0,
-                0.15,    // idle amplitude — near-still when silent
-                4.5,     // audio amplitude — sharp mountain spikes
-                audio, bass, mid, high,
-                dataArray, active,
-            );
-            sphere.geometry.computeVertexNormals();
+            solidMaterial.uniforms.uTime.value = t;
+            solidMaterial.uniforms.uBassFrequency.value = currentBass;
+            solidMaterial.uniforms.uMidFrequency.value = currentMid;
+            solidMaterial.uniforms.uTrebleFrequency.value = currentTreble;
+            solidMaterial.uniforms.uAverageFrequency.value = currentAvg;
+            solidMaterial.uniforms.uActivity.value = activityLevel;
 
-            // ── Flare layer displacement (organic energy wisps) ───────
-            //    Each flare shell gets its own noise displacement so
-            //    it deforms independently — NOT a perfect sphere.
-            //    Amplitude increases with distance → outer shells are
-            //    more wild and distorted like solar plasma tendrils.
-            for (let i = 0; i < flareLayers.length; i++) {
-                const fl = flareLayers[i];
-                const depth = (i + 1) / flareLayers.length;
-                const flareIdleAmp = 0.2 + depth * 0.5;    // minimal idle
-                const flareAudioAmp = 3.0 + depth * 3.5;   // outer = wilder with audio
+            wireMaterial.uniforms.uTime.value = t;
+            wireMaterial.uniforms.uBassFrequency.value = currentBass;
+            wireMaterial.uniforms.uMidFrequency.value = currentMid;
+            wireMaterial.uniforms.uTrebleFrequency.value = currentTreble;
+            wireMaterial.uniforms.uAverageFrequency.value = currentAvg;
+            wireMaterial.uniforms.uActivity.value = activityLevel;
 
-                displaceShell(
-                    fl.mesh.geometry.attributes.position as THREE.BufferAttribute,
-                    fl.origPositions, fl.baseRadius, t, fl.noiseOffset,
-                    flareIdleAmp, flareAudioAmp,
-                    audio, bass, mid, high,
-                    dataArray, active,
-                );
-
-                // Slow counter-rotation for depth
-                fl.mesh.rotation.y += 0.0004 * (i % 2 === 0 ? 1 : -1);
-                fl.mesh.rotation.z += 0.0002 * (i % 2 === 0 ? -1 : 1);
-
-                // Opacity responds to audio
-                const baseOp = 0.35 * Math.pow(1 - depth, 1.4);
-                (fl.mesh.material as THREE.MeshBasicMaterial).opacity =
-                    THREE.MathUtils.lerp(baseOp, baseOp + 0.12, audio);
-            }
-
-            // ── Shell scale (minimal stretch) ──────────────────────────
-            const shellTarget = 1 + bass * 0.04;
-            sphere.scale.setScalar(THREE.MathUtils.lerp(sphere.scale.x, shellTarget, 0.06));
-
-            // ── Color (single violet) ─────────────────────────────────
-            const sMat = sphere.material as THREE.MeshBasicMaterial;
-            const baseCol = new THREE.Color(VIOLET);
-            const hotCol = new THREE.Color(0xc4b5fd);
-            sMat.color.copy(baseCol).lerp(hotCol, Math.min(audio * 1.5, 1));
-            sMat.opacity = THREE.MathUtils.lerp(0.7, 0.92, audio);
+            // Classic sigma-level gentle rotation
+            const ry = t * 0.05;
+            const rx = Math.sin(t * 0.03) * 0.05;
+            solidSphere.rotation.y = ry;
+            solidSphere.rotation.x = rx;
+            wireSphere.rotation.y = ry;
+            wireSphere.rotation.x = rx;
 
             // ── Ripple arcs (every ~5s) ───────────────────────────────
             if (t - ctx.lastRippleTime >= RIPPLE_INTERVAL) {
@@ -425,17 +486,18 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
                 });
             }
 
-            renderer.render(scene, camera);
+            composer.render();
         };
 
         animate();
 
         const handleResize = () => {
             if (!sceneRef.current) return;
-            const { camera: cam, renderer: rnd } = sceneRef.current;
+            const { camera: cam, renderer: rnd, composer: cmp } = sceneRef.current;
             cam.aspect = window.innerWidth / window.innerHeight;
             cam.updateProjectionMatrix();
             rnd.setSize(window.innerWidth, window.innerHeight);
+            cmp.setSize(window.innerWidth, window.innerHeight);
         };
         window.addEventListener("resize", handleResize);
 
@@ -450,6 +512,9 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
                         if ((child as THREE.Line).material) ((child as THREE.Line).material as THREE.Material).dispose();
                     });
                 }
+                sceneRef.current.solidMaterial.dispose();
+                sceneRef.current.wireMaterial.dispose();
+                sceneRef.current.composer.dispose();
                 sceneRef.current.renderer.dispose();
                 sceneRef.current.scene.clear();
                 if (sceneRef.current.audioContext) {
