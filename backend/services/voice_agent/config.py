@@ -34,11 +34,10 @@ COALCREEK_FAREWELLS = [
 ]
 
 SILENCE_PROMPTS = [
-    "Hello? Still there?",
-    "Can you hear me alright?",
-    "Take your time, I'm here when you're ready.",
-    "No rush, just checking you're still on the line.",
-    "Hello? Are you still with me?",
+    "Still there?",
+    "Hello?",
+    "You there?",
+    "Still with me?",
 ]
 
 FILLER_PROMPTS = [

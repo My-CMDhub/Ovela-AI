@@ -221,7 +221,7 @@ class VoiceAgentHandler:
                     "provider": {
                         "type": "deepgram",
                         "model": voice_settings.get("model", "nova-3"),
-                        "endpointing": voice_settings.get("endpointing", 350),  
+                        "endpointing": voice_settings.get("endpointing", 500),  
                         "smart_format": True
                     }
                 },
@@ -261,7 +261,7 @@ class VoiceAgentHandler:
             "provider": {
                 "type": "open_ai",
                 "model": "gpt-4.1-mini",
-                "temperature": 0.7
+                "temperature": 0.4
             },
             "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()
@@ -536,10 +536,6 @@ class VoiceAgentHandler:
             asyncio.create_task(self._receive_from_deepgram())
             self.duration_monitor_task = asyncio.create_task(self._monitor_call_duration())
             
-        except Exception as e:
-            logger.error(f"Failed to connect to Deepgram Agent: {e}")
-            raise
-    
         except Exception as e:
             logger.error(f"Failed to connect to Deepgram Agent: {e}")
             raise
@@ -1025,13 +1021,31 @@ class VoiceAgentHandler:
         ]
         
         try:
+            long_wait_task = None
+            fn_done_event = None
+
             if function_name in SLOW_TOOLS:
                 # Let the LLM's filler TTS audio flush to Twilio
                 await asyncio.sleep(0.5)
+                # Safety net: inject filler if LLM didn't speak one
+                if not getattr(self, '_ai_is_speaking', False):
+                    filler = random.choice(FILLER_PROMPTS)
+                    await self._inject_message(filler)
+                    await asyncio.sleep(0.3)  # Let filler start playing
+                
+                # Schedule progressive "still checking" for very long waits
+                fn_done_event = asyncio.Event()
+                long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event))
             
             # Execute via dispatcher
             ctx = {"pending_order": self.pending_order}
             result = await self.function_dispatcher.execute(function_name, function_args, context=ctx)
+            
+            # Cancel the long-wait filler if function completed
+            if fn_done_event:
+                fn_done_event.set()
+            if long_wait_task and not long_wait_task.done():
+                long_wait_task.cancel()
             
             # Capture system errors/outcome overrides
             if result.get("outcome_override"):
@@ -1372,13 +1386,31 @@ class VoiceAgentHandler:
                     await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER, skip_summary_sms=True, play_transfer_message=False)
                 else:
                     logger.info(f"🚫 Hard time cap reached - ending call [{call_type}]")
-                    await self._hangup_with_farewell(duration_result.get("farewell", "Thanks for calling!"))
+                    # GO DEAF: Stop processing user audio to prevent InjectionRefused
+                    self._is_hanging_up = True
+                    farewell = duration_result.get("farewell", "Thanks for calling!")
+                    await self._speak_and_wait_for_tts(farewell, timeout=5.0, min_wait=2.5)
+                    await self._hangup_call()
                 
                 break
     
     # =========================================================================
     # MESSAGING & CALL CONTROL
     # =========================================================================
+    
+    async def _long_wait_filler(self, fn_done: asyncio.Event):
+        """Inject extra filler if a function call takes > 8s."""
+        try:
+            await asyncio.sleep(8.0)
+            if not fn_done.is_set():
+                fillers = [
+                    "Thanks for your patience, just a sec.",
+                    "Still checking, won't be long.",
+                    "Almost there, one more moment.",
+                ]
+                await self._inject_message(random.choice(fillers))
+        except asyncio.CancelledError:
+            pass
     
     async def _inject_message(self, content: str):
         """Inject a message for the agent to speak."""
@@ -1442,14 +1474,6 @@ class VoiceAgentHandler:
                 self._transfer_pending = False
                 self._transfer_tts_done.clear()
     
-    async def _scheduled_hangup(self, delay: float):
-        """Wait for a delay (TTS to finish) then hangup."""
-        try:
-            logger.info(f"⏳ Scheduled hangup in {delay:.1f}s")
-            await asyncio.sleep(delay)
-            await self._hangup_call()
-        except Exception as e:
-            logger.error(f"Scheduled hangup failed: {e}")
 
     async def _hangup_call(self):
         """Terminate the Twilio call gracefully."""
@@ -1672,7 +1696,8 @@ class VoiceAgentHandler:
                 response = await client.post(url, data=data, auth=auth)
                 response.raise_for_status()
             
-            logger.info(f"✅ Call transfer initiated to {transfer_to}")
+            masked_to = f"{'*' * (len(transfer_to) - 4)}{transfer_to[-4:]}" if len(transfer_to) > 4 else transfer_to
+            logger.info(f"✅ Call transfer initiated to {masked_to}")
             self.call_outcome = "transferred"
             self.is_running = False  # Stop AI processing during transfer
             
