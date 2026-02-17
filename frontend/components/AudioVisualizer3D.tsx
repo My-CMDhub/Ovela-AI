@@ -102,34 +102,41 @@ const vertexShader = `
         // Time: slow when idle, faster when active (sigma-level motion)
         float t = uTime * mix(0.12, 0.28, uActivity);
 
-        // Multi-octave noise for classic sigma appearance with wider spikes
-        float n1 = snoise(pos * 1.0 + t);  // Reduced from 1.2 for wider spikes
-        float n2 = snoise(pos * 2.0 + t * 1.3) * 0.5;  // Reduced from 2.4
-        float n3 = snoise(pos * 4.2 + t * 1.7) * 0.25 * uActivity;  // Reduced from 4.8
+        // Audio-driven amplitude with higher frequency sensitivity
+        float bassN = uBassFrequency / 255.0;
+        float midN  = uMidFrequency / 255.0;
+        float trebN = uTrebleFrequency / 255.0;
+
+        // Multi-octave noise with better frequency-responsive spread
+        float baseSpread = 0.8;
+        float freqSpreadBoost = (trebN * 0.4);  // Increased from 0.3 for better spread
+        float n1 = snoise(pos * (baseSpread - freqSpreadBoost) + t);
+        float n2 = snoise(pos * (1.6 - freqSpreadBoost * 0.6) + t * 1.3) * 0.5;  // Increased spread factor
+        float n3 = snoise(pos * (3.6 - freqSpreadBoost * 0.4) + t * 1.7) * 0.25 * uActivity;  // Increased spread
         float combined = n1 + n2 + n3;
 
         // Shaping: round hills (idle) -> sharp spikes (active)
         float expo = mix(1.0, 0.4, uActivity);
         float shaped = pow(abs(combined), expo) * sign(combined);
 
-        // Audio-driven amplitude
-        float bassN = uBassFrequency / 255.0;
-        float midN  = uMidFrequency / 255.0;
-        float trebN = uTrebleFrequency / 255.0;
+        // Higher frequency boost for much better sensitivity
+        float highFreqBoost = trebN * trebN * 2.0;  // Increased from 1.5
+        float totalFreqSensitivity = bassN * 0.5 + midN * 0.7 + trebN * 1.0 + highFreqBoost;  // Increased all weights
 
-        // Idle: more prominent base spikes (increased significantly)
-        float idleAmp = 0.24 + sin(uTime * 0.4) * 0.08;
+        // Idle: much smaller and calmer spikes
+        float idleAmp = 0.08 + sin(uTime * 0.4) * 0.02;  // Significantly reduced from 0.32 + 0.12
 
-        // Active: strong response from audio
-        float audioAmp = bassN * 0.4 + midN * 0.5 + trebN * 0.15;
-        // Lift the audio signal to ensure visible response
-        float boostedAudio = audioAmp * 1.8 + uActivity * 0.15;
+        // Active: enhanced response with high frequency sensitivity
+        float audioAmp = totalFreqSensitivity;
+        // Dynamic boost based on frequency content - increased for better active response
+        float sensitivityMultiplier = 2.4 + (trebN * 1.0);  // Increased from 1.8 + 0.7
+        float boostedAudio = audioAmp * sensitivityMultiplier + uActivity * 0.25;  // Increased activity boost
 
         float amplitude = mix(idleAmp, boostedAudio, uActivity);
 
-        // Soft-clamp with tanh to prevent over-elongation (sigma control)
-        float maxH = mix(0.45, 0.7, uActivity);  // Increased idle max height significantly
-        float displacement = tanh(shaped * amplitude * 2.0) * maxH;  // Slightly reduced multiplier for better control
+        // Dynamic max height based on frequency content - much better active response
+        float dynamicMaxH = mix(0.15, 0.95 + (trebN * 0.4), uActivity);  // Increased active max height
+        float displacement = tanh(shaped * amplitude * (2.2 + trebN * 0.6)) * dynamicMaxH;  // Increased multipliers
 
         // Allow only tiny inward dimples
         displacement = max(displacement, -0.03);
@@ -411,14 +418,14 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             const high = ctx.smoothedHigh;
             const active = isActiveRef.current;
 
-            const idleBreath = active ? 0 : Math.sin(t * 0.4) * 28 + 42; // Increased significantly for more prominent spikes
+            const idleBreath = active ? 0 : Math.sin(t * 0.4) * 12 + 18; // Much smaller idle values
             const currentBass = active ? bass * 255 : idleBreath * 1.2;
             const currentMid = active ? mid * 255 : idleBreath * 0.8;
             const currentTreble = active ? high * 255 : idleBreath * 0.5;
             const currentAvg = active ? audio * 255 : idleBreath;
 
-            // Sigma-level activity calculation
-            const activityLevel = active ? Math.min(1.0, audio * 2.5 + 0.1) : 0.0;
+            // Enhanced activity calculation for better responsiveness
+            const activityLevel = active ? Math.min(1.0, audio * 3.0 + 0.15) : 0.0;  // Increased from 2.5
 
             solidMaterial.uniforms.uTime.value = t;
             solidMaterial.uniforms.uBassFrequency.value = currentBass;
@@ -434,9 +441,14 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             wireMaterial.uniforms.uAverageFrequency.value = currentAvg;
             wireMaterial.uniforms.uActivity.value = activityLevel;
 
-            // Classic sigma-level gentle rotation
-            const ry = t * 0.05;
-            const rx = Math.sin(t * 0.03) * 0.05;
+            // Fixed, isolated rotation - completely independent of audio
+            const constantRotationSpeed = 0.02;
+            const constantOscillationSpeed = 0.018;
+            const constantOscillationAmplitude = 0.025;
+            
+            const ry = t * constantRotationSpeed;
+            const rx = Math.sin(t * constantOscillationSpeed) * constantOscillationAmplitude;
+            
             solidSphere.rotation.y = ry;
             solidSphere.rotation.x = rx;
             wireSphere.rotation.y = ry;
