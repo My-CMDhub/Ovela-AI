@@ -17,6 +17,9 @@ class Settings(BaseSettings):
 
     # OpenAI
     OPENAI_API_KEY: str
+    
+    # Cartesia (Direct TTS Bypass)
+    CARTESIA_API_KEY: Optional[str] = ""
 
     # Appwrite
     APPWRITE_ENDPOINT: str = "https://api.ovela.dev/v1"

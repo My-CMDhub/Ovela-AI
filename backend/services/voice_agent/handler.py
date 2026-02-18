@@ -57,6 +57,9 @@ CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
 # CARTESIA_VOICE_ID = "41f3c367-e0a8-4a85-89e0-c27bae9c9b6d" - Liam AU
 # CARTESIA_VOICE_ID = "c63361f8-d142-4c62-8da7-8f8149d973d6" - Krishna IN
 
+
+from cartesia import Cartesia
+
 logger = logging.getLogger(__name__)
 
 
@@ -157,6 +160,16 @@ class VoiceAgentHandler:
         
         # Tenant Configuration (Database Driven)
         self.tenant_config = {}
+
+        # Cartesia Client (Direct TTS Bypass)
+        self.cartesia_client = None
+        if settings.CARTESIA_API_KEY:
+             try:
+                 self.cartesia_client = Cartesia(api_key=settings.CARTESIA_API_KEY)
+                 logger.info("✅ Cartesia Client Initialized for Direct TTS")
+             except Exception as e:
+                 logger.error(f"❌ Failed to initialize Cartesia Client: {e}")
+
     
     # =========================================================================
     # DEEPGRAM SETTINGS
@@ -264,8 +277,82 @@ class VoiceAgentHandler:
                 "temperature": 0.4
             },
             "prompt": self._get_active_prompt(),
+            "functions": self._get_active_functions(),
+            "provider": {
+                "type": "open_ai",
+                "model": "gpt-4.1-mini",
+                "temperature": 0.4,
+            },
+            "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()
         }
+
+    async def _speak_direct(self, text: str):
+        """
+        [DIRECT TTS BYPASS]
+        Generates audio using Cartesia and sends it directly to Twilio Media Stream.
+        Used for system messages (silence/fillers) where Deepgram injection fails.
+        """
+        if not self.cartesia_client:
+            logger.warning("⚠️ Cannot use Direct TTS: Cartesia Client not initialized (Check API Key)")
+            return
+
+        try:
+            logger.info(f"🗣️ [DIRECT TTS] Generating: '{text}'")
+            
+            # Get voice ID from settings or default
+            voice_id = "a167e0f3-df7e-4d52-a9c3-f949145efdab" # Default (Blake/Thaliaish)
+            voice_settings = self.tenant_config.get("voice_settings", {})
+            if "voice_id" in voice_settings:
+                 voice_id = voice_settings["voice_id"]
+                 # Quick fix for non-UUID names if any remain
+                 if len(voice_id) < 20: 
+                     voice_id = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
+
+            # 1. Generate Audio (Raw PCM)
+            # websocket_stream or synchronous bytes? Synchronous is safer here.
+            # Using cartesia library's tts.bytes()
+            audio_bytes = self.cartesia_client.tts.bytes(
+                model_id="sonic-convective", # Low latency model
+                transcript=text,
+                voice_id=voice_id,
+                output_format={
+                    "container": "raw",
+                    "encoding": "pcm_mulaw", # Twilio expects mu-law
+                    "sample_rate": 8000      # Twilio expects 8kHz
+                }
+            )
+
+            # 2. Send to Twilio
+            # Function helper matches _send_audio_to_twilio logic
+            payload = base64.b64encode(audio_bytes).decode("utf-8")
+            media_message = {
+                "event": "media",
+                "streamSid": self.stream_sid,
+                "media": {
+                    "payload": payload
+                }
+            }
+            if self.twilio_ws:
+                await self.twilio_ws.send_json(media_message)
+                logger.info(f"📤 [DIRECT TTS] Sent {len(audio_bytes)} bytes to Twilio")
+
+                # State Management:
+                # We do NOT set _ai_is_speaking=True because that locks the Deepgram state machine.
+                # But we SHOULD trigger silence monitor updates so we don't interrupt ourselves.
+                self.silence_monitor.on_ai_started_speaking(preserve_check_id=True)
+                
+                # Estimate duration for unblocking (approx 8000 bytes/sec for 8khz mulaw)
+                duration = len(audio_bytes) / 8000.0
+                asyncio.create_task(self._unlock_silence_later(duration))
+
+        except Exception as e:
+            logger.error(f"❌ [DIRECT TTS] Failed: {e}", exc_info=True)
+
+    async def _unlock_silence_later(self, delay: float):
+        await asyncio.sleep(delay)
+        self.silence_monitor.on_ai_finished_speaking()
+
     
     
     def _get_function_call_instructions(self) -> str:
@@ -776,7 +863,9 @@ class VoiceAgentHandler:
                     await self._hangup_with_farewell(spam_result.get("message", "Take care!"))
                     return
                 elif spam_result.get("warning"):
-                    await self._prompt_agent_to_speak(spam_result["warning"])
+                    # HYBRID BYPASS: Use Direct TTS for spam warning
+                    asyncio.create_task(self._speak_direct(spam_result["warning"]))
+
 
         elif role == "assistant":
             # GATING: If we are in the process of hanging up (e.g. end_call triggered),
@@ -1040,7 +1129,9 @@ class VoiceAgentHandler:
                 # Safety net: inject filler if LLM didn't speak one
                 if not getattr(self, '_ai_is_speaking', False):
                     filler = random.choice(FILLER_PROMPTS)
-                    await self._prompt_agent_to_speak(filler)
+                    # HYBRID BYPASS: Use Direct TTS for filler
+                    asyncio.create_task(self._speak_direct(filler))
+
                 # Unlock interruptions after filler TTS plays (~2.5s)
                 asyncio.create_task(self._unlock_interruptions(2.5))
                 
@@ -1131,7 +1222,10 @@ class VoiceAgentHandler:
                 if not message:
                     message = get_random_farewell(self.tenant_id)
                     logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
-                await self._prompt_agent_to_speak(message)
+                
+                # HYBRID BYPASS: Use Direct TTS for farewell to guarantee it speaks before hangup
+                asyncio.create_task(self._speak_direct(message))
+
                 delay = max(4.0, (len(message) * 0.1) + 2.0)
                 logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
                 asyncio.create_task(self._scheduled_hangup(delay))
@@ -1229,7 +1323,10 @@ class VoiceAgentHandler:
         if action == "soft_prompt":
             logger.info(f"⏱️ Soft silence - gentle check-in")
             self._in_silence_escalation = True  # Prevent new silence cycles during escalation
-            await self._prompt_agent_to_speak(result.get("prompt", get_random_silence_prompt()))
+            # HYBRID BYPASS: Use Direct TTS for silence prompt
+            prompt = result.get("prompt", get_random_silence_prompt())
+            asyncio.create_task(self._speak_direct(prompt))
+
             # Continue escalation chain with same check_id
             asyncio.create_task(self._check_hard_silence(check_id))
             
@@ -1262,7 +1359,10 @@ class VoiceAgentHandler:
         
         if action == "hard_prompt":
             logger.info(f"⏱️ Hard silence - urgent check-in")
-            await self._prompt_agent_to_speak(result.get("prompt", "Hello? Still there?"))
+            # HYBRID BYPASS: Use Direct TTS for hard prompt
+            prompt = result.get("prompt", "Hello? Still there?")
+            asyncio.create_task(self._speak_direct(prompt))
+
             asyncio.create_task(self._check_abandon_silence(check_id))
             
         elif action == "abandon":
@@ -1308,6 +1408,43 @@ class VoiceAgentHandler:
             self._in_silence_escalation = False
     
     # =========================================================================
+    # HELPERS FOR FILLERS
+    # =========================================================================
+
+    async def _unlock_interruptions(self, delay: float):
+        """Unblock interruptions after a delay (used for fillers)."""
+        await asyncio.sleep(delay)
+        self._blocking_interruptions = False
+        logger.debug("🔓 Interruptions unblocked")
+
+    async def _long_wait_filler(self, stop_event: asyncio.Event):
+        """
+        Play progress updates for very long running functions.
+        Uses Direct TTS to ensure messages are heard.
+        """
+        try:
+            # First wait (already covered by initial filler)
+            await asyncio.sleep(6.0)
+            if stop_event.is_set(): return
+            
+            # Second message
+            msg = "Still checking..."
+            asyncio.create_task(self._speak_direct(msg))
+            
+            await asyncio.sleep(6.0)
+            if stop_event.is_set(): return
+            
+            # Third message
+            msg = "Thanks for waiting, almost there..."
+            asyncio.create_task(self._speak_direct(msg))
+            
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Error in long wait task: {e}")
+
+    
+    # =========================================================================
     # DURATION MONITORING
     # =========================================================================
     
@@ -1346,7 +1483,9 @@ class VoiceAgentHandler:
                     continue
                     
                 logger.info(f"⏱️ Soft time warning [{call_type}]")
-                await self._prompt_agent_to_speak(duration_result.get("message", "We've been chatting for a while..."))
+                # HYBRID BYPASS: Use Direct TTS for soft warning
+                asyncio.create_task(self._speak_direct(duration_result.get("message", "We've been chatting for a while...")))
+
                 
             elif action == "hard_cap":
                 # Smart Wait: Let AI finish speaking or working
