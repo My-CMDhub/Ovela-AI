@@ -1659,8 +1659,8 @@ class VoiceAgentHandler:
             await self._inject_message("I'm sorry, I couldn't complete the transfer. Let me take a message instead.")
             return
         
-        logger.info(f"📞 Executing transfer to {transfer_to}")
-        
+        logger.info(f"📞 Executing transfer to {'*' * (len(transfer_to) - 2)}{transfer_to[-2:]}")
+
         # [NEW] SEND TRANSFER SUMMARY SMS (Non-blocking)
         if not skip_summary_sms:
             try:

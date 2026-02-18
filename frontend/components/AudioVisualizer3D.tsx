@@ -13,6 +13,25 @@ interface AudioVisualizer3DProps {
 
 interface Ripple { birthTime: number; group: THREE.Group; }
 
+const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
+
+const smoothAsymmetric = (
+    current: number,
+    target: number,
+    dt: number,
+    attackRate: number,
+    releaseRate: number
+): number => {
+    const rate = target > current ? attackRate : releaseRate;
+    const alpha = 1 - Math.exp(-rate * dt);
+    return current + (target - current) * alpha;
+};
+
+const applyNoiseGate = (value: number, threshold: number): number => {
+    if (value <= threshold) return 0;
+    return clamp01((value - threshold) / (1 - threshold));
+};
+
 const noiseGLSL = `
     vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
     vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -212,6 +231,12 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
         smoothedBass: number;
         smoothedMid: number;
         smoothedHigh: number;
+        smoothedActivity: number;
+        runtime: number;
+        visualTime: number;
+        rotationY: number;
+        rotationXPhase: number;
+        idleBreathPhase: number;
     } | null>(null);
 
     useEffect(() => { isActiveRef.current = isActive; }, [isActive]);
@@ -371,6 +396,12 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             lastRippleTime: -5,
             analyser: null, dataArray: null, audioContext: null,
             smoothedAudio: 0, smoothedBass: 0, smoothedMid: 0, smoothedHigh: 0,
+            smoothedActivity: 0,
+            runtime: 0,
+            visualTime: 0,
+            rotationY: 0,
+            rotationXPhase: 0,
+            idleBreathPhase: 0,
         };
 
         // ── Animation ─────────────────────────────────────────────────
@@ -382,9 +413,13 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
 
         const animate = () => {
             animId = requestAnimationFrame(animate);
-            const t = clock.getElapsedTime();
+            const dt = Math.min(clock.getDelta(), 0.05);
             const ctx = sceneRef.current;
             if (!ctx) return;
+
+            ctx.runtime += dt;
+            ctx.visualTime = (ctx.visualTime + dt) % 10000;
+            const t = ctx.runtime;
 
             const { analyser, dataArray, solidSphere, wireSphere, solidMaterial, wireMaterial, ripples } = ctx;
 
@@ -395,59 +430,78 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
                 const len = dataArray.length;
                 let sum = 0;
                 for (let i = 0; i < len; i++) sum += dataArray[i];
-                rawAudio = Math.min((sum / len / 255) * 3.5, 1.0);
+                rawAudio = clamp01((sum / len / 255) * 3.5);
                 const bassEnd = Math.floor(len * 0.12);
                 let bs = 0; for (let i = 0; i < bassEnd; i++) bs += dataArray[i];
-                rawBass = Math.min((bs / bassEnd / 255) * 2.5, 1.0);
+                rawBass = clamp01((bs / bassEnd / 255) * 2.5);
                 const midStart = Math.floor(len * 0.12), midEnd = Math.floor(len * 0.55);
                 let ms = 0; for (let i = midStart; i < midEnd; i++) ms += dataArray[i];
-                rawMid = Math.min((ms / (midEnd - midStart) / 255) * 3.0, 1.0);
+                rawMid = clamp01((ms / (midEnd - midStart) / 255) * 3.0);
                 const hiStart = Math.floor(len * 0.55), hiEnd = Math.floor(len * 0.85);
                 let hs = 0; for (let i = hiStart; i < hiEnd; i++) hs += dataArray[i];
-                rawHigh = Math.min((hs / (hiEnd - hiStart) / 255) * 2.8, 1.0);
+                rawHigh = clamp01((hs / (hiEnd - hiStart) / 255) * 2.8);
+
+                rawAudio = applyNoiseGate(rawAudio, 0.02);
+                rawBass = applyNoiseGate(rawBass, 0.025);
+                rawMid = applyNoiseGate(rawMid, 0.02);
+                rawHigh = applyNoiseGate(rawHigh, 0.02);
             }
 
-            const sf = 0.1;
-            ctx.smoothedAudio += (rawAudio - ctx.smoothedAudio) * sf;
-            ctx.smoothedBass += (rawBass - ctx.smoothedBass) * sf;
-            ctx.smoothedMid += (rawMid - ctx.smoothedMid) * sf;
-            ctx.smoothedHigh += (rawHigh - ctx.smoothedHigh) * sf;
+            const isSampling = Boolean(analyser && dataArray && isActiveRef.current);
+            const targetAudio = isSampling ? rawAudio : 0;
+            const targetBass = isSampling ? rawBass : 0;
+            const targetMid = isSampling ? rawMid : 0;
+            const targetHigh = isSampling ? rawHigh : 0;
+
+            ctx.smoothedAudio = clamp01(smoothAsymmetric(ctx.smoothedAudio, targetAudio, dt, 18, 9));
+            ctx.smoothedBass = clamp01(smoothAsymmetric(ctx.smoothedBass, targetBass, dt, 16, 8));
+            ctx.smoothedMid = clamp01(smoothAsymmetric(ctx.smoothedMid, targetMid, dt, 16, 8));
+            ctx.smoothedHigh = clamp01(smoothAsymmetric(ctx.smoothedHigh, targetHigh, dt, 18, 9));
+
             const audio = ctx.smoothedAudio;
             const bass = ctx.smoothedBass;
             const mid = ctx.smoothedMid;
             const high = ctx.smoothedHigh;
             const active = isActiveRef.current;
 
-            const idleBreath = active ? 0 : Math.sin(t * 0.4) * 12 + 18; // Much smaller idle values
+            ctx.idleBreathPhase = (ctx.idleBreathPhase + dt * 0.4) % (Math.PI * 2);
+            const idleBreath = active ? 0 : Math.sin(ctx.idleBreathPhase) * 12 + 18;
             const currentBass = active ? bass * 255 : idleBreath * 1.2;
             const currentMid = active ? mid * 255 : idleBreath * 0.8;
             const currentTreble = active ? high * 255 : idleBreath * 0.5;
             const currentAvg = active ? audio * 255 : idleBreath;
 
-            // Enhanced activity calculation for better responsiveness
-            const activityLevel = active ? Math.min(1.0, audio * 3.0 + 0.15) : 0.0;  // Increased from 2.5
+            const combinedEnergy = active
+                ? clamp01(audio * 0.45 + bass * 0.2 + mid * 0.25 + high * 0.35)
+                : 0;
+            const activityTarget = active ? clamp01((combinedEnergy - 0.02) * 2.6) : 0;
+            ctx.smoothedActivity = clamp01(smoothAsymmetric(ctx.smoothedActivity, activityTarget, dt, 16, 7));
+            const activityLevel = ctx.smoothedActivity;
 
-            solidMaterial.uniforms.uTime.value = t;
+            solidMaterial.uniforms.uTime.value = ctx.visualTime;
             solidMaterial.uniforms.uBassFrequency.value = currentBass;
             solidMaterial.uniforms.uMidFrequency.value = currentMid;
             solidMaterial.uniforms.uTrebleFrequency.value = currentTreble;
             solidMaterial.uniforms.uAverageFrequency.value = currentAvg;
             solidMaterial.uniforms.uActivity.value = activityLevel;
 
-            wireMaterial.uniforms.uTime.value = t;
+            wireMaterial.uniforms.uTime.value = ctx.visualTime;
             wireMaterial.uniforms.uBassFrequency.value = currentBass;
             wireMaterial.uniforms.uMidFrequency.value = currentMid;
             wireMaterial.uniforms.uTrebleFrequency.value = currentTreble;
             wireMaterial.uniforms.uAverageFrequency.value = currentAvg;
             wireMaterial.uniforms.uActivity.value = activityLevel;
 
-            // Fixed, isolated rotation - completely independent of audio
+            // Stable frame-rate independent rotation (no elapsed-time drift/accumulation)
             const constantRotationSpeed = 0.02;
             const constantOscillationSpeed = 0.018;
             const constantOscillationAmplitude = 0.025;
-            
-            const ry = t * constantRotationSpeed;
-            const rx = Math.sin(t * constantOscillationSpeed) * constantOscillationAmplitude;
+
+            ctx.rotationY = (ctx.rotationY + constantRotationSpeed * dt) % (Math.PI * 2);
+            ctx.rotationXPhase = (ctx.rotationXPhase + constantOscillationSpeed * dt) % (Math.PI * 2);
+
+            const ry = ctx.rotationY;
+            const rx = Math.sin(ctx.rotationXPhase) * constantOscillationAmplitude;
             
             solidSphere.rotation.y = ry;
             solidSphere.rotation.x = rx;
@@ -532,6 +586,14 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
                 if (sceneRef.current.audioContext) {
                     sceneRef.current.audioContext.close();
                 }
+                sceneRef.current.analyser = null;
+                sceneRef.current.dataArray = null;
+                sceneRef.current.audioContext = null;
+                sceneRef.current.smoothedAudio = 0;
+                sceneRef.current.smoothedBass = 0;
+                sceneRef.current.smoothedMid = 0;
+                sceneRef.current.smoothedHigh = 0;
+                sceneRef.current.smoothedActivity = 0;
             }
         };
     }, []);
@@ -559,9 +621,27 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             sceneRef.current.analyser = analyser;
             sceneRef.current.dataArray = dataArray;
             sceneRef.current.audioContext = audioContext;
+            sceneRef.current.smoothedAudio = 0;
+            sceneRef.current.smoothedBass = 0;
+            sceneRef.current.smoothedMid = 0;
+            sceneRef.current.smoothedHigh = 0;
+            sceneRef.current.smoothedActivity = 0;
         }
 
-        return () => { source.disconnect(); audioContext.close(); };
+        return () => {
+            source.disconnect();
+            audioContext.close();
+            if (sceneRef.current && sceneRef.current.audioContext === audioContext) {
+                sceneRef.current.analyser = null;
+                sceneRef.current.dataArray = null;
+                sceneRef.current.audioContext = null;
+                sceneRef.current.smoothedAudio = 0;
+                sceneRef.current.smoothedBass = 0;
+                sceneRef.current.smoothedMid = 0;
+                sceneRef.current.smoothedHigh = 0;
+                sceneRef.current.smoothedActivity = 0;
+            }
+        };
     }, [audioStream]);
 
     return <div ref={containerRef} className="w-full h-full" />;
