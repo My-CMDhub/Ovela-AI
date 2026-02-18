@@ -315,13 +315,14 @@ class VoiceAgentHandler:
             audio_bytes = self.cartesia_client.tts.bytes(
                 model_id="sonic-convective", # Low latency model
                 transcript=text,
-                voice_id=voice_id,
+                voice={"mode": "id", "id": voice_id},
                 output_format={
                     "container": "raw",
                     "encoding": "pcm_mulaw", # Twilio expects mu-law
                     "sample_rate": 8000      # Twilio expects 8kHz
                 }
             )
+
 
             # 2. Send to Twilio
             # Function helper matches _send_audio_to_twilio logic
