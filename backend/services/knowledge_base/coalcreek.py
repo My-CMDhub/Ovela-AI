@@ -40,7 +40,7 @@ COALCREEK_DATA = {
             "name": "Standard Queen Room",
             "price": 135,
             "bedding": "1 Queen Bed",
-            "occupancy": 2,
+            "max_guests": 2,
             "features": "Ground floor, Parking at door, Ensuite, Free WiFi, Flat-screen TV, Fridge, Microwave, Tea/Coffee making, Electric blanket",
             "best_for": "Couples or solo travelers"
         },
@@ -48,7 +48,7 @@ COALCREEK_DATA = {
             "name": "Twin Room",
             "price": 160,
             "bedding": "1 Queen Bed + 1 Single Bed",
-            "occupancy": 3,
+            "max_guests": 3,
             "features": "Ground floor, Parking at door, Ensuite, Free WiFi, Flat-screen TV, Fridge, Microwave, Tea/Coffee making, Electric blanket",
             "best_for": "Friends or small families"
         },
@@ -56,7 +56,7 @@ COALCREEK_DATA = {
             "name": "Deluxe Spa Suite",
             "price": 210,
             "bedding": "1 King Bed (or Large Queen)",
-            "occupancy": 2,
+            "max_guests": 2,
             "features": "Large corner spa bath, Private patio, Ground floor, Parking at door, Ensuite, Free WiFi, Flat-screen TV, Fridge, Microwave",
             "best_for": "Couples, special occasions, relaxation"
         },
@@ -64,7 +64,7 @@ COALCREEK_DATA = {
             "name": "Family Room",
             "price": 180, # Estimate/Placeholder based on market rates, to be confirmed by client
             "bedding": "1 Queen Bed + 2 Single Beds",
-            "occupancy": 4,
+            "max_guests": 4,
             "features": "Larger room, Ground floor, Parking at door, Ensuite, Free WiFi, Flat-screen TV, Fridge, Microwave, Toaster",
             "best_for": "Families or groups (up to 4)"
         }

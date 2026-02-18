@@ -1446,10 +1446,10 @@ class VoiceAgentHandler:
             pass
     
     async def _inject_message(self, content: str) -> bool:
-        """Low-level: Send InjectAgentMessage to Deepgram.
+        """Send InjectAgentMessage to Deepgram to force immediate speech.
         
-        NOTE: Only reliable when agent is IDLE (e.g. initial greeting).
-        For mid-conversation speech, use _prompt_agent_to_speak() instead.
+        Reliable for interruptions, silence prompts, and system messages
+        where we cannot wait for the LLM to decide to speak.
         """
         if not self.deepgram_ws:
             return False
@@ -1489,25 +1489,29 @@ class VoiceAgentHandler:
             logger.error(f"📢 UpdatePrompt FAILED: {e}")
 
     async def _say_and_wait(self, message: str):
-        """Prompt the agent to speak a message and wait for estimated TTS duration.
+        """Inject a message and wait for estimated TTS duration.
         
-        Combines UpdatePrompt + estimated sleep. Use for system-initiated
-        messages that must be heard (farewells, warnings, apologies).
+        Uses InjectAgentMessage to force speech + sleep.
+        CRITICAL: Use this for system messages that MUST be heard (farewells, warnings).
         """
         if not message or not self.deepgram_ws:
             return
         
         start = time.monotonic()
-        # Estimate: ~12 chars/sec + 2.0s for LLM processing + TTS latency (min 3.5s)
-        estimated_wait = max(3.5, (len(message) / 12) + 2.0)
+        # Estimate: ~12 chars/sec + 1.5s latency buffer
+        estimated_wait = max(3.0, (len(message) / 12) + 1.5)
         
         try:
             self._blocking_interruptions = True
-            await self._prompt_agent_to_speak(message)
-            logger.info(f"⏳ _say_and_wait: waiting {estimated_wait:.1f}s for LLM+TTS")
-            await asyncio.sleep(estimated_wait)
-            elapsed = time.monotonic() - start
-            logger.info(f"✅ _say_and_wait: done in {elapsed:.1f}s")
+            # Use _inject_message for immediate audio
+            success = await self._inject_message(message)
+            if success:
+                logger.info(f"⏳ _say_and_wait: waiting {estimated_wait:.1f}s for TTS")
+                await asyncio.sleep(estimated_wait)
+                elapsed = time.monotonic() - start
+                logger.info(f"✅ _say_and_wait: done in {elapsed:.1f}s")
+            else:
+                logger.warning("❌ _say_and_wait: injection failed")
         except Exception as e:
             elapsed = time.monotonic() - start
             logger.error(f"❌ _say_and_wait: FAILED after {elapsed:.1f}s — {e}")
@@ -1560,10 +1564,9 @@ class VoiceAgentHandler:
         await self._hangup_call()
 
     async def _hangup_with_farewell(self, farewell_message: str):
-        """Speak a farewell via UpdatePrompt then hangup after LLM+TTS delay.
+        """Speak a farewell via InjectAgentMessage then hangup.
         
-        Uses _prompt_agent_to_speak for reliable speech delivery,
-        with abort check if user speaks during farewell.
+        Ensures the farewell is actually spoken by forcing injection.
         """
         self._is_hanging_up = True
         
@@ -1575,10 +1578,12 @@ class VoiceAgentHandler:
         start = time.monotonic()
         try:
             self._blocking_interruptions = True
-            await self._prompt_agent_to_speak(farewell_message)
-            # Estimate: ~12 chars/sec + 2.0s LLM processing + TTS latency (min 4.0s)
-            estimated_wait = max(4.0, (len(farewell_message) / 12) + 2.0)
-            logger.info(f"⏳ _hangup_with_farewell: waiting {estimated_wait:.1f}s for LLM+TTS")
+            # Use _inject_message for immediate audio
+            await self._inject_message(farewell_message)
+            
+            # Estimate: ~12 chars/sec + 1.5s latency buffer
+            estimated_wait = max(3.0, (len(farewell_message) / 12) + 1.5)
+            logger.info(f"⏳ _hangup_with_farewell: waiting {estimated_wait:.1f}s for TTS")
             await asyncio.sleep(estimated_wait)
             elapsed = time.monotonic() - start
             logger.info(f"✅ _hangup_with_farewell: done in {elapsed:.1f}s")
