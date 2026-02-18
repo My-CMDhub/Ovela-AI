@@ -1117,7 +1117,7 @@ class VoiceAgentHandler:
                 transfer_to = settings.STAFF_PHONE_NUMBER
                 if not transfer_to and self.tenant_config.get("business_phone"):
                      transfer_to = self.tenant_config["business_phone"]
-                logger.info(f"📞 Transfer requested to {transfer_to}")
+                logger.info(f"📞 Transfer requested to {str(transfer_to)[:2]}***{str(transfer_to)[-2:]}")
                 message = result.get("message") or get_preset_phrase(self.tenant_id, "transfering")
                 await self._say_and_wait(message)
                 await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
