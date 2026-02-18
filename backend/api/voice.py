@@ -322,8 +322,20 @@ def _trigger_demo_call(name: str, business_name: str, phone: str, tenant_id: str
     return call
 
 
+async def _enable_recording(call_sid: str):
+    """Enable recording for an active call via Twilio API."""
+    try:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        # Run synchronous Twilio client in thread to avoid blocking loop
+        await loop.run_in_executor(None, lambda: twilio_client.calls(call_sid).update(record=True))
+        logger.info(f"⏺️ Recording enabled for call {call_sid}")
+    except Exception as e:
+        # It's possible the call ended before we could enable recording
+        logger.warning(f"Failed to enable recording for {call_sid}: {e}")
+
 @router.post("/twiml")
-async def get_twiml(request: Request):
+async def get_twiml(request: Request, background_tasks: BackgroundTasks):
     """
     Returns TwiML instructions to connect the call to our WebSocket stream.
     The stream bridges to Deepgram Voice Agent API for STT/LLM/TTS with native VAD.
@@ -338,6 +350,11 @@ async def get_twiml(request: Request):
     is_demo = params.get("is_demo", "false")
     
     answered_by = params.get("AnsweredBy", "")
+    call_sid = params.get("CallSid")
+    
+    # FORCE RECORDING: Ensure all calls (inbound & outbound) are recorded
+    if call_sid:
+        background_tasks.add_task(_enable_recording, call_sid)
     
     response = VoiceResponse()
     
