@@ -313,9 +313,10 @@ class VoiceAgentHandler:
             # websocket_stream or synchronous bytes? Synchronous is safer here.
             # Using cartesia library's tts.bytes()
             audio_bytes = self.cartesia_client.tts.bytes(
-                model_id="sonic-convective", # Low latency model
+                model_id="sonic-3",
                 transcript=text,
                 voice={"mode": "id", "id": voice_id},
+                language="en",
                 output_format={
                     "container": "raw",
                     "encoding": "pcm_mulaw", # Twilio expects mu-law
