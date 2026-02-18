@@ -303,7 +303,11 @@ async def handle_get_room_details(args: dict) -> dict:
     result = get_room_details(room_type)
     
     if "error" in result:
-        return result
+        # Graceful fallback for invalid room types
+        return {
+            "error": result["error"],
+            "message": f"I couldn't find details for that specific room type. We have {', '.join(result.get('available_types', []))} available."
+        }
     
     facilities_list = ", ".join(result["facilities"][:5])
     return {

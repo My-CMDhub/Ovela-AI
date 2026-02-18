@@ -55,7 +55,7 @@ Use this when guest asks about availability or pricing for specific dates.""",
                     "room_type": {
                         "type": "string",
                         "enum": ["queen", "twin", "family", "suite", "any"],
-                        "description": "Specific room type to check, or 'any' for all rooms"
+                        "description": "Specific room type to check, or 'any' for all rooms (HIGHLY RECOMMENDED)"
                     }
                 },
                 "required": ["check_in_date"]

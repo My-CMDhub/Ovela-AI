@@ -105,12 +105,15 @@ async def handle_check_availability(args: dict, db_service) -> dict:
     search_key = room_type_arg.lower()
     target_room = room_map.get(search_key)
     
-    # 3. Call multi-night scraper with RETRY LOGIC (Max 2 Attempts)
+    # 3. Call multi-night scraper with RETRY LOGIC
+    # FORCE room_type=None to scrape ALL rooms (more efficient, same API cost)
+    scrape_target = None 
+    
     try:
         # Import the production scraper
         from services.availability.coalcreek_scraper import check_multinight_availability
         
-        logger.info(f"🔍 Checking availability: {check_in} to {check_out} ({nights} nights), room={target_room or 'any'}")
+        logger.info(f"🔍 Checking availability: {check_in} to {check_out} ({nights} nights), target={target_room or 'any'}")
         
         result = None
         MAX_RETRIES = 2
@@ -121,7 +124,7 @@ async def handle_check_availability(args: dict, db_service) -> dict:
                 result = await check_multinight_availability(
                     check_in_str=check_in,
                     check_out_str=check_out,
-                    room_type=target_room
+                    room_type=scrape_target  # ALWAYS scrape all rooms
                 )
                 
                 if result.get("success"):

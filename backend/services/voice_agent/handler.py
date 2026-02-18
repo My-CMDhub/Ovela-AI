@@ -776,7 +776,7 @@ class VoiceAgentHandler:
                     await self._hangup_with_farewell(spam_result.get("message", "Take care!"))
                     return
                 elif spam_result.get("warning"):
-                    await self._inject_message(spam_result["warning"])
+                    await self._prompt_agent_to_speak(spam_result["warning"])
 
         elif role == "assistant":
             # GATING: If we are in the process of hanging up (e.g. end_call triggered),
@@ -1040,7 +1040,7 @@ class VoiceAgentHandler:
                 # Safety net: inject filler if LLM didn't speak one
                 if not getattr(self, '_ai_is_speaking', False):
                     filler = random.choice(FILLER_PROMPTS)
-                    await self._inject_message(filler)
+                    await self._prompt_agent_to_speak(filler)
                 # Unlock interruptions after filler TTS plays (~2.5s)
                 asyncio.create_task(self._unlock_interruptions(2.5))
                 
@@ -1102,7 +1102,7 @@ class VoiceAgentHandler:
             # Availability fallback: if live calendar is unavailable, apologize and transfer
             if function_name == "check_availability" and result.get("available") == "unknown":
                 message = result.get("hint") or get_preset_phrase(self.tenant_id, "availability_fail")
-                await self._inject_and_wait(message)
+                await self._say_and_wait(message)
                 await self._execute_twilio_transfer(
                     settings.STAFF_PHONE_NUMBER,
                     play_transfer_message=False,
@@ -1119,7 +1119,7 @@ class VoiceAgentHandler:
                      transfer_to = self.tenant_config["business_phone"]
                 logger.info(f"📞 Transfer requested to {transfer_to}")
                 message = result.get("message") or get_preset_phrase(self.tenant_id, "transfering")
-                await self._inject_and_wait(message)
+                await self._say_and_wait(message)
                 await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
                 return
 
@@ -1131,7 +1131,7 @@ class VoiceAgentHandler:
                 if not message:
                     message = get_random_farewell(self.tenant_id)
                     logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
-                await self._inject_message(message)
+                await self._prompt_agent_to_speak(message)
                 delay = max(4.0, (len(message) * 0.1) + 2.0)
                 logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
                 asyncio.create_task(self._scheduled_hangup(delay))
@@ -1229,13 +1229,17 @@ class VoiceAgentHandler:
         if action == "soft_prompt":
             logger.info(f"⏱️ Soft silence - gentle check-in")
             self._in_silence_escalation = True  # Prevent new silence cycles during escalation
-            await self._inject_message(result.get("prompt", get_random_silence_prompt()))
+            await self._prompt_agent_to_speak(result.get("prompt", get_random_silence_prompt()))
             # Continue escalation chain with same check_id
             asyncio.create_task(self._check_hard_silence(check_id))
             
         elif action == "abandon":
             self.call_outcome = "timeout_silence"
-            await self._inject_farewell_and_hangup()
+            await self._hangup_with_farewell(random.choice([
+                "I can't seem to hear you anymore. Feel free to call back if you need help. Take care!",
+                "It seems like we've lost connection. Please call us back anytime. Goodbye!",
+                "I haven't heard from you in a while. Please call back if you need assistance. Have a great day!",
+            ]))
     
     async def _check_hard_silence(self, check_id: int):
         """Check for hard silence threshold (second follow-up)."""
@@ -1258,13 +1262,17 @@ class VoiceAgentHandler:
         
         if action == "hard_prompt":
             logger.info(f"⏱️ Hard silence - urgent check-in")
-            await self._inject_message(result.get("prompt", "Hello? Still there?"))
+            await self._prompt_agent_to_speak(result.get("prompt", "Hello? Still there?"))
             asyncio.create_task(self._check_abandon_silence(check_id))
             
         elif action == "abandon":
             self._in_silence_escalation = False
             self.call_outcome = "timeout_silence"
-            await self._inject_farewell_and_hangup()
+            await self._hangup_with_farewell(random.choice([
+                "I can't seem to hear you anymore. Feel free to call back if you need help. Take care!",
+                "It seems like we've lost connection. Please call us back anytime. Goodbye!",
+                "I haven't heard from you in a while. Please call back if you need assistance. Have a great day!",
+            ]))
         else:
             # User spoke or check invalidated - exit escalation
             self._in_silence_escalation = False
@@ -1290,7 +1298,11 @@ class VoiceAgentHandler:
             logger.info(f"⏱️ Extended silence ({int(result.get('duration', 0))}s) - ending call")
             self._in_silence_escalation = False
             self.call_outcome = "timeout_silence"
-            await self._inject_farewell_and_hangup()
+            await self._hangup_with_farewell(random.choice([
+                "I can't seem to hear you anymore. Feel free to call back if you need help. Take care!",
+                "It seems like we've lost connection. Please call us back anytime. Goodbye!",
+                "I haven't heard from you in a while. Please call back if you need assistance. Have a great day!",
+            ]))
         else:
             # User spoke or check invalidated
             self._in_silence_escalation = False
@@ -1334,7 +1346,7 @@ class VoiceAgentHandler:
                     continue
                     
                 logger.info(f"⏱️ Soft time warning [{call_type}]")
-                await self._inject_message(duration_result.get("message", "We've been chatting for a while..."))
+                await self._prompt_agent_to_speak(duration_result.get("message", "We've been chatting for a while..."))
                 
             elif action == "hard_cap":
                 # Smart Wait: Let AI finish speaking or working
@@ -1358,7 +1370,7 @@ class VoiceAgentHandler:
                     
                     # 1. Honest Message
                     msg = "This is getting a bit complex. I'll put you through to the team now."
-                    await self._inject_and_wait(msg)
+                    await self._say_and_wait(msg)
                     
                     # 2. PROACTIVE SUMMARY SMS (Blocking/Sync)
                     try:
@@ -1400,7 +1412,7 @@ class VoiceAgentHandler:
                     # GO DEAF: Stop processing user audio to prevent InjectionRefused
                     self._is_hanging_up = True
                     farewell = duration_result.get("farewell", "Thanks for calling!")
-                    await self._inject_and_wait(farewell)
+                    await self._say_and_wait(farewell)
                     await self._hangup_call()
                 
                 break
@@ -1420,7 +1432,7 @@ class VoiceAgentHandler:
                     "Almost there, one more moment.",
                 ]
                 self._blocking_interruptions = True
-                await self._inject_message(random.choice(fillers))
+                await self._prompt_agent_to_speak(random.choice(fillers))
                 asyncio.create_task(self._unlock_interruptions(2.5))
         except asyncio.CancelledError:
             pass
@@ -1434,56 +1446,71 @@ class VoiceAgentHandler:
             pass
     
     async def _inject_message(self, content: str) -> bool:
-        """Inject a message for the agent to speak. Returns True if sent."""
-        if not self.deepgram_ws:
-            logger.warning("📨 Inject SKIP: websocket closed")
-            return False
+        """Low-level: Send InjectAgentMessage to Deepgram.
         
+        NOTE: Only reliable when agent is IDLE (e.g. initial greeting).
+        For mid-conversation speech, use _prompt_agent_to_speak() instead.
+        """
+        if not self.deepgram_ws:
+            return False
         try:
-            inject_message = {
+            await self.deepgram_ws.send(json.dumps({
                 "type": "InjectAgentMessage",
                 "content": content
-            }
-            await self.deepgram_ws.send(json.dumps(inject_message))
+            }))
             logger.info(f"📨 Injected ({len(content)} chars): '{content[:50]}...'")
             return True
         except Exception as e:
             logger.error(f"📨 Inject FAILED: {e}")
             return False
 
-    async def _speak_and_wait(self, content: str, min_wait: float = 2.0):
-        """Speak a short message and wait for TTS to finish."""
-        if not content:
-            return
-        await self._inject_message(content)
-        delay = max(min_wait, (len(content) * 0.08) + 0.8)
-        await asyncio.sleep(delay)
-
-    async def _inject_and_wait(self, content: str):
-        """
-        Inject a message and wait estimated TTS duration.
+    async def _prompt_agent_to_speak(self, message: str):
+        """Make the agent speak by updating its prompt with an urgent instruction.
         
-        Uses the Saranda-proven pattern: inject → sleep(estimated) → done.
-        More reliable than waiting for AgentAudioDone (which may not fire).
+        Uses Deepgram's UpdatePrompt — the LLM processes the instruction and
+        speaks through the reliable ConversationText → TTS → Twilio path.
+        This works regardless of agent/user state (unlike InjectAgentMessage).
         """
-        if not content or not self.deepgram_ws:
-            logger.warning(f"⚠️ _inject_and_wait: skipped (content={bool(content)}, ws={bool(self.deepgram_ws)})")
+        if not self.deepgram_ws:
+            logger.warning("📢 UpdatePrompt SKIP: websocket closed")
+            return
+        try:
+            update = {
+                "type": "UpdatePrompt",
+                "prompt": (
+                    self._get_active_prompt()
+                    + f'\n\n⚠️ URGENT SYSTEM INSTRUCTION (OVERRIDE ALL OTHER RULES): '
+                    f'Say this IMMEDIATELY, word for word, as your next response: "{message}"'
+                )
+            }
+            await self.deepgram_ws.send(json.dumps(update))
+            logger.info(f"📢 UpdatePrompt ({len(message)} chars): '{message[:50]}...'")
+        except Exception as e:
+            logger.error(f"📢 UpdatePrompt FAILED: {e}")
+
+    async def _say_and_wait(self, message: str):
+        """Prompt the agent to speak a message and wait for estimated TTS duration.
+        
+        Combines UpdatePrompt + estimated sleep. Use for system-initiated
+        messages that must be heard (farewells, warnings, apologies).
+        """
+        if not message or not self.deepgram_ws:
             return
         
         start = time.monotonic()
-        # Estimate TTS duration: ~12 chars/sec + 1.5s latency buffer (min 3.0s)
-        estimated_tts = max(3.0, (len(content) / 12) + 1.5)
+        # Estimate: ~12 chars/sec + 2.0s for LLM processing + TTS latency (min 3.5s)
+        estimated_wait = max(3.5, (len(message) / 12) + 2.0)
         
         try:
             self._blocking_interruptions = True
-            await self._inject_message(content)
-            logger.info(f"🔊 _inject_and_wait: '{content[:50]}' — waiting {estimated_tts:.1f}s for TTS")
-            await asyncio.sleep(estimated_tts)
+            await self._prompt_agent_to_speak(message)
+            logger.info(f"⏳ _say_and_wait: waiting {estimated_wait:.1f}s for LLM+TTS")
+            await asyncio.sleep(estimated_wait)
             elapsed = time.monotonic() - start
-            logger.info(f"✅ _inject_and_wait: completed in {elapsed:.1f}s (est: {estimated_tts:.1f}s)")
+            logger.info(f"✅ _say_and_wait: done in {elapsed:.1f}s")
         except Exception as e:
             elapsed = time.monotonic() - start
-            logger.error(f"❌ _inject_and_wait: FAILED after {elapsed:.1f}s — {e}")
+            logger.error(f"❌ _say_and_wait: FAILED after {elapsed:.1f}s — {e}")
         finally:
             self._blocking_interruptions = False
     
@@ -1532,82 +1559,39 @@ class VoiceAgentHandler:
 
         await self._hangup_call()
 
-    async def _inject_farewell_and_hangup(self):
-        """Inject farewell message before hanging up due to silence."""
-        # Set flag to stop silence detection during hangup
-        self._is_hanging_up = True
-        if not self.deepgram_ws:
-            logger.warning("🔊 _inject_farewell_and_hangup: ws closed, direct hangup")
-            await self._hangup_call()
-            return
-        
-        start = time.monotonic()
-        try:
-            farewell_messages = [
-                "I can't seem to hear you anymore. Feel free to call back if you need help. Take care!",
-                "It seems like we've lost connection. Please call us back anytime. Goodbye!",
-                "I haven't heard from you in a while. Please call back if you need assistance. Have a great day!",
-            ]
-            
-            farewell = random.choice(farewell_messages)
-            self._blocking_interruptions = True
-            sent = await self._inject_message(farewell)
-            
-            # Dynamic wait based on message length
-            estimated_tts = max(3.5, (len(farewell) / 12) + 1.5)
-            logger.info(f"⏳ _inject_farewell_and_hangup: waiting {estimated_tts:.1f}s (sent={sent})")
-            await asyncio.sleep(estimated_tts)
-            elapsed = time.monotonic() - start
-            logger.info(f"✅ _inject_farewell_and_hangup: completed in {elapsed:.1f}s")
-            
-        except Exception as e:
-            elapsed = time.monotonic() - start
-            logger.error(f"❌ _inject_farewell_and_hangup: FAILED after {elapsed:.1f}s — {e}")
-        finally:
-            self._blocking_interruptions = False
-        
-        # ─────────────────────────────────────────────────────────────────
-        # ABORT HANGUP CHECK: If user spoke during farewell, don't hang up!
-        # _handle_user_started_speaking resets _is_hanging_up when user speaks.
-        # ─────────────────────────────────────────────────────────────────
-        if not getattr(self, '_is_hanging_up', True):
-            logger.info("🛑 ABORT HANGUP: User spoke during farewell - resuming conversation")
-            return  # User interrupted, don't hang up
-        
-        await self._hangup_call()
-    
     async def _hangup_with_farewell(self, farewell_message: str):
-        """Send a farewell message then hangup after delay."""
-        # Set flag to stop silence detection during hangup
+        """Speak a farewell via UpdatePrompt then hangup after LLM+TTS delay.
+        
+        Uses _prompt_agent_to_speak for reliable speech delivery,
+        with abort check if user speaks during farewell.
+        """
         self._is_hanging_up = True
         
         if not self.deepgram_ws:
-            logger.warning("🔊 _hangup_with_farewell: ws closed, direct hangup")
+            logger.warning("📵 _hangup_with_farewell: ws closed, direct hangup")
             await self._hangup_call()
             return
         
         start = time.monotonic()
         try:
             self._blocking_interruptions = True
-            sent = await self._inject_message(farewell_message)
-            # Estimate: ~12 chars/sec + 1.5s buffer (min 3.5s)
-            estimated_tts_time = max(3.5, (len(farewell_message) / 12) + 1.5)
-            logger.info(f"⏳ _hangup_with_farewell: waiting {estimated_tts_time:.1f}s (sent={sent})")
-            await asyncio.sleep(estimated_tts_time)
+            await self._prompt_agent_to_speak(farewell_message)
+            # Estimate: ~12 chars/sec + 2.0s LLM processing + TTS latency (min 4.0s)
+            estimated_wait = max(4.0, (len(farewell_message) / 12) + 2.0)
+            logger.info(f"⏳ _hangup_with_farewell: waiting {estimated_wait:.1f}s for LLM+TTS")
+            await asyncio.sleep(estimated_wait)
             elapsed = time.monotonic() - start
-            logger.info(f"✅ _hangup_with_farewell: completed in {elapsed:.1f}s")
+            logger.info(f"✅ _hangup_with_farewell: done in {elapsed:.1f}s")
         except Exception as e:
             elapsed = time.monotonic() - start
             logger.error(f"❌ _hangup_with_farewell: FAILED after {elapsed:.1f}s — {e}")
         finally:
             self._blocking_interruptions = False
         
-        # ─────────────────────────────────────────────────────────────────
-        # ABORT HANGUP CHECK: If user spoke during farewell, don't hang up!
-        # ─────────────────────────────────────────────────────────────────
+        # ABORT CHECK: if user spoke during farewell, don't hang up
         if not getattr(self, '_is_hanging_up', True):
-            logger.info("🛑 ABORT HANGUP: User spoke during farewell - resuming conversation")
-            return  # User interrupted, don't hang up
+            logger.info("🛑 ABORT HANGUP: User spoke during farewell - resuming")
+            return
         
         await self._hangup_call()
     
@@ -1620,7 +1604,7 @@ class VoiceAgentHandler:
         
         # 1. Apologize
         apology = "Sorry, I'm having a technical issue. I'll put you through to a human now."
-        await self._inject_and_wait(apology)
+        await self._say_and_wait(apology)
         
         # 2. Prevent further AI processing
         self._is_hanging_up = True # Block new text
@@ -1656,7 +1640,7 @@ class VoiceAgentHandler:
         """
         if not self.call_sid:
             logger.warning("Cannot transfer: No Call SID")
-            await self._inject_message("I'm sorry, I couldn't complete the transfer. Let me take a message instead.")
+            await self._prompt_agent_to_speak("I'm sorry, I couldn't complete the transfer. Let me take a message instead.")
             return
         
         logger.info(f"📞 Executing transfer to {'*' * (len(transfer_to) - 2)}{transfer_to[-2:]}")
