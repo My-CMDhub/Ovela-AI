@@ -316,7 +316,6 @@ class VoiceAgentHandler:
                 model_id="sonic-3",
                 transcript=text,
                 voice={"mode": "id", "id": voice_id},
-                language="en",
                 output_format={
                     "container": "raw",
                     "encoding": "pcm_mulaw", # Twilio expects mu-law
