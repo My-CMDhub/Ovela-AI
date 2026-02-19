@@ -586,6 +586,20 @@ class CoalCreekFunctionDispatcher:
                 "transfer_to": settings.STAFF_PHONE_NUMBER,
                 "message": "Sure, I'll transfer you to reception now."
             }
+
+        elif function_name == "wait_on_request":
+             wait_seconds = args.get("wait_seconds", 90)
+             try:
+                 wait_seconds = int(wait_seconds)
+             except Exception:
+                 wait_seconds = 90
+             wait_seconds = max(30, min(wait_seconds, 120))
+             return {
+                "action": "wait_on_request",
+                "duration_seconds": wait_seconds,
+                "reason": args.get("reason", ""),
+                "message": "No worries, take your time. I'll stay on the line."
+            }
             
         elif function_name == "report_user_behavior":
              if self.abuse_protection:

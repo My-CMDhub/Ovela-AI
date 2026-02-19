@@ -254,6 +254,23 @@ Use this when guest asks about availability or pricing for specific dates.""",
             }
         },
         {
+            "name": "wait_on_request",
+            "description": "Use when caller asks you to wait (e.g. 'wait a sec', 'hold on', 'give me a minute while I find details'). Starts caller-wait mode. First wait should be around 90 seconds. If caller asks to wait again while already waiting, call this again to reset to around 60 seconds.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {
+                        "type": "string",
+                        "description": "Short reason for waiting, if caller provided one."
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "Optional desired wait length in seconds."
+                    }
+                }
+            }
+        },
+        {
             "name": "transfer_to_staff",
             "description": "Transfer the caller to a staff member or receptionist. Use when the caller says 'put me through', 'speak to someone', 'talk to a human', 'transfer me', 'receptionist', 'staff', or any similar phrase requesting a live person. Do NOT confuse with end_call.",
             "parameters": {
