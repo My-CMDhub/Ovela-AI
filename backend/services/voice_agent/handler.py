@@ -20,6 +20,7 @@ import asyncio
 import base64
 import time
 import random
+from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import httpx
@@ -57,8 +58,19 @@ CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
 # CARTESIA_VOICE_ID = "41f3c367-e0a8-4a85-89e0-c27bae9c9b6d" - Liam AU
 # CARTESIA_VOICE_ID = "c63361f8-d142-4c62-8da7-8f8149d973d6" - Krishna IN
 
-
-from cartesia import Cartesia
+SYSTEM_AUDIO_DIR = Path(__file__).resolve().parent / "audio"
+REQUIRED_SYSTEM_CLIP_KEYS = [
+    "smart_greeting",
+    "silence_soft",
+    "silence_hard",
+    "abuse_warning",
+    "filler_short",
+    "filler_long",
+    "transfer",
+    "transfer_failed",
+    "farewell",
+    "duration_soft",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +128,9 @@ class VoiceAgentHandler:
         
         # Function tracking
         self._is_processing_function = False
+        self._twilio_audio_frames_sent = 0
+        self._system_audio_cache = {}
+        self._last_system_tts_error = None
         
         # Transfer state tracking
         self._transfer_pending = False
@@ -160,16 +175,6 @@ class VoiceAgentHandler:
         
         # Tenant Configuration (Database Driven)
         self.tenant_config = {}
-
-        # Cartesia Client (Direct TTS Bypass)
-        self.cartesia_client = None
-        if settings.CARTESIA_API_KEY:
-             try:
-                 self.cartesia_client = Cartesia(api_key=settings.CARTESIA_API_KEY)
-                 logger.info("✅ Cartesia Client Initialized for Direct TTS")
-             except Exception as e:
-                 logger.error(f"❌ Failed to initialize Cartesia Client: {e}")
-
     
     # =========================================================================
     # DEEPGRAM SETTINGS
@@ -274,117 +279,29 @@ class VoiceAgentHandler:
             "provider": {
                 "type": "open_ai",
                 "model": "gpt-4.1-mini",
-                "temperature": 0.4
-            },
-            "prompt": self._get_active_prompt(),
-            "functions": self._get_active_functions(),
-            "provider": {
-                "type": "open_ai",
-                "model": "gpt-4.1-mini",
-                "temperature": 0.4,
+                "temperature": 0.45
             },
             "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()
         }
-
-    async def _speak_direct(self, text: str):
-        """
-        [DIRECT TTS BYPASS]
-        Generates audio using Cartesia and sends it directly to Twilio Media Stream.
-        Used for system messages (silence/fillers) where Deepgram injection fails.
-        """
-        if not self.cartesia_client:
-            logger.warning("⚠️ Cannot use Direct TTS: Cartesia Client not initialized (Check API Key)")
-            return
-
-        try:
-            logger.info(f"🗣️ [DIRECT TTS] Generating: '{text}'")
-            
-            # Get voice ID from settings or default
-            voice_id = "a167e0f3-df7e-4d52-a9c3-f949145efdab" # Default (Blake/Thaliaish)
-            voice_settings = self.tenant_config.get("voice_settings", {})
-            if "voice_id" in voice_settings:
-                 voice_id = voice_settings["voice_id"]
-                 # Quick fix for non-UUID names if any remain
-                 if len(voice_id) < 20: 
-                     voice_id = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
-
-            # 1. Generate Audio (Raw PCM)
-            # websocket_stream or synchronous bytes? Synchronous is safer here.
-            # Using cartesia library's tts.bytes()
-            audio_bytes = self.cartesia_client.tts.bytes(
-                model_id="sonic-3",
-                transcript=text,
-                voice={"mode": "id", "id": voice_id},
-                output_format={
-                    "container": "raw",
-                    "encoding": "pcm_mulaw", # Twilio expects mu-law
-                    "sample_rate": 8000      # Twilio expects 8kHz
-                }
-            )
-
-
-            # 2. Send to Twilio
-            # Function helper matches _send_audio_to_twilio logic
-            payload = base64.b64encode(audio_bytes).decode("utf-8")
-            media_message = {
-                "event": "media",
-                "streamSid": self.stream_sid,
-                "media": {
-                    "payload": payload
-                }
-            }
-            if self.twilio_ws:
-                await self.twilio_ws.send_json(media_message)
-                logger.info(f"📤 [DIRECT TTS] Sent {len(audio_bytes)} bytes to Twilio")
-
-                # State Management:
-                # We do NOT set _ai_is_speaking=True because that locks the Deepgram state machine.
-                # But we SHOULD trigger silence monitor updates so we don't interrupt ourselves.
-                self.silence_monitor.on_ai_started_speaking(preserve_check_id=True)
-                
-                # Estimate duration for unblocking (approx 8000 bytes/sec for 8khz mulaw)
-                duration = len(audio_bytes) / 8000.0
-                asyncio.create_task(self._unlock_silence_later(duration))
-
-        except Exception as e:
-            logger.error(f"❌ [DIRECT TTS] Failed: {e}", exc_info=True)
-
-    async def _unlock_silence_later(self, delay: float):
-        await asyncio.sleep(delay)
-        self.silence_monitor.on_ai_finished_speaking()
-
     
     
     def _get_function_call_instructions(self) -> str:
         """
         Instructions the LLM follows when making function calls.
-        
-        The LLM speaks these phrases NATURALLY through TTS before the 
-        FunctionCallRequest fires. This eliminates the need for manual 
-        InjectAgentMessage (which races with LLM output).
-        
-        The Go Deaf mechanism mutes user audio during function execution,
-        so the LLM's phrase plays uninterrupted.
+
+        System-triggered fillers and status prompts are handled by the
+        deterministic system-audio lane. Keep LLM output focused on
+        user-facing results after tool execution.
         """
         return (
-            "FUNCTION CALL SPEAKING RULES (MANDATORY):\n"
-            "When you call a function, say ONE of the phrases below (pick naturally, vary your choice):\n"
+            "FUNCTION CALL RULES (MANDATORY):\n"
+            "When calling a function, DO NOT speak extra filler before the call.\n"
+            "The system layer handles wait messages and silence prompts.\n"
             "\n"
             "check_availability:\n"
-            "  - \"One moment , let me check...\"\n"
-            "  - \"Let me check that for you.\"\n"
-            "  - \"Just a second, I'll look that up.\"\n"
             "  CRITICAL: If user asks about 'other options' or 'what's available', use room_type='any' to check ALL rooms in ONE call.\n"
             "  NEVER call check_availability multiple times for different room types — always use 'any' first.\n"
-            "\n"
-            "create_booking_request → \"Let me place that hold for you now.\"\n"
-            "lookup_booking → \"One moment, let me look that up.\"\n"
-            "request_human_callback → \"I'll arrange that callback for you now.\"\n"
-            "report_missing_booking → \"Let me flag that with the team now.\"\n"
-            "submit_order → \"Placing your order now.\"\n"
-            "get_menu_info → \"Let me check the menu for you.\"\n"
-            "For ANY other function → \"Just a moment.\"\n"
             "\n"
             "After the function returns a result, respond naturally with the information."
         )
@@ -555,6 +472,9 @@ class VoiceAgentHandler:
             
         # Set context for knowledge base
         set_tenant_context(self.tenant_id)
+
+        # Startup diagnostics for deterministic system-audio lane
+        self._log_system_audio_clip_health()
         
         # Initialize abuse protection
         self.abuse_protection = AbuseProtection(tenant_id=self.tenant_id)
@@ -614,7 +534,7 @@ class VoiceAgentHandler:
             # Log TTS provider clearly
             tts_provider = settings_msg["agent"]["speak"]["provider"]["type"]
             if tts_provider == "eleven_labs":
-                logger.info(f"🎤 TTS PROVIDER: ElevenLabs (voice: {ELEVENLABS_VOICE_ID})")
+                logger.info("🎤 TTS PROVIDER: eleven_labs")
             else:
                 provider_config = settings_msg["agent"]["speak"]["provider"]
                 model = provider_config.get("model") or provider_config.get("model_id", "unknown")
@@ -643,7 +563,7 @@ class VoiceAgentHandler:
             if not self.has_user_spoken:
                 logger.info("⏰ Smart Wait timeout: User silent, injecting greeting")
                 greeting = self._get_active_greeting()
-                await self._inject_message(greeting)
+                await self._speak_system_message(greeting, clip_key="smart_greeting")
             else:
                 logger.info("🗣️ User spoke before timeout, letting conversation flow naturally")
                 
@@ -728,6 +648,7 @@ class VoiceAgentHandler:
             }
             
             await self.twilio_ws.send_json(media_message)
+            self._twilio_audio_frames_sent += 1
             
         except Exception as e:
             logger.warning(f"Error sending audio to Twilio: {e}")
@@ -774,15 +695,11 @@ class VoiceAgentHandler:
             
         elif event_type == "FunctionCallRequest":
             # NON-BLOCKING: Run function handler as a task so the receive loop
-            # continues forwarding audio frames to Twilio.  Without this, binary
-            # TTS audio from InjectAgentMessage is buffered and never heard.
+            # continues forwarding audio frames to Twilio.
             asyncio.create_task(self._handle_function_call(event))
             
         elif event_type == "InjectionRefused":
-            logger.warning("⚠️ InjectAgentMessage refused (user speaking or agent already responding)")
-            # If we're waiting for TTS playback, unblock so flow continues
-            if self._transfer_pending:
-                self._transfer_tts_done.set()
+            logger.debug("ℹ️ InjectionRefused received (system lane no longer depends on it)")
             
         elif event_type == "Error":
             logger.error(f"❌ Deepgram Agent error: {event}")
@@ -864,9 +781,7 @@ class VoiceAgentHandler:
                     await self._hangup_with_farewell(spam_result.get("message", "Take care!"))
                     return
                 elif spam_result.get("warning"):
-                    # HYBRID BYPASS: Use Direct TTS for spam warning
-                    asyncio.create_task(self._speak_direct(spam_result["warning"]))
-
+                    await self._speak_system_message(spam_result["warning"], clip_key="abuse_warning")
 
         elif role == "assistant":
             # GATING: If we are in the process of hanging up (e.g. end_call triggered),
@@ -1106,7 +1021,7 @@ class VoiceAgentHandler:
         # LLM-NATIVE FILLER: The LLM speaks preset phrases itself (via
         # function_call_instructions in Settings). We just need a brief
         # pause to let the LLM's TTS audio flush through to Twilio before
-        # Go Deaf blocks further audio frames.  No InjectAgentMessage needed.
+        # Go Deaf blocks further audio frames.
         # ─────────────────────────────────────────────────────────────────
         SLOW_TOOLS = [
             "report_missing_booking", 
@@ -1129,10 +1044,8 @@ class VoiceAgentHandler:
                 await asyncio.sleep(0.5)
                 # Safety net: inject filler if LLM didn't speak one
                 if not getattr(self, '_ai_is_speaking', False):
-                    filler = random.choice(FILLER_PROMPTS)
-                    # HYBRID BYPASS: Use Direct TTS for filler
-                    asyncio.create_task(self._speak_direct(filler))
-
+                    filler = get_random_filler_prompt()
+                    await self._speak_system_message(filler, clip_key="filler_short")
                 # Unlock interruptions after filler TTS plays (~2.5s)
                 asyncio.create_task(self._unlock_interruptions(2.5))
                 
@@ -1211,7 +1124,7 @@ class VoiceAgentHandler:
                      transfer_to = self.tenant_config["business_phone"]
                 logger.info(f"📞 Transfer requested to {str(transfer_to)[:2]}***{str(transfer_to)[-2:]}")
                 message = result.get("message") or get_preset_phrase(self.tenant_id, "transfering")
-                await self._say_and_wait(message)
+                await self._speak_system_message(message, clip_key="transfer", wait_for_playback=True)
                 await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
                 return
 
@@ -1223,10 +1136,7 @@ class VoiceAgentHandler:
                 if not message:
                     message = get_random_farewell(self.tenant_id)
                     logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
-                
-                # HYBRID BYPASS: Use Direct TTS for farewell to guarantee it speaks before hangup
-                asyncio.create_task(self._speak_direct(message))
-
+                await self._speak_system_message(message, clip_key="farewell")
                 delay = max(4.0, (len(message) * 0.1) + 2.0)
                 logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
                 asyncio.create_task(self._scheduled_hangup(delay))
@@ -1324,12 +1234,15 @@ class VoiceAgentHandler:
         if action == "soft_prompt":
             logger.info(f"⏱️ Soft silence - gentle check-in")
             self._in_silence_escalation = True  # Prevent new silence cycles during escalation
-            # HYBRID BYPASS: Use Direct TTS for silence prompt
-            prompt = result.get("prompt", get_random_silence_prompt())
-            asyncio.create_task(self._speak_direct(prompt))
-
-            # Continue escalation chain with same check_id
-            asyncio.create_task(self._check_hard_silence(check_id))
+            await self._speak_system_message(
+                result.get("prompt", get_random_silence_prompt()),
+                clip_key="silence_soft",
+            )
+            # CRITICAL: get fresh check_id AFTER _speak_system_message returns.
+            # on_ai_finished_speaking() inside it increments silence_check_id.
+            # Passing the old stale id would cause check_silence() to return
+            # action='none' (check_invalidated), silently killing the chain.
+            asyncio.create_task(self._check_hard_silence(self.silence_monitor.get_check_id()))
             
         elif action == "abandon":
             self.call_outcome = "timeout_silence"
@@ -1341,31 +1254,32 @@ class VoiceAgentHandler:
     
     async def _check_hard_silence(self, check_id: int):
         """Check for hard silence threshold (second follow-up)."""
-        # Guard: Exit if AI started speaking
-        if getattr(self, '_ai_is_speaking', False):
+        # Guard: Exit if AI started speaking or call already ending
+        if getattr(self, '_ai_is_speaking', False) or getattr(self, '_is_hanging_up', False):
             self._in_silence_escalation = False
             return
-        
+
         # Wait delta between soft and hard threshold
         hard_wait = self.silence_monitor.get_hard_threshold() - self.silence_monitor.get_soft_threshold()
         logger.info(f"⏱️ Hard silence check waiting {hard_wait}s")
         await asyncio.sleep(hard_wait)
-        
-        if not self.is_running or getattr(self, '_ai_is_speaking', False):
+
+        if not self.is_running or getattr(self, '_ai_is_speaking', False) or getattr(self, '_is_hanging_up', False):
             self._in_silence_escalation = False
             return
-        
+
         result = self.silence_monitor.check_silence(check_id)
         action = result.get("action")
-        
+
         if action == "hard_prompt":
             logger.info(f"⏱️ Hard silence - urgent check-in")
-            # HYBRID BYPASS: Use Direct TTS for hard prompt
-            prompt = result.get("prompt", "Hello? Still there?")
-            asyncio.create_task(self._speak_direct(prompt))
+            await self._speak_system_message(
+                result.get("prompt", "Hello? Still there?"),
+                clip_key="silence_hard",
+            )
+            # Same as soft→hard: get fresh check_id after on_ai_finished_speaking incremented it
+            asyncio.create_task(self._check_abandon_silence(self.silence_monitor.get_check_id()))
 
-            asyncio.create_task(self._check_abandon_silence(check_id))
-            
         elif action == "abandon":
             self._in_silence_escalation = False
             self.call_outcome = "timeout_silence"
@@ -1380,16 +1294,16 @@ class VoiceAgentHandler:
     
     async def _check_abandon_silence(self, check_id: int):
         """Check for abandon threshold - end call if still silent."""
-        # Guard: Exit if AI started speaking
-        if getattr(self, '_ai_is_speaking', False):
+        # Guard: Exit if AI started speaking or call already ending
+        if getattr(self, '_ai_is_speaking', False) or getattr(self, '_is_hanging_up', False):
             self._in_silence_escalation = False
             return
-        
+
         abandon_wait = self.silence_monitor.get_abandon_threshold() - self.silence_monitor.get_hard_threshold()
         logger.info(f"⏱️ Abandon silence check waiting {abandon_wait}s")
         await asyncio.sleep(abandon_wait)
-        
-        if not self.is_running or getattr(self, '_ai_is_speaking', False):
+
+        if not self.is_running or getattr(self, '_ai_is_speaking', False) or getattr(self, '_is_hanging_up', False):
             self._in_silence_escalation = False
             return
         
@@ -1407,43 +1321,6 @@ class VoiceAgentHandler:
         else:
             # User spoke or check invalidated
             self._in_silence_escalation = False
-    
-    # =========================================================================
-    # HELPERS FOR FILLERS
-    # =========================================================================
-
-    async def _unlock_interruptions(self, delay: float):
-        """Unblock interruptions after a delay (used for fillers)."""
-        await asyncio.sleep(delay)
-        self._blocking_interruptions = False
-        logger.debug("🔓 Interruptions unblocked")
-
-    async def _long_wait_filler(self, stop_event: asyncio.Event):
-        """
-        Play progress updates for very long running functions.
-        Uses Direct TTS to ensure messages are heard.
-        """
-        try:
-            # First wait (already covered by initial filler)
-            await asyncio.sleep(6.0)
-            if stop_event.is_set(): return
-            
-            # Second message
-            msg = "Still checking..."
-            asyncio.create_task(self._speak_direct(msg))
-            
-            await asyncio.sleep(6.0)
-            if stop_event.is_set(): return
-            
-            # Third message
-            msg = "Thanks for waiting, almost there..."
-            asyncio.create_task(self._speak_direct(msg))
-            
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"Error in long wait task: {e}")
-
     
     # =========================================================================
     # DURATION MONITORING
@@ -1484,9 +1361,10 @@ class VoiceAgentHandler:
                     continue
                     
                 logger.info(f"⏱️ Soft time warning [{call_type}]")
-                # HYBRID BYPASS: Use Direct TTS for soft warning
-                asyncio.create_task(self._speak_direct(duration_result.get("message", "We've been chatting for a while...")))
-
+                await self._speak_system_message(
+                    duration_result.get("message", "We've been chatting for a while..."),
+                    clip_key="duration_soft",
+                )
                 
             elif action == "hard_cap":
                 # Smart Wait: Let AI finish speaking or working
@@ -1552,7 +1430,7 @@ class VoiceAgentHandler:
                     # GO DEAF: Stop processing user audio to prevent InjectionRefused
                     self._is_hanging_up = True
                     farewell = duration_result.get("farewell", "Thanks for calling!")
-                    await self._say_and_wait(farewell)
+                    await self._speak_system_message(farewell, clip_key="farewell", wait_for_playback=True)
                     await self._hangup_call()
                 
                 break
@@ -1572,7 +1450,7 @@ class VoiceAgentHandler:
                     "Almost there, one more moment.",
                 ]
                 self._blocking_interruptions = True
-                await self._prompt_agent_to_speak(random.choice(fillers))
+                await self._speak_system_message(random.choice(fillers), clip_key="filler_long")
                 asyncio.create_task(self._unlock_interruptions(2.5))
         except asyncio.CancelledError:
             pass
@@ -1585,78 +1463,172 @@ class VoiceAgentHandler:
         except asyncio.CancelledError:
             pass
     
-    async def _inject_message(self, content: str) -> bool:
-        """Send InjectAgentMessage to Deepgram to force immediate speech.
-        
-        Reliable for interruptions, silence prompts, and system messages
-        where we cannot wait for the LLM to decide to speak.
-        """
-        if not self.deepgram_ws:
-            return False
+    def _get_cartesia_voice_id(self) -> str:
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        voice_id = voice_settings.get("voice_id", CARTESIA_VOICE_ID)
+        if voice_id == "cartesia-sonic-3-thalia":
+            return CARTESIA_VOICE_ID
+        if len(voice_id) < 30:
+            return CARTESIA_VOICE_ID
+        return voice_id
+
+    def _get_clip_path(self, clip_key: str | None) -> Path | None:
+        if not clip_key:
+            return None
+        voice_id = self._get_cartesia_voice_id()
+        preferred = SYSTEM_AUDIO_DIR / voice_id / f"{clip_key}.mulaw.raw"
+        fallback = SYSTEM_AUDIO_DIR / "default" / f"{clip_key}.mulaw.raw"
+        if preferred.exists():
+            return preferred
+        if fallback.exists():
+            return fallback
+        return None
+
+    def _log_system_audio_clip_health(self):
+        """Log missing/available system clip keys for the active voice at startup."""
+        voice_id = self._get_cartesia_voice_id()
+        voice_dir = SYSTEM_AUDIO_DIR / voice_id
+        default_dir = SYSTEM_AUDIO_DIR / "default"
+
+        missing_keys = []
+        voice_keys = []
+        default_keys = []
+
+        for clip_key in REQUIRED_SYSTEM_CLIP_KEYS:
+            voice_file = voice_dir / f"{clip_key}.mulaw.raw"
+            default_file = default_dir / f"{clip_key}.mulaw.raw"
+            if voice_file.exists():
+                voice_keys.append(clip_key)
+            elif default_file.exists():
+                default_keys.append(clip_key)
+            else:
+                missing_keys.append(clip_key)
+
+        logger.info(
+            "🎵 System-audio clip health | voice_id=%s | voice=%d | default=%d | missing=%d",
+            voice_id,
+            len(voice_keys),
+            len(default_keys),
+            len(missing_keys),
+        )
+
+        if missing_keys:
+            logger.warning(
+                "🎵 Missing system clip keys (will fallback to live Cartesia): %s",
+                ", ".join(missing_keys),
+            )
+        else:
+            logger.info("🎵 All required system clip keys available")
+
+    def _load_cached_clip(self, clip_key: str | None) -> bytes | None:
+        clip_path = self._get_clip_path(clip_key)
+        if not clip_path:
+            return None
+        cache_key = str(clip_path)
+        if cache_key in self._system_audio_cache:
+            return self._system_audio_cache[cache_key]
         try:
-            await self.deepgram_ws.send(json.dumps({
-                "type": "InjectAgentMessage",
-                "content": content
-            }))
-            logger.info(f"📨 Injected ({len(content)} chars): '{content[:50]}...'")
-            return True
+            clip_bytes = clip_path.read_bytes()
+            if clip_bytes:
+                self._system_audio_cache[cache_key] = clip_bytes
+                return clip_bytes
         except Exception as e:
-            logger.error(f"📨 Inject FAILED: {e}")
+            logger.warning(f"🎵 Failed to load system clip {clip_path.name}: {e}")
+        return None
+
+    async def _synthesize_cartesia_mulaw(self, text: str, timeout: float = 1.6) -> bytes | None:
+        if not settings.CARTESIA_API_KEY or not text:
+            self._last_system_tts_error = "CARTESIA_API_KEY missing or empty text"
+            return None
+        voice_id = self._get_cartesia_voice_id()
+        payload = {
+            "model_id": "sonic-3",
+            "transcript": text,
+            "voice": {"mode": "id", "id": voice_id},
+            "output_format": {
+                "container": "raw",
+                "encoding": "pcm_mulaw",
+                "sample_rate": 8000,
+            },
+            "language": "en",
+        }
+        headers = {
+            "X-API-Key": settings.CARTESIA_API_KEY,
+            "Cartesia-Version": "2025-04-16",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post("https://api.cartesia.ai/tts/bytes", headers=headers, json=payload)
+                response.raise_for_status()
+                self._last_system_tts_error = None
+                return response.content
+        except Exception as e:
+            self._last_system_tts_error = str(e)
+            logger.warning(f"🎵 Cartesia system TTS failed: {e}")
+            return None
+
+    async def _send_system_audio(self, audio_bytes: bytes, reason: str = "system") -> float:
+        if not audio_bytes or not self.stream_sid:
+            return 0.0
+        payload = base64.b64encode(audio_bytes).decode("utf-8")
+        media_message = {
+            "event": "media",
+            "streamSid": self.stream_sid,
+            "media": {"payload": payload},
+        }
+        await self.twilio_ws.send_json(media_message)
+        self._twilio_audio_frames_sent += 1
+        duration = len(audio_bytes) / 8000.0
+        logger.info(f"🔊 System audio played ({reason}) bytes={len(audio_bytes)} dur={duration:.2f}s")
+        return duration
+
+    async def _speak_system_message(
+        self,
+        message: str,
+        clip_key: str | None = None,
+        wait_for_playback: bool = False,
+    ) -> bool:
+        if not message:
             return False
 
-    async def _prompt_agent_to_speak(self, message: str):
-        """Make the agent speak by updating its prompt with an urgent instruction.
-        
-        Uses Deepgram's UpdatePrompt — the LLM processes the instruction and
-        speaks through the reliable ConversationText → TTS → Twilio path.
-        This works regardless of agent/user state (unlike InjectAgentMessage).
-        """
-        if not self.deepgram_ws:
-            logger.warning("📢 UpdatePrompt SKIP: websocket closed")
-            return
-        try:
-            update = {
-                "type": "UpdatePrompt",
-                "prompt": (
-                    self._get_active_prompt()
-                    + f'\n\n⚠️ URGENT SYSTEM INSTRUCTION (OVERRIDE ALL OTHER RULES): '
-                    f'Say this IMMEDIATELY, word for word, as your next response: "{message}"'
+        audio_bytes = self._load_cached_clip(clip_key)
+        source = f"clip:{clip_key}" if audio_bytes else "cartesia"
+        if not audio_bytes:
+            audio_bytes = await self._synthesize_cartesia_mulaw(message)
+            if not audio_bytes:
+                logger.error(
+                    "🔇 System audio failed | key=%s | reason=no_clip_and_tts_failed | cartesia_error=%s",
+                    clip_key or "dynamic",
+                    self._last_system_tts_error or "unknown",
                 )
-            }
-            await self.deepgram_ws.send(json.dumps(update))
-            logger.info(f"📢 UpdatePrompt ({len(message)} chars): '{message[:50]}...'")
-        except Exception as e:
-            logger.error(f"📢 UpdatePrompt FAILED: {e}")
+                return False
 
-    async def _say_and_wait(self, message: str):
-        """Inject a message and wait for estimated TTS duration.
-        
-        Uses InjectAgentMessage to force speech + sleep.
-        CRITICAL: Use this for system messages that MUST be heard (farewells, warnings).
-        """
-        if not message or not self.deepgram_ws:
-            return
-        
-        start = time.monotonic()
-        # Estimate: ~12 chars/sec + 1.5s latency buffer
-        estimated_wait = max(3.0, (len(message) / 12) + 1.5)
-        
         try:
             self._blocking_interruptions = True
-            # Use _inject_message for immediate audio
-            success = await self._inject_message(message)
-            if success:
-                logger.info(f"⏳ _say_and_wait: waiting {estimated_wait:.1f}s for TTS")
-                await asyncio.sleep(estimated_wait)
-                elapsed = time.monotonic() - start
-                logger.info(f"✅ _say_and_wait: done in {elapsed:.1f}s")
-            else:
-                logger.warning("❌ _say_and_wait: injection failed")
+            self.silence_monitor.on_ai_started_speaking(preserve_check_id=True)
+            duration = await self._send_system_audio(audio_bytes, reason=source)
+            if wait_for_playback and duration > 0:
+                await asyncio.sleep(max(0.35, duration + 0.15))
+            return True
         except Exception as e:
-            elapsed = time.monotonic() - start
-            logger.error(f"❌ _say_and_wait: FAILED after {elapsed:.1f}s — {e}")
+            logger.error(f"🔇 System audio send failed: {e}")
+            return False
         finally:
             self._blocking_interruptions = False
+            # preserve_escalation=True during silence escalation so on_ai_finished_speaking
+            # does NOT reset silence_followup_count (which would break the chain).
+            self.silence_monitor.on_ai_finished_speaking(
+                preserve_escalation=getattr(self, '_in_silence_escalation', False)
+            )
+
+    async def _prompt_agent_to_speak(self, message: str):
+        """Compatibility wrapper: system-triggered messages use deterministic system audio lane."""
+        await self._speak_system_message(message)
+
+    async def _say_and_wait(self, message: str):
+        """Play system message and block until playback window has passed."""
+        await self._speak_system_message(message, wait_for_playback=True)
     
 
     async def _hangup_call(self):
@@ -1704,34 +1676,21 @@ class VoiceAgentHandler:
         await self._hangup_call()
 
     async def _hangup_with_farewell(self, farewell_message: str):
-        """Speak a farewell via InjectAgentMessage then hangup.
-        
-        Ensures the farewell is actually spoken by forcing injection.
-        """
+        """Speak a system farewell then hang up."""
         self._is_hanging_up = True
-        
-        if not self.deepgram_ws:
-            logger.warning("📵 _hangup_with_farewell: ws closed, direct hangup")
-            await self._hangup_call()
-            return
-        
+
         start = time.monotonic()
         try:
-            self._blocking_interruptions = True
-            # Use _inject_message for immediate audio
-            await self._inject_message(farewell_message)
-            
-            # Estimate: ~12 chars/sec + 1.5s latency buffer
-            estimated_wait = max(3.0, (len(farewell_message) / 12) + 1.5)
-            logger.info(f"⏳ _hangup_with_farewell: waiting {estimated_wait:.1f}s for TTS")
-            await asyncio.sleep(estimated_wait)
+            await self._speak_system_message(
+                farewell_message,
+                clip_key="farewell",
+                wait_for_playback=True,
+            )
             elapsed = time.monotonic() - start
             logger.info(f"✅ _hangup_with_farewell: done in {elapsed:.1f}s")
         except Exception as e:
             elapsed = time.monotonic() - start
             logger.error(f"❌ _hangup_with_farewell: FAILED after {elapsed:.1f}s — {e}")
-        finally:
-            self._blocking_interruptions = False
         
         # ABORT CHECK: if user spoke during farewell, don't hang up
         if not getattr(self, '_is_hanging_up', True):
@@ -1785,7 +1744,11 @@ class VoiceAgentHandler:
         """
         if not self.call_sid:
             logger.warning("Cannot transfer: No Call SID")
-            await self._prompt_agent_to_speak("I'm sorry, I couldn't complete the transfer. Let me take a message instead.")
+            await self._speak_system_message(
+                "I'm sorry, I couldn't complete the transfer. Let me take a message instead.",
+                clip_key="transfer_failed",
+                wait_for_playback=True,
+            )
             return
         
         logger.info(f"📞 Executing transfer to {'*' * (len(transfer_to) - 2)}{transfer_to[-2:]}")
@@ -1861,7 +1824,11 @@ class VoiceAgentHandler:
             
         except Exception as e:
             logger.error(f"Transfer failed: {e}")
-            await self._inject_message("I'm sorry, I couldn't complete the transfer. Let me take a message instead.")
+            await self._speak_system_message(
+                "I'm sorry, I couldn't complete the transfer. Let me take a message instead.",
+                clip_key="transfer_failed",
+                wait_for_playback=True,
+            )
 
     
     # =========================================================================

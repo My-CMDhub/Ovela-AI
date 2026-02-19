@@ -1,4 +1,7 @@
 import logging
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
@@ -10,11 +13,33 @@ from api import twilio, voice, notifications, actions, stripe
 import newrelic.agent
 newrelic.agent.initialize('newrelic.ini')
 
-# Configure logging to show in console
+MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
+LOG_FILE_PATH = Path(__file__).resolve().parent / "logs" / "logs.txt"
+LOG_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+class MelbourneFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        dt = datetime.fromtimestamp(record.created, MELBOURNE_TZ)
+        if datefmt:
+            return dt.strftime(datefmt)
+        return dt.isoformat()
+
+
+# Configure logging to show in console + persist in backend/logs/logs.txt
+log_format = "%(asctime)s %(levelname)s:     %(name)s - %(message)s"
+formatter = MelbourneFormatter(log_format)
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+
+file_handler = logging.FileHandler(LOG_FILE_PATH, mode="a", encoding="utf-8")
+file_handler.setFormatter(formatter)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(levelname)s:     %(name)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    handlers=[stream_handler, file_handler],
+    force=True,
 )
 
 # Create FastAPI app (New Relic auto-instruments ASGI apps)
@@ -26,6 +51,10 @@ from services.scheduled_jobs.scheduler import start_scheduler, shutdown_schedule
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on application startup."""
+    mel_time = datetime.now(MELBOURNE_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
+    logging.info("=" * 72)
+    logging.info(f"🧪 LOG SESSION START | Melbourne time: {mel_time}")
+    logging.info("=" * 72)
     logging.info("🚀 Starting Coal Creek CRM backend...")
     # start_scheduler() # Disabled to eliminate background noise/latency (Saranda legacy)
     logging.info("✅ Application startup complete")
@@ -33,6 +62,10 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup on application shutdown."""
+    mel_time = datetime.now(MELBOURNE_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
+    logging.info("-" * 72)
+    logging.info(f"🛑 LOG SESSION END | Melbourne time: {mel_time}")
+    logging.info("-" * 72)
     logging.info("🛑 Shutting down application...")
     shutdown_scheduler()
     logging.info("✅ Application shutdown complete")

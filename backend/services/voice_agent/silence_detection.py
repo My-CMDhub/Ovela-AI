@@ -59,23 +59,26 @@ class SilenceMonitor:
             self.silence_check_start_time = None  # Reset timing
         # During escalation: keep check_id and start_time intact
     
-    def on_ai_finished_speaking(self, message: str = ""):
+    def on_ai_finished_speaking(self, message: str = "", preserve_escalation: bool = False):
         """
         Called when AI finishes speaking (AgentAudioDone) - starts silence timer.
-        
-        No TTS buffer calculation - we trust the event timing from Deepgram.
-        The state machine handles AI speaking state via ConversationText events.
+
+        Args:
+            preserve_escalation: When True (system audio played during escalation),
+                preserve silence_followup_count so the hard→abandon chain stays valid.
+                Only reset it when a genuine new AI turn begins.
         """
         # Start silence timer immediately - event timing is authoritative
         self.silence_check_start_time = time.time()
-        self.silence_check_id += 1  # New check cycle
+        self.silence_check_id += 1  # New check cycle (always increment for fresh id)
         self.last_ai_message = message
         self.ai_asked_question = self._requires_thinking(message) if message else False
         self.tts_buffer = 0  # No buffer - rely on state machine
-        
-        # Reset followup count for new silence cycle
-        self.silence_followup_count = 0
-        self.silence_followup_sent = False
+
+        # Only reset followup counter for a real new AI turn, not mid-escalation clips
+        if not preserve_escalation:
+            self.silence_followup_count = 0
+            self.silence_followup_sent = False
     
     def _requires_thinking(self, message: str) -> bool:
         """Check if the AI's message requires user to think (longer threshold)."""
