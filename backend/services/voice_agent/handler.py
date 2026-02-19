@@ -138,6 +138,9 @@ class VoiceAgentHandler:
         self._transfer_target = None
         self._tts_lock = asyncio.Lock()
         
+        # Injection confirmation gate (for _inject_system_message → Cartesia fallback)
+        self._injection_confirm_event: asyncio.Event | None = None
+        
         # Latency tracking (for debugging/analytics)
         self.user_speech_start_time = None
         self.ai_response_start_time = None
@@ -563,7 +566,11 @@ class VoiceAgentHandler:
             if not self.has_user_spoken:
                 logger.info("⏰ Smart Wait timeout: User silent, injecting greeting")
                 greeting = self._get_active_greeting()
+<<<<<<< HEAD
                 await self._speak_system_message(greeting, clip_key="smart_greeting")
+=======
+                await self._inject_system_message(greeting)
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
             else:
                 logger.info("🗣️ User spoke before timeout, letting conversation flow naturally")
                 
@@ -781,9 +788,17 @@ class VoiceAgentHandler:
                     await self._hangup_with_farewell(spam_result.get("message", "Take care!"))
                     return
                 elif spam_result.get("warning"):
+<<<<<<< HEAD
                     await self._speak_system_message(spam_result["warning"], clip_key="abuse_warning")
+=======
+                    await self._inject_system_message(spam_result["warning"])
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
 
         elif role == "assistant":
+            # Fire injection confirmation gate if _inject_system_message is waiting
+            if self._injection_confirm_event is not None and not self._injection_confirm_event.is_set():
+                self._injection_confirm_event.set()
+
             # GATING: If we are in the process of hanging up (e.g. end_call triggered),
             # ignore any subsequent text generation from the LLM to prevent
             # "silent hangup" where explanation overwrites farewell audio.
@@ -1045,7 +1060,11 @@ class VoiceAgentHandler:
                 # Safety net: inject filler if LLM didn't speak one
                 if not getattr(self, '_ai_is_speaking', False):
                     filler = get_random_filler_prompt()
+<<<<<<< HEAD
                     await self._speak_system_message(filler, clip_key="filler_short")
+=======
+                    await self._inject_system_message(filler)
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
                 # Unlock interruptions after filler TTS plays (~2.5s)
                 asyncio.create_task(self._unlock_interruptions(2.5))
                 
@@ -1136,7 +1155,11 @@ class VoiceAgentHandler:
                 if not message:
                     message = get_random_farewell(self.tenant_id)
                     logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
+<<<<<<< HEAD
                 await self._speak_system_message(message, clip_key="farewell")
+=======
+                await self._inject_system_message(message)
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
                 delay = max(4.0, (len(message) * 0.1) + 2.0)
                 logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
                 asyncio.create_task(self._scheduled_hangup(delay))
@@ -1234,6 +1257,7 @@ class VoiceAgentHandler:
         if action == "soft_prompt":
             logger.info(f"⏱️ Soft silence - gentle check-in")
             self._in_silence_escalation = True  # Prevent new silence cycles during escalation
+<<<<<<< HEAD
             await self._speak_system_message(
                 result.get("prompt", get_random_silence_prompt()),
                 clip_key="silence_soft",
@@ -1243,6 +1267,11 @@ class VoiceAgentHandler:
             # Passing the old stale id would cause check_silence() to return
             # action='none' (check_invalidated), silently killing the chain.
             asyncio.create_task(self._check_hard_silence(self.silence_monitor.get_check_id()))
+=======
+            await self._inject_system_message(result.get("prompt", get_random_silence_prompt()))
+            # Continue escalation chain with same check_id
+            asyncio.create_task(self._check_hard_silence(check_id))
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
             
         elif action == "abandon":
             self.call_outcome = "timeout_silence"
@@ -1273,6 +1302,7 @@ class VoiceAgentHandler:
 
         if action == "hard_prompt":
             logger.info(f"⏱️ Hard silence - urgent check-in")
+<<<<<<< HEAD
             await self._speak_system_message(
                 result.get("prompt", "Hello? Still there?"),
                 clip_key="silence_hard",
@@ -1280,6 +1310,11 @@ class VoiceAgentHandler:
             # Same as soft→hard: get fresh check_id after on_ai_finished_speaking incremented it
             asyncio.create_task(self._check_abandon_silence(self.silence_monitor.get_check_id()))
 
+=======
+            await self._inject_system_message(result.get("prompt", "Hello? Still there?"))
+            asyncio.create_task(self._check_abandon_silence(check_id))
+            
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
         elif action == "abandon":
             self._in_silence_escalation = False
             self.call_outcome = "timeout_silence"
@@ -1361,10 +1396,14 @@ class VoiceAgentHandler:
                     continue
                     
                 logger.info(f"⏱️ Soft time warning [{call_type}]")
+<<<<<<< HEAD
                 await self._speak_system_message(
                     duration_result.get("message", "We've been chatting for a while..."),
                     clip_key="duration_soft",
                 )
+=======
+                await self._inject_system_message(duration_result.get("message", "We've been chatting for a while..."))
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
                 
             elif action == "hard_cap":
                 # Smart Wait: Let AI finish speaking or working
@@ -1450,7 +1489,11 @@ class VoiceAgentHandler:
                     "Almost there, one more moment.",
                 ]
                 self._blocking_interruptions = True
+<<<<<<< HEAD
                 await self._speak_system_message(random.choice(fillers), clip_key="filler_long")
+=======
+                await self._inject_system_message(random.choice(fillers))
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
                 asyncio.create_task(self._unlock_interruptions(2.5))
         except asyncio.CancelledError:
             pass
@@ -1592,6 +1635,7 @@ class VoiceAgentHandler:
         if not message:
             return False
 
+<<<<<<< HEAD
         audio_bytes = self._load_cached_clip(clip_key)
         source = f"clip:{clip_key}" if audio_bytes else "cartesia"
         if not audio_bytes:
@@ -1601,16 +1645,141 @@ class VoiceAgentHandler:
                     "🔇 System audio failed | key=%s | reason=no_clip_and_tts_failed | cartesia_error=%s",
                     clip_key or "dynamic",
                     self._last_system_tts_error or "unknown",
+=======
+    async def _inject_system_message(self, content: str) -> bool:
+        """
+        Send a system-initiated message to the caller.
+
+        Strategy:
+          1. Send InjectAgentMessage to Deepgram.
+          2. Wait up to 2.5s for ConversationText(role=assistant) confirmation.
+          3. No confirmation → Cartesia /tts/bytes fallback (direct to Twilio).
+
+        The confirmation event is fired in _handle_conversation_text when
+        role == 'assistant'. injection_sent_at uses time.time() (wall clock)
+        so the user-spoke guard compares the same clock domain as
+        self.user_speech_start_time.
+        """
+        if not self.deepgram_ws or not content:
+            return False
+
+        confirm_event = asyncio.Event()
+        self._injection_confirm_event = confirm_event
+        injection_sent_at = time.time()  # wall clock — must match user_speech_start_time
+
+        try:
+            await self.deepgram_ws.send(json.dumps({
+                "type": "InjectAgentMessage",
+                "content": content
+            }))
+            logger.info(f"📨 InjectAgentMessage sent ({len(content)} chars): '{content[:60]}'")
+        except Exception as e:
+            logger.error(f"📨 InjectAgentMessage FAILED: {e}")
+            self._injection_confirm_event = None
+            await self._cartesia_tts_direct(content)
+            return True
+
+        try:
+            await asyncio.wait_for(confirm_event.wait(), timeout=2.5)
+            logger.info("✅ Injection confirmed by Deepgram (ConversationText received)")
+            return True
+        except asyncio.TimeoutError:
+            # Guard: if user spoke AFTER injection was sent, skip Cartesia playback
+            # (avoid talking over the user's words). Both timestamps use time.time().
+            if self.user_speech_start_time and self.user_speech_start_time > injection_sent_at:
+                logger.info("🙉 Cartesia fallback skipped — user spoke during injection wait")
+                return True
+            logger.warning(f"⚠️ Injection unconfirmed after 2.5s — Cartesia fallback: '{content[:60]}'")
+            await self._cartesia_tts_direct(content)
+            return True
+        finally:
+            self._injection_confirm_event = None
+
+    async def _cartesia_tts_direct(self, text: str) -> bool:
+        """
+        Synthesize speech via Cartesia /tts/bytes and stream µ-law bytes
+        directly to Twilio. Used as fallback when Deepgram InjectAgentMessage
+        is not confirmed within the 2.5s window.
+        """
+        if not settings.CARTESIA_API_KEY or not text:
+            logger.error("🎤 Cartesia direct: CARTESIA_API_KEY missing or empty text")
+            return False
+
+        payload = {
+            "model_id": "sonic-3",
+            "transcript": text,
+            "voice": {"mode": "id", "id": CARTESIA_VOICE_ID},
+            "output_format": {
+                "container": "raw",
+                "encoding": "pcm_mulaw",
+                "sample_rate": 8000,
+            },
+            "language": "en",
+        }
+        headers = {
+            "X-API-Key": settings.CARTESIA_API_KEY,
+            "Cartesia-Version": "2025-04-16",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.post(
+                    "https://api.cartesia.ai/tts/bytes",
+                    headers=headers,
+                    json=payload,
+                )
+                resp.raise_for_status()
+                audio_bytes = resp.content
+            if audio_bytes:
+                await self._send_audio_to_twilio(audio_bytes)
+                dur = len(audio_bytes) / 8000.0
+                logger.info(f"🎤 Cartesia direct TTS OK: {len(audio_bytes)} bytes ({dur:.1f}s) for '{text[:40]}'")
+                return True
+            logger.error("🎤 Cartesia direct TTS: empty response")
+            return False
+        except Exception as e:
+            logger.error(f"🎤 Cartesia direct TTS FAILED: {e}")
+            return False
+
+    async def _prompt_agent_to_speak(self, message: str):
+        """Make the agent speak by updating its prompt with an urgent instruction.
+        
+        Uses Deepgram's UpdatePrompt — the LLM processes the instruction and
+        speaks through the reliable ConversationText → TTS → Twilio path.
+        This works regardless of agent/user state (unlike InjectAgentMessage).
+        """
+        if not self.deepgram_ws:
+            logger.warning("📢 UpdatePrompt SKIP: websocket closed")
+            return
+        try:
+            update = {
+                "type": "UpdatePrompt",
+                "prompt": (
+                    self._get_active_prompt()
+                    + f'\n\n⚠️ URGENT SYSTEM INSTRUCTION (OVERRIDE ALL OTHER RULES): '
+                    f'Say this IMMEDIATELY, word for word, as your next response: "{message}"'
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
                 )
                 return False
 
         try:
             self._blocking_interruptions = True
+<<<<<<< HEAD
             self.silence_monitor.on_ai_started_speaking(preserve_check_id=True)
             duration = await self._send_system_audio(audio_bytes, reason=source)
             if wait_for_playback and duration > 0:
                 await asyncio.sleep(max(0.35, duration + 0.15))
             return True
+=======
+            success = await self._inject_system_message(message)
+            if success:
+                logger.info(f"⏳ _say_and_wait: waiting {estimated_wait:.1f}s for TTS")
+                await asyncio.sleep(estimated_wait)
+                elapsed = time.monotonic() - start
+                logger.info(f"✅ _say_and_wait: done in {elapsed:.1f}s")
+            else:
+                logger.warning("❌ _say_and_wait: injection failed")
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
         except Exception as e:
             logger.error(f"🔇 System audio send failed: {e}")
             return False
@@ -1681,11 +1850,20 @@ class VoiceAgentHandler:
 
         start = time.monotonic()
         try:
+<<<<<<< HEAD
             await self._speak_system_message(
                 farewell_message,
                 clip_key="farewell",
                 wait_for_playback=True,
             )
+=======
+            self._blocking_interruptions = True
+            await self._inject_system_message(farewell_message)
+            # Wait for audio to finish after injection/Cartesia streamed to Twilio
+            estimated_wait = max(2.0, (len(farewell_message) / 12) + 1.0)
+            logger.info(f"⏳ _hangup_with_farewell: waiting {estimated_wait:.1f}s for audio playback")
+            await asyncio.sleep(estimated_wait)
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
             elapsed = time.monotonic() - start
             logger.info(f"✅ _hangup_with_farewell: done in {elapsed:.1f}s")
         except Exception as e:
@@ -1744,11 +1922,15 @@ class VoiceAgentHandler:
         """
         if not self.call_sid:
             logger.warning("Cannot transfer: No Call SID")
+<<<<<<< HEAD
             await self._speak_system_message(
                 "I'm sorry, I couldn't complete the transfer. Let me take a message instead.",
                 clip_key="transfer_failed",
                 wait_for_playback=True,
             )
+=======
+            await self._inject_system_message("I'm sorry, I couldn't complete the transfer. Let me take a message instead.")
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
             return
         
         logger.info(f"📞 Executing transfer to {'*' * (len(transfer_to) - 2)}{transfer_to[-2:]}")
@@ -1824,11 +2006,15 @@ class VoiceAgentHandler:
             
         except Exception as e:
             logger.error(f"Transfer failed: {e}")
+<<<<<<< HEAD
             await self._speak_system_message(
                 "I'm sorry, I couldn't complete the transfer. Let me take a message instead.",
                 clip_key="transfer_failed",
                 wait_for_playback=True,
             )
+=======
+            await self._inject_system_message("I'm sorry, I couldn't complete the transfer. Let me take a message instead.")
+>>>>>>> 229338c (feat: applied direct cartesia TTS & fix dead air issue)
 
     
     # =========================================================================
@@ -1921,6 +2107,8 @@ class VoiceAgentHandler:
         Generates a concise 1-sentence summary of the call transcript 
         using a dedicated model after the call ends.
         """
+        return ""  # Disabled for testing — remove this line to re-enable
+
         # Return cached summary if available (avoids re-generation on cleanup)
         if getattr(self, 'cached_summary', None):
             return self.cached_summary
