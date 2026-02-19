@@ -255,7 +255,7 @@ Use this when guest asks about availability or pricing for specific dates.""",
         },
         {
             "name": "transfer_to_staff",
-            "description": "Transfer call to staff immediately when requested.",
+            "description": "Transfer the caller to a staff member or receptionist. Use when the caller says 'put me through', 'speak to someone', 'talk to a human', 'transfer me', 'receptionist', 'staff', or any similar phrase requesting a live person. Do NOT confuse with end_call.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -263,7 +263,7 @@ Use this when guest asks about availability or pricing for specific dates.""",
         },
         {
             "name": "end_call",
-            "description": "End the call gracefully.",
+            "description": "End the call by saying goodbye. ONLY use when the caller explicitly wants to hang up — e.g. 'bye', 'goodbye', 'thanks, that's all', 'no more help needed'. NEVER use this when they want to speak to staff or be transferred.",
             "parameters": {
                 "type": "object",
                 "properties": {
