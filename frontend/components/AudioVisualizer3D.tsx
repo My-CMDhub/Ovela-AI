@@ -118,20 +118,35 @@ const vertexShader = `
         vNormal = normalize(normalMatrix * normal);
         vec3 pos = position;
 
-        // Time: slow when idle, faster when active (sigma-level motion)
-        float t = uTime * mix(0.12, 0.28, uActivity);
+        // Localized spike momentum (surface crawl), independent from mesh rotation
+        float flowTime = uTime * mix(0.25, 0.38, uActivity);
+
+        // Directional flow vectors keep motion on the surface detail itself
+        vec3 flow1 = vec3(0.17, -0.11, 0.08) * flowTime;
+        vec3 flow2 = vec3(-0.09, 0.14, -0.12) * flowTime;
+        vec3 flow3 = vec3(0.13, 0.07, -0.15) * flowTime;
+
+        // Per-vertex phase offset creates crawling/snail-like movement
+        float phase = dot(normalize(position), vec3(0.6, 0.2, 0.75));
+        float phaseWave = sin(flowTime * 1.95 + phase * 4.0) * 0.095;
+
+        // Idle warp keeps visible movement even when input is inactive
+        float idleWarp = (1.0 - uActivity) * sin(uTime * 1.2 + phase * 3.2) * 0.085;
 
         // Audio-driven amplitude with higher frequency sensitivity
         float bassN = uBassFrequency / 255.0;
         float midN  = uMidFrequency / 255.0;
         float trebN = uTrebleFrequency / 255.0;
 
-        // Multi-octave noise with better frequency-responsive spread
+        // Multi-octave noise with frequency-responsive spread (including low/mid widening)
         float baseSpread = 0.8;
-        float freqSpreadBoost = (trebN * 0.4);  // Increased from 0.3 for better spread
-        float n1 = snoise(pos * (baseSpread - freqSpreadBoost) + t);
-        float n2 = snoise(pos * (1.6 - freqSpreadBoost * 0.6) + t * 1.3) * 0.5;  // Increased spread factor
-        float n3 = snoise(pos * (3.6 - freqSpreadBoost * 0.4) + t * 1.7) * 0.25 * uActivity;  // Increased spread
+        float lowMidN = (bassN * 0.55 + midN * 0.45);
+        float freqSpreadBoost = (trebN * 0.34) + (midN * 0.24) + (bassN * 0.18);
+        float lowMidWidthBoost = lowMidN * 0.32;
+
+        float n1 = snoise(pos * (baseSpread - freqSpreadBoost - lowMidWidthBoost * 0.25) + flow1 + vec3(phaseWave + idleWarp));
+        float n2 = snoise(pos * (1.6 - freqSpreadBoost * 0.6 - lowMidWidthBoost * 0.45) + flow2 + vec3(phaseWave * 0.8 + idleWarp * 0.8)) * 0.5;
+        float n3 = snoise(pos * (3.6 - freqSpreadBoost * 0.4) + flow3 + vec3(phaseWave * 0.6 + idleWarp * 0.5)) * 0.25 * (0.28 + 0.72 * uActivity);
         float combined = n1 + n2 + n3;
 
         // Shaping: round hills (idle) -> sharp spikes (active)
@@ -140,22 +155,26 @@ const vertexShader = `
 
         // Higher frequency boost for much better sensitivity
         float highFreqBoost = trebN * trebN * 2.0;  // Increased from 1.5
-        float totalFreqSensitivity = bassN * 0.5 + midN * 0.7 + trebN * 1.0 + highFreqBoost;  // Increased all weights
+        float totalFreqSensitivity = bassN * 0.68 + midN * 0.88 + trebN * 1.0 + highFreqBoost;
 
         // Idle: much smaller and calmer spikes
-        float idleAmp = 0.08 + sin(uTime * 0.4) * 0.02;  // Significantly reduced from 0.32 + 0.12
+        float idleAmp = 0.14 + sin(uTime * 0.68) * 0.045;
 
         // Active: enhanced response with high frequency sensitivity
         float audioAmp = totalFreqSensitivity;
         // Dynamic boost based on frequency content - increased for better active response
-        float sensitivityMultiplier = 2.4 + (trebN * 1.0);  // Increased from 1.8 + 0.7
+        float sensitivityMultiplier = 2.55 + (trebN * 1.05) + (lowMidN * 0.35);
         float boostedAudio = audioAmp * sensitivityMultiplier + uActivity * 0.25;  // Increased activity boost
 
         float amplitude = mix(idleAmp, boostedAudio, uActivity);
 
         // Dynamic max height based on frequency content - much better active response
-        float dynamicMaxH = mix(0.15, 0.95 + (trebN * 0.4), uActivity);  // Increased active max height
+        float dynamicMaxH = mix(0.3, 1.05 + (trebN * 0.55), uActivity);
         float displacement = tanh(shaped * amplitude * (2.2 + trebN * 0.6)) * dynamicMaxH;  // Increased multipliers
+
+        // Hard cap: normal voices stretch clearly, high-frequency content reaches full top extension
+        float hardCap = mix(0.9 + lowMidN * 0.2, 1.42, trebN);
+        displacement = min(displacement, hardCap);
 
         // Allow only tiny inward dimples
         displacement = max(displacement, -0.03);
@@ -232,6 +251,10 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
         smoothedMid: number;
         smoothedHigh: number;
         smoothedActivity: number;
+        noiseFloorAudio: number;
+        noiseFloorBass: number;
+        noiseFloorMid: number;
+        noiseFloorHigh: number;
         runtime: number;
         visualTime: number;
         rotationY: number;
@@ -397,6 +420,10 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             analyser: null, dataArray: null, audioContext: null,
             smoothedAudio: 0, smoothedBass: 0, smoothedMid: 0, smoothedHigh: 0,
             smoothedActivity: 0,
+            noiseFloorAudio: 0,
+            noiseFloorBass: 0,
+            noiseFloorMid: 0,
+            noiseFloorHigh: 0,
             runtime: 0,
             visualTime: 0,
             rotationY: 0,
@@ -441,10 +468,22 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
                 let hs = 0; for (let i = hiStart; i < hiEnd; i++) hs += dataArray[i];
                 rawHigh = clamp01((hs / (hiEnd - hiStart) / 255) * 2.8);
 
-                rawAudio = applyNoiseGate(rawAudio, 0.02);
-                rawBass = applyNoiseGate(rawBass, 0.025);
-                rawMid = applyNoiseGate(rawMid, 0.02);
-                rawHigh = applyNoiseGate(rawHigh, 0.02);
+                // Adaptive noise floor counters prolonged mic auto-gain drift/hyper-sensitivity
+                const floorFollow = 1 - Math.exp(-0.55 * dt);
+                ctx.noiseFloorAudio += (rawAudio - ctx.noiseFloorAudio) * floorFollow;
+                ctx.noiseFloorBass += (rawBass - ctx.noiseFloorBass) * floorFollow;
+                ctx.noiseFloorMid += (rawMid - ctx.noiseFloorMid) * floorFollow;
+                ctx.noiseFloorHigh += (rawHigh - ctx.noiseFloorHigh) * floorFollow;
+
+                const audioFloor = clamp01(ctx.noiseFloorAudio * 0.72 + 0.01);
+                const bassFloor = clamp01(ctx.noiseFloorBass * 0.72 + 0.012);
+                const midFloor = clamp01(ctx.noiseFloorMid * 0.72 + 0.01);
+                const highFloor = clamp01(ctx.noiseFloorHigh * 0.72 + 0.01);
+
+                rawAudio = applyNoiseGate(rawAudio, audioFloor);
+                rawBass = applyNoiseGate(rawBass, bassFloor);
+                rawMid = applyNoiseGate(rawMid, midFloor);
+                rawHigh = applyNoiseGate(rawHigh, highFloor);
             }
 
             const isSampling = Boolean(analyser && dataArray && isActiveRef.current);
@@ -471,12 +510,17 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             const currentTreble = active ? high * 255 : idleBreath * 0.5;
             const currentAvg = active ? audio * 255 : idleBreath;
 
+            const livingBreath = Math.sin(ctx.idleBreathPhase * 1.2) * 0.03 + Math.sin(ctx.idleBreathPhase * 0.65) * 0.014;
+            const breathEnvelope = active ? 0.45 : 1.0;
+            const solidRadiusOffset = livingBreath * breathEnvelope;
+            const wireRadiusOffset = 0.003 + livingBreath * (breathEnvelope * 1.15);
+
             const combinedEnergy = active
                 ? clamp01(audio * 0.45 + bass * 0.2 + mid * 0.25 + high * 0.35)
                 : 0;
-            const activityTarget = active ? clamp01((combinedEnergy - 0.02) * 2.6) : 0;
+            const activityTarget = active ? clamp01((combinedEnergy - 0.02) * 2.8) : 0;
             ctx.smoothedActivity = clamp01(smoothAsymmetric(ctx.smoothedActivity, activityTarget, dt, 16, 7));
-            const activityLevel = ctx.smoothedActivity;
+            const activityLevel = Math.min(ctx.smoothedActivity, 0.95);
 
             solidMaterial.uniforms.uTime.value = ctx.visualTime;
             solidMaterial.uniforms.uBassFrequency.value = currentBass;
@@ -484,6 +528,7 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             solidMaterial.uniforms.uTrebleFrequency.value = currentTreble;
             solidMaterial.uniforms.uAverageFrequency.value = currentAvg;
             solidMaterial.uniforms.uActivity.value = activityLevel;
+            solidMaterial.uniforms.uRadiusOffset.value = solidRadiusOffset;
 
             wireMaterial.uniforms.uTime.value = ctx.visualTime;
             wireMaterial.uniforms.uBassFrequency.value = currentBass;
@@ -491,17 +536,25 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             wireMaterial.uniforms.uTrebleFrequency.value = currentTreble;
             wireMaterial.uniforms.uAverageFrequency.value = currentAvg;
             wireMaterial.uniforms.uActivity.value = activityLevel;
+            wireMaterial.uniforms.uRadiusOffset.value = wireRadiusOffset;
 
-            // Stable frame-rate independent rotation (no elapsed-time drift/accumulation)
-            const constantRotationSpeed = 0.02;
-            const constantOscillationSpeed = 0.018;
-            const constantOscillationAmplitude = 0.025;
+            // Stable frame-rate independent rotation with bounded audio reactivity
+            const baseRotationSpeed = 0.0048;
+            const rotationAudioBoost = 0.0042;
+            const baseOscillationSpeed = 0.014;
+            const oscillationAudioBoost = 0.007;
+            const baseOscillationAmplitude = 0.007;
+            const oscillationAmplitudeBoost = 0.003;
 
-            ctx.rotationY = (ctx.rotationY + constantRotationSpeed * dt) % (Math.PI * 2);
-            ctx.rotationXPhase = (ctx.rotationXPhase + constantOscillationSpeed * dt) % (Math.PI * 2);
+            const dynamicRotationSpeed = baseRotationSpeed + activityLevel * rotationAudioBoost;
+            const dynamicOscillationSpeed = baseOscillationSpeed + activityLevel * oscillationAudioBoost;
+            const dynamicOscillationAmplitude = baseOscillationAmplitude + activityLevel * oscillationAmplitudeBoost;
+
+            ctx.rotationY = (ctx.rotationY + dynamicRotationSpeed * dt) % (Math.PI * 2);
+            ctx.rotationXPhase = (ctx.rotationXPhase + dynamicOscillationSpeed * dt) % (Math.PI * 2);
 
             const ry = ctx.rotationY;
-            const rx = Math.sin(ctx.rotationXPhase) * constantOscillationAmplitude;
+            const rx = Math.sin(ctx.rotationXPhase) * dynamicOscillationAmplitude;
             
             solidSphere.rotation.y = ry;
             solidSphere.rotation.x = rx;
@@ -594,6 +647,10 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
                 sceneRef.current.smoothedMid = 0;
                 sceneRef.current.smoothedHigh = 0;
                 sceneRef.current.smoothedActivity = 0;
+                sceneRef.current.noiseFloorAudio = 0;
+                sceneRef.current.noiseFloorBass = 0;
+                sceneRef.current.noiseFloorMid = 0;
+                sceneRef.current.noiseFloorHigh = 0;
             }
         };
     }, []);
@@ -626,6 +683,10 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
             sceneRef.current.smoothedMid = 0;
             sceneRef.current.smoothedHigh = 0;
             sceneRef.current.smoothedActivity = 0;
+            sceneRef.current.noiseFloorAudio = 0;
+            sceneRef.current.noiseFloorBass = 0;
+            sceneRef.current.noiseFloorMid = 0;
+            sceneRef.current.noiseFloorHigh = 0;
         }
 
         return () => {
@@ -640,6 +701,10 @@ export function AudioVisualizer3D({ audioStream, isActive }: AudioVisualizer3DPr
                 sceneRef.current.smoothedMid = 0;
                 sceneRef.current.smoothedHigh = 0;
                 sceneRef.current.smoothedActivity = 0;
+                sceneRef.current.noiseFloorAudio = 0;
+                sceneRef.current.noiseFloorBass = 0;
+                sceneRef.current.noiseFloorMid = 0;
+                sceneRef.current.noiseFloorHigh = 0;
             }
         };
     }, [audioStream]);

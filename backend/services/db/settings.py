@@ -1,9 +1,14 @@
 import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
 from appwrite.query import Query as AppwriteQuery
+
+# Module-level tenant config cache: {tenant_id: {"config": dict, "ts": float}}
+_tenant_config_cache: dict[str, dict] = {}
+_TENANT_CACHE_TTL = 300  # 5 minutes
 class SettingsMixin:
     """
     Handles Business/Tenant Settings.
@@ -165,7 +170,14 @@ class SettingsMixin:
     async def get_tenant_config(self, tenant_id: str) -> dict:
         """
         Get full tenant configuration for Voice Agent.
+        Uses in-memory cache with 5-minute TTL to avoid DB round-trip per call.
         """
+        # Check cache first
+        cached = _tenant_config_cache.get(tenant_id)
+        if cached and (time.monotonic() - cached["ts"]) < _TENANT_CACHE_TTL:
+            logger.debug(f"Tenant config cache HIT for {tenant_id}")
+            return cached["config"]
+
         try:
             path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
             result = await self._make_request("GET", path)
@@ -199,6 +211,8 @@ class SettingsMixin:
                 config["integrations"]["pms_provider"] = result.get("pms_provider")
                 config["pms_provider"] = result.get("pms_provider")
             
+            # Store in cache
+            _tenant_config_cache[tenant_id] = {"config": config, "ts": time.monotonic()}
             return config
             
         except Exception as e:

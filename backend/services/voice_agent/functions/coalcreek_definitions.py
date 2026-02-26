@@ -19,28 +19,16 @@ def get_coalcreek_functions() -> list:
         # =================================================================
         {
             "name": "check_availability",
-            "description": """Check live room availability for Coal Creek Motel (via website scraping).
+            "description": """Check live room availability for Coal Creek Motel.
 
-SPEAKING RULE: Say ONE of these (vary naturally):
+SPEAKING RULE: Say ONE of these:
   - "One moment , let me check..."
   - "Let me check that for you."
   - "Just a second, I'll look that up."
+CRITICAL: If user asks "what's available?" or "other options" → use room_type='any' to check ALL rooms in ONE call. NEVER call this multiple times for different room types.
 
-CRITICAL EFFICIENCY RULE:
-- If user asks "what's available?" or "other options" → use room_type='any' to check ALL rooms in ONE call
-- NEVER call this function multiple times for different room types
-- Only use a specific room_type if the user explicitly requests that exact room
-
-Multi-Night Logic:
-- Validates EACH night in the date range (not just check-in)
-- A room is only available if free for ALL nights
-- Returns blocked_dates if any nights unavailable
-- This function may take 3-10 seconds for multi-night stays
-
-When you receive the result, respond IMMEDIATELY with the availability info.
-If availability cannot be verified, apologize briefly and transfer to staff.
-
-Use this when guest asks about availability or pricing for specific dates.""",
+Multi-night stays validate EACH night. May take 3-10 seconds.
+If availability cannot be verified, apologize briefly and transfer to staff.""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -63,7 +51,7 @@ Use this when guest asks about availability or pricing for specific dates.""",
         },
         {
             "name": "create_booking_request",
-            "description": "Create a provisional SOFT HOLD booking request. AI CANNOT CONFIRM booking instantly. Use this to place a hold and send to staff for approval. Tell guest: 'I've placed a temporary hold...'",
+            "description": "Create a provisional soft hold booking request. Tell guest: 'I've placed a temporary hold — staff will send confirmation shortly.'",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -110,7 +98,7 @@ Use this when guest asks about availability or pricing for specific dates.""",
         # =================================================================
         {
             "name": "get_room_pricing",
-            "description": "Get ONLY the price for a specific room type. Use when guest specifically asks for rates.",
+            "description": "Get price for a specific room type.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -230,7 +218,7 @@ Use this when guest asks about availability or pricing for specific dates.""",
         },
         {
             "name": "request_human_callback",
-            "description": "Request staff callback for complex issues, complaints, or group bookings.",
+            "description": "Request staff callback for complex issues or group bookings.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -255,7 +243,7 @@ Use this when guest asks about availability or pricing for specific dates.""",
         },
         {
             "name": "wait_on_request",
-            "description": "Use when caller asks you to wait (e.g. 'wait a sec', 'hold on', 'give me a minute while I find details'). Starts caller-wait mode. First wait should be around 90 seconds. If caller asks to wait again while already waiting, call this again to reset to around 60 seconds.",
+            "description": "Caller asked to wait/hold. Starts passive wait mode. First wait ~90s, repeat wait ~60s.",
             "parameters": {
                 "type": "object",
                 "properties": {
