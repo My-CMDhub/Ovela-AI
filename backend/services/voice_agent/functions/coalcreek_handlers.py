@@ -14,6 +14,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import asyncio
+import re
+from zoneinfo import ZoneInfo
 
 # Import knowledge base services
 from services.motel_knowledge_base import (
@@ -25,6 +27,98 @@ from services.motel_knowledge_base import (
 from services.knowledge_base.coalcreek import COALCREEK_DATA
 
 logger = logging.getLogger(__name__)
+
+MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
+WEEKDAY_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+
+def _today_melbourne_date():
+    return datetime.now(MELBOURNE_TZ).date()
+
+
+def _parse_iso_date(value: str):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value.strip(), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _next_weekday(base_date, target_weekday: int, include_today: bool = False):
+    delta_days = (target_weekday - base_date.weekday()) % 7
+    if delta_days == 0 and not include_today:
+        delta_days = 7
+    return base_date + timedelta(days=delta_days)
+
+
+def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utterance: str):
+    """
+    Resolve indirect date expressions deterministically.
+
+    Supported patterns:
+    - upcoming / next / this weekend
+    - upcoming / next / this <weekday>
+    - after N days / in N days
+    - today / tomorrow / day after tomorrow
+    - ISO dates (YYYY-MM-DD)
+    """
+    today = _today_melbourne_date()
+    text = f"{check_in_raw or ''} {check_out_raw or ''} {user_utterance or ''}".lower().strip()
+
+    resolved_check_in = _parse_iso_date(check_in_raw)
+    resolved_check_out = _parse_iso_date(check_out_raw)
+
+    # Weekend phrases: next Friday check-in, Sunday check-out
+    if re.search(r"\b(upcoming|next|this)\s+weekend\b", text) or re.search(r"\bupcoming\s+weekand\b", text):
+        friday = _next_weekday(today, 4, include_today=False)
+        sunday = friday + timedelta(days=2)
+        return friday, sunday, "weekend_phrase"
+
+    # upcoming/next/this weekday
+    weekday_match = re.search(r"\b(upcoming|next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", text)
+    if weekday_match:
+        qualifier = weekday_match.group(1)
+        weekday_word = weekday_match.group(2)
+        target = WEEKDAY_INDEX[weekday_word]
+        include_today = qualifier == "this"
+        target_date = _next_weekday(today, target, include_today=include_today)
+        if qualifier in {"upcoming", "next"} and target_date <= today:
+            target_date = target_date + timedelta(days=7)
+        return target_date, target_date + timedelta(days=1), "weekday_phrase"
+
+    # after/in N days
+    days_match = re.search(r"\b(?:after|in)\s+(\d{1,3})\s+days?\b", text)
+    if days_match:
+        day_count = int(days_match.group(1))
+        target_date = today + timedelta(days=day_count)
+        return target_date, target_date + timedelta(days=1), "relative_days"
+
+    if re.search(r"\bday\s+after\s+tomorrow\b", text):
+        target_date = today + timedelta(days=2)
+        return target_date, target_date + timedelta(days=1), "day_after_tomorrow"
+
+    if re.search(r"\btomorrow\b", text):
+        target_date = today + timedelta(days=1)
+        return target_date, target_date + timedelta(days=1), "tomorrow"
+
+    if re.search(r"\btoday\b", text):
+        return today, today + timedelta(days=1), "today"
+
+    if resolved_check_in:
+        if not resolved_check_out or resolved_check_out <= resolved_check_in:
+            resolved_check_out = resolved_check_in + timedelta(days=1)
+        return resolved_check_in, resolved_check_out, "iso"
+
+    return None, None, "unresolved"
 
 
 # =============================================================================
@@ -47,48 +141,44 @@ async def handle_check_availability(args: dict, db_service) -> dict:
     
     check_in = args.get("check_in_date", "")
     check_out = args.get("check_out_date", "")
+    user_utterance = args.get("_user_utterance", "")
     room_type_arg = args.get("room_type", "any")
     
-    if not check_in:
+    if not check_in and not user_utterance:
         return {
             "available": False, 
             "verified": False, 
             "message": "Please provide check-in date",
             "ai_should_say": "What date were you looking to check in?"
         }
-    
-    # 1. Basic Date Validation
-    try:
-        check_in_dt = datetime.strptime(check_in, "%Y-%m-%d")
-        if check_in_dt.date() < datetime.now().date():
-            return {
-                "available": False,
-                "verified": True,
-                "message": "Date in the past",
-                "ai_should_say": "That date has already passed. What dates were you looking at?"
-            }
-    except ValueError:
+
+    # 1. Deterministic date resolution (relative phrases + strict calendar validity)
+    check_in_date, check_out_date, resolution_source = _resolve_relative_dates(check_in, check_out, user_utterance)
+
+    if not check_in_date:
         return {
             "available": False,
             "verified": False,
-            "message": "Invalid date format",
+            "message": "Invalid or unresolved date",
             "ai_should_say": "I didn't catch the date properly. Could you repeat that in month-day format?"
         }
-    
-    # Set checkout if not provided (1 night)
-    if not check_out:
-        check_out = (check_in_dt + timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    # Calculate nights
-    try:
-        check_out_dt = datetime.strptime(check_out, "%Y-%m-%d")
-        nights = (check_out_dt - check_in_dt).days
-        if nights < 1:
-            nights = 1
-            check_out = (check_in_dt + timedelta(days=1)).strftime("%Y-%m-%d")
-    except:
-        nights = 1
-        check_out = (check_in_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    if check_in_date < _today_melbourne_date():
+        return {
+            "available": False,
+            "verified": True,
+            "message": "Date in the past",
+            "ai_should_say": "That date has already passed. What dates were you looking at?"
+        }
+
+    if not check_out_date or check_out_date <= check_in_date:
+        check_out_date = check_in_date + timedelta(days=1)
+
+    check_in = check_in_date.strftime("%Y-%m-%d")
+    check_out = check_out_date.strftime("%Y-%m-%d")
+    nights = (check_out_date - check_in_date).days
+
+    logger.info(f"📅 Date resolved: source={resolution_source}, check_in={check_in}, check_out={check_out}")
     
     # 2. Map room type to scraper format
     room_map = {
@@ -254,6 +344,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     guest_name = args.get("guest_name", "")
     check_in = args.get("check_in_date", "")
     check_out = args.get("check_out_date", "")
+    user_utterance = args.get("_user_utterance", "")
     room_type = args.get("room_type", "queen")
     num_guests = args.get("num_guests", 1)
     guest_email = args.get("guest_email", "")
@@ -261,29 +352,27 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     
     guest_phone = args.get("guest_phone", "") or user_phone
     
-    if not guest_name or not check_in:
+    if not guest_name:
         return {
             "success": False,
             "message": "I need your name and check-in date to place the hold."
         }
-    
-    # Calculate nights
-    if not check_out:
-        try:
-            check_in_dt = datetime.strptime(check_in, "%Y-%m-%d")
-            check_out = (check_in_dt + timedelta(days=1)).strftime("%Y-%m-%d")
-            num_nights = 1
-        except:
-            check_out = check_in
-            num_nights = 1
-    else:
-        try:
-            check_in_dt = datetime.strptime(check_in, "%Y-%m-%d")
-            check_out_dt = datetime.strptime(check_out, "%Y-%m-%d")
-            num_nights = (check_out_dt - check_in_dt).days
-            if num_nights < 1: num_nights = 1
-        except:
-            num_nights = 1
+
+    check_in_date, check_out_date, resolution_source = _resolve_relative_dates(check_in, check_out, user_utterance)
+    if not check_in_date:
+        return {
+            "success": False,
+            "message": "I need a valid check-in date to place the hold."
+        }
+
+    if not check_out_date or check_out_date <= check_in_date:
+        check_out_date = check_in_date + timedelta(days=1)
+
+    check_in = check_in_date.strftime("%Y-%m-%d")
+    check_out = check_out_date.strftime("%Y-%m-%d")
+    num_nights = max(1, (check_out_date - check_in_date).days)
+
+    logger.info(f"📅 Booking date resolved: source={resolution_source}, check_in={check_in}, check_out={check_out}")
             
     # Get pricing (Approximate for hold)
     rooms_data = COALCREEK_DATA["rooms"]

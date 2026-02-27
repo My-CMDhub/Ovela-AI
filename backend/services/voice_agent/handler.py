@@ -983,6 +983,17 @@ class VoiceAgentHandler:
         except json.JSONDecodeError as e:
             logger.error(f"❌ Failed to parse function arguments: {e}")
             function_args = {}
+
+        # Attach last user utterance for deterministic date resolution in tools
+        # (e.g., "upcoming weekend", "after 5 days") without prompt bloat.
+        try:
+            if isinstance(function_args, dict) and "_user_utterance" not in function_args:
+                for entry in reversed(self.transcript):
+                    if entry.get("role") == "user":
+                        function_args["_user_utterance"] = entry.get("text", "")
+                        break
+        except Exception:
+            pass
         
         if not function_name or not call_id:
             logger.error(f"❌ FunctionCallRequest missing name or id. Event: {event}")

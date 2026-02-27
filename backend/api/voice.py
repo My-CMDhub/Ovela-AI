@@ -328,11 +328,22 @@ async def _enable_recording(call_sid: str):
         import asyncio
         loop = asyncio.get_running_loop()
         # Run synchronous Twilio client in thread to avoid blocking loop
-        await loop.run_in_executor(None, lambda: twilio_client.calls(call_sid).update(record=True))
-        logger.info(f"⏺️ Recording enabled for call {call_sid}")
+        # Prefer explicit recording creation for reliability on live calls.
+        await loop.run_in_executor(
+            None,
+            lambda: twilio_client.calls(call_sid).recordings.create(recording_channels="mono")
+        )
+        logger.info(f"⏺️ Recording started for call {call_sid}")
     except Exception as e:
-        # It's possible the call ended before we could enable recording
-        logger.warning(f"Failed to enable recording for {call_sid}: {e}")
+        # Fallback for account/edge cases where recordings.create may be rejected.
+        try:
+            import asyncio
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lambda: twilio_client.calls(call_sid).update(record=True))
+            logger.info(f"⏺️ Recording enabled via fallback for call {call_sid}")
+        except Exception as fallback_error:
+            # It's possible the call ended before we could enable recording.
+            logger.warning(f"Failed to enable recording for {call_sid}: {e}; fallback error: {fallback_error}")
 
 @router.post("/twiml")
 async def get_twiml(request: Request, background_tasks: BackgroundTasks):
@@ -341,6 +352,7 @@ async def get_twiml(request: Request, background_tasks: BackgroundTasks):
     The stream bridges to Deepgram Voice Agent API for STT/LLM/TTS with native VAD.
     """
     params = request.query_params
+    form_data = await request.form()
     user_name = params.get("name", "there")
     business_name = params.get("business", "your business")
     user_phone = params.get("phone", "unknown")
@@ -349,8 +361,8 @@ async def get_twiml(request: Request, background_tasks: BackgroundTasks):
     demo_type = params.get("demo_type", "")
     is_demo = params.get("is_demo", "false")
     
-    answered_by = params.get("AnsweredBy", "")
-    call_sid = params.get("CallSid")
+    answered_by = params.get("AnsweredBy", "") or form_data.get("AnsweredBy", "")
+    call_sid = params.get("CallSid") or form_data.get("CallSid")
     
     # FORCE RECORDING: Ensure all calls (inbound & outbound) are recorded
     if call_sid:
