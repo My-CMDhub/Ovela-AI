@@ -44,6 +44,59 @@ def _today_melbourne_date():
     return datetime.now(MELBOURNE_TZ).date()
 
 
+# Common STT mishearings for email domains
+_EMAIL_DOMAIN_FIXES = [
+    (r'g[\s\-]?mail', 'gmail'),
+    (r'hot[\s\-]?mail', 'hotmail'),
+    (r'ya[\s\-]?hoo', 'yahoo'),
+    (r'out[\s\-]?look', 'outlook'),
+    (r'i[\s\-]?cloud', 'icloud'),
+    (r'google[\s\-]?mail', 'gmail'),
+    (r'live[\s\-]?com', 'live.com'),
+    (r'proton[\s\-]?mail', 'protonmail'),
+]
+
+def _normalize_email(raw: str) -> str:
+    """Normalize STT-garbled email addresses.
+
+    Handles patterns like:
+      - 'james at g mail dot com' → 'james@gmail.com'
+      - 'james.lewis at hotmail dot com' → 'james.lewis@hotmail.com'
+      - 'JamesLuis @ gmail . com' → 'jamesluis@gmail.com'
+    Pure regex/string — zero network cost.
+    """
+    if not raw:
+        return raw
+
+    text = raw.strip().lower()
+
+    # Replace spoken separators
+    text = re.sub(r'\bat\s+sign\b', '@', text)
+    text = re.sub(r'\bat\b', '@', text)
+    text = re.sub(r'\bdot\b', '.', text)
+    text = re.sub(r'\bperiod\b', '.', text)
+    text = re.sub(r'\bdash\b', '-', text)
+    text = re.sub(r'\bunderscore\b', '_', text)
+    text = re.sub(r'\bhyphen\b', '-', text)
+
+    # Fix domain mishearings (before space removal so patterns match)
+    for pattern, replacement in _EMAIL_DOMAIN_FIXES:
+        text = re.sub(pattern, replacement, text)
+
+    # Strip spaces around the @ and dots (e.g. 'james @ gmail . com')
+    text = re.sub(r'\s*@\s*', '@', text)
+    text = re.sub(r'\s*\.\s*', '.', text)
+
+    # Remove any remaining internal spaces
+    if '@' in text:
+        local, _, domain = text.partition('@')
+        text = local.replace(' ', '') + '@' + domain.replace(' ', '')
+    else:
+        text = text.replace(' ', '')
+
+    return text
+
+
 def _parse_iso_date(value: str):
     if not value:
         return None
@@ -347,11 +400,11 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     user_utterance = args.get("_user_utterance", "")
     room_type = args.get("room_type", "queen")
     num_guests = args.get("num_guests", 1)
-    guest_email = args.get("guest_email", "")
+    guest_email = _normalize_email(args.get("guest_email", ""))
     notes = args.get("notes", "")
-    
+
     guest_phone = args.get("guest_phone", "") or user_phone
-    
+
     if not guest_name:
         return {
             "success": False,

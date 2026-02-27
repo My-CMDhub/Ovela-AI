@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 import json
 import logging
+import asyncio
 from urllib.parse import quote
 from twilio.twiml.voice_response import VoiceResponse, Connect
 from twilio.rest import Client
@@ -323,27 +324,17 @@ def _trigger_demo_call(name: str, business_name: str, phone: str, tenant_id: str
 
 
 async def _enable_recording(call_sid: str):
-    """Enable recording for an active call via Twilio API."""
+    """Enable recording for an active call via Twilio API (demo calls)."""
+    await asyncio.sleep(0.8)  # Let call connect before issuing recording
     try:
-        import asyncio
         loop = asyncio.get_running_loop()
-        # Run synchronous Twilio client in thread to avoid blocking loop
-        # Prefer explicit recording creation for reliability on live calls.
         await loop.run_in_executor(
             None,
             lambda: twilio_client.calls(call_sid).recordings.create(recording_channels="mono")
         )
         logger.info(f"⏺️ Recording started for call {call_sid}")
     except Exception as e:
-        # Fallback for account/edge cases where recordings.create may be rejected.
-        try:
-            import asyncio
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, lambda: twilio_client.calls(call_sid).update(record=True))
-            logger.info(f"⏺️ Recording enabled via fallback for call {call_sid}")
-        except Exception as fallback_error:
-            # It's possible the call ended before we could enable recording.
-            logger.warning(f"Failed to enable recording for {call_sid}: {e}; fallback error: {fallback_error}")
+        logger.warning(f"Failed to start recording for {call_sid}: {e}")
 
 @router.post("/twiml")
 async def get_twiml(request: Request, background_tasks: BackgroundTasks):

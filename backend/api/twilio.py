@@ -87,28 +87,32 @@ async def handle_voice_webhook(
 
 
 async def _enable_recording(call_sid: str):
-    """Enable recording for active Twilio call with short retries."""
+    """Enable recording for active Twilio call.
+    
+    Single attempt after a brief delay to let the call connect,
+    with one fallback path. Runs as a background task so it never
+    blocks the TwiML response or event loop.
+    """
     recording_status_callback = f"{settings.BACKEND_URL}/twilio/recording-status"
-    last_error = None
 
-    # Call can still be ringing when webhook fires; retry briefly.
-    for delay in (0.0, 0.6, 1.2, 2.0):
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: twilio_client.calls(call_sid).recordings.create(
-                    recording_channels="dual",
-                    recording_status_callback=recording_status_callback,
-                    recording_status_callback_method="POST",
-                )
+    # Brief delay — gives Twilio time to fully connect the call
+    # before we issue the recording API request.
+    await asyncio.sleep(0.8)
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: twilio_client.calls(call_sid).recordings.create(
+                recording_channels="dual",
+                recording_status_callback=recording_status_callback,
+                recording_status_callback_method="POST",
             )
-            logger.info(f"⏺️ Recording started for call {call_sid}")
-            return
-        except Exception as e:
-            last_error = e
+        )
+        logger.info(f"⏺️ Recording started for call {call_sid}")
+        return
+    except Exception as e:
+        logger.debug(f"Recording create attempt failed for {call_sid}: {e}")
 
     # Fallback path for accounts/edges that reject recordings.create.
     try:
@@ -124,9 +128,7 @@ async def _enable_recording(call_sid: str):
         )
         logger.info(f"⏺️ Recording enabled via fallback for call {call_sid}")
     except Exception as fallback_error:
-        logger.warning(
-            f"Failed to start recording for {call_sid}: {last_error}; fallback error: {fallback_error}"
-        )
+        logger.warning(f"Failed to start recording for {call_sid}: {fallback_error}")
 
 
 @router.post("/recording-status")
