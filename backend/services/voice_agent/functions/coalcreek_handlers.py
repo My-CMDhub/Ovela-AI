@@ -77,11 +77,11 @@ def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utteranc
     resolved_check_in = _parse_iso_date(check_in_raw)
     resolved_check_out = _parse_iso_date(check_out_raw)
 
-    # Weekend phrases: next Friday check-in, Sunday check-out
+    # Weekend phrases: Saturday check-in, Sunday check-out (AU motel convention)
     if re.search(r"\b(upcoming|next|this)\s+weekend\b", text) or re.search(r"\bupcoming\s+weekand\b", text):
-        friday = _next_weekday(today, 4, include_today=False)
-        sunday = friday + timedelta(days=2)
-        return friday, sunday, "weekend_phrase"
+        saturday = _next_weekday(today, 5, include_today=False)
+        sunday = saturday + timedelta(days=1)
+        return saturday, sunday, "weekend_phrase"
 
     # upcoming/next/this weekday
     weekday_match = re.search(r"\b(upcoming|next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", text)
