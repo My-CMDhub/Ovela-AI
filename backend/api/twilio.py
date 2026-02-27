@@ -1,16 +1,20 @@
 """
 Twilio Webhooks for Voice Calls
 """
-from fastapi import APIRouter, Request, Form
+from fastapi import APIRouter, Request, Form, BackgroundTasks
 from fastapi.responses import Response
 from core.config import settings
 from services.appwrite import db_service
 from services.email import email_service
 from datetime import datetime
 import logging
+import asyncio
+from twilio.rest import Client
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
 
 
 # Default business ID for now (single tenant)
@@ -26,6 +30,7 @@ def mask_phone(phone: str) -> str:
 @router.post("/voice")
 async def handle_voice_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     CallSid: str = Form(...),
     From: str = Form(...),
     To: str = Form(default=None),
@@ -42,6 +47,9 @@ async def handle_voice_webhook(
     logger.info(f"📞 Voice webhook from {mask_phone(From)} to {mask_phone(To)} (tenant_id={tenant_id}), CallSid: {CallSid}")
 
     
+    # Start recording as early as possible for every live call.
+    background_tasks.add_task(_enable_recording, CallSid)
+
     # Resolve tenant_id
     # 1. Check Query Param explicitly from request (override)
     tenant_id = request.query_params.get("tenant_id")
@@ -76,6 +84,69 @@ async def handle_voice_webhook(
 </Response>"""
     
     return Response(content=twiml, media_type="application/xml")
+
+
+async def _enable_recording(call_sid: str):
+    """Enable recording for active Twilio call with short retries."""
+    recording_status_callback = f"{settings.BACKEND_URL}/twilio/recording-status"
+    last_error = None
+
+    # Call can still be ringing when webhook fires; retry briefly.
+    for delay in (0.0, 0.6, 1.2, 2.0):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: twilio_client.calls(call_sid).recordings.create(
+                    recording_channels="dual",
+                    recording_status_callback=recording_status_callback,
+                    recording_status_callback_method="POST",
+                )
+            )
+            logger.info(f"⏺️ Recording started for call {call_sid}")
+            return
+        except Exception as e:
+            last_error = e
+
+    # Fallback path for accounts/edges that reject recordings.create.
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: twilio_client.calls(call_sid).update(
+                record=True,
+                recording_channels="dual",
+                recording_status_callback=recording_status_callback,
+                recording_status_callback_method="POST",
+            ),
+        )
+        logger.info(f"⏺️ Recording enabled via fallback for call {call_sid}")
+    except Exception as fallback_error:
+        logger.warning(
+            f"Failed to start recording for {call_sid}: {last_error}; fallback error: {fallback_error}"
+        )
+
+
+@router.post("/recording-status")
+async def handle_recording_status(
+    RecordingSid: str = Form(...),
+    CallSid: str = Form(...),
+    RecordingStatus: str = Form(default="unknown"),
+    RecordingUrl: str = Form(default=""),
+    RecordingDuration: str = Form(default="0"),
+):
+    """Twilio recording lifecycle callback for verification/debug."""
+    logger.info(
+        "🎙️ Recording callback: call=%s recording=%s status=%s duration=%ss url=%s",
+        CallSid,
+        RecordingSid,
+        RecordingStatus,
+        RecordingDuration,
+        RecordingUrl,
+    )
+    return {"status": "ok"}
 
 
 @router.post("/incoming-call")
