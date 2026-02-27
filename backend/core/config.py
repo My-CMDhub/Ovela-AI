@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # SMTP
     SMTP_HOST: str = "smtppro.zoho.com.au"
     SMTP_PORT: int = 465
-    SMTP_USER: str = "hello@ovela.dev"
+    SMTP_USER: str = "bookings@ovela.dev"
     SMTP_PASSWORD: str
     MAIL_FROM: str = "Ovela <hello@ovela.dev>"
     

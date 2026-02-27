@@ -386,7 +386,7 @@ class EmailService:
 </body>
 </html>'''
         
-        sender = settings.MAIL_NOTIFICATIONS
+        sender = settings.MAIL_BOOKINGS
         return await self.send_email(owner_email, subject, html, from_email=sender)
 
 
@@ -513,7 +513,7 @@ class EmailService:
 </body>
 </html>'''
         
-        sender = settings.MAIL_NOTIFICATIONS
+        sender = settings.MAIL_BOOKINGS
         return await self.send_email(owner_email, subject, html, from_email=sender)
 
 
