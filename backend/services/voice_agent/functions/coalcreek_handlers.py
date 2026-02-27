@@ -54,15 +54,24 @@ _EMAIL_DOMAIN_FIXES = [
     (r'google[\s\-]?mail', 'gmail'),
     (r'live[\s\-]?com', 'live.com'),
     (r'proton[\s\-]?mail', 'protonmail'),
+    (r'big[\s\-]?pond', 'bigpond'),
+    (r'i[\s\-]?inet', 'iinet'),
 ]
 
-def _normalize_email(raw: str) -> str:
+# Known domain names used to strip STT garbage prefix (e.g. "therategmail" → "gmail")
+_KNOWN_DOMAIN_NAMES = [
+    'gmail', 'hotmail', 'yahoo', 'outlook', 'icloud', 'protonmail',
+    'live', 'bigpond', 'iinet', 'me', 'mac',
+]
+
+
+def _normalize_email(raw: str, guest_name: str = "") -> str:
     """Normalize STT-garbled email addresses.
 
     Handles patterns like:
-      - 'james at g mail dot com' → 'james@gmail.com'
-      - 'james.lewis at hotmail dot com' → 'james.lewis@hotmail.com'
-      - 'JamesLuis @ gmail . com' → 'jamesluis@gmail.com'
+      - 'james at g mail dot com'       → 'james@gmail.com'
+      - 'my name at gmail dot com'      → 'jameslewis@gmail.com'  (if guest_name given)
+      - 'JamesLewis at therategmail.com'→ 'jameslewis@gmail.com'  (garbage prefix stripped)
     Pure regex/string — zero network cost.
     """
     if not raw:
@@ -90,7 +99,23 @@ def _normalize_email(raw: str) -> str:
     # Remove any remaining internal spaces
     if '@' in text:
         local, _, domain = text.partition('@')
-        text = local.replace(' ', '') + '@' + domain.replace(' ', '')
+        local = local.replace(' ', '')
+        domain = domain.replace(' ', '')
+
+        # Resolve "my name" / "myname" in local part to the actual confirmed guest name
+        _MY_NAME_VARIANTS = {'myname', 'myfullname', 'myname', 'firstname', 'lastname'}
+        if guest_name and local in _MY_NAME_VARIANTS:
+            local = re.sub(r'\s+', '', guest_name.lower())
+
+        # Strip STT-inserted garbage prefix before a known domain
+        # e.g. "therategmail.com" → "gmail.com", "therating.yahoo.com" → "yahoo.com"
+        for known in _KNOWN_DOMAIN_NAMES:
+            m = re.match(rf'^.+?({re.escape(known)}\..+)$', domain)
+            if m:
+                domain = m.group(1)
+                break
+
+        text = local + '@' + domain
     else:
         text = text.replace(' ', '')
 
@@ -400,7 +425,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     user_utterance = args.get("_user_utterance", "")
     room_type = args.get("room_type", "queen")
     num_guests = args.get("num_guests", 1)
-    guest_email = _normalize_email(args.get("guest_email", ""))
+    guest_email = _normalize_email(args.get("guest_email", ""), guest_name)
     notes = args.get("notes", "")
 
     guest_phone = args.get("guest_phone", "") or user_phone
@@ -466,7 +491,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     try:
         # Save to DB (if saving function provided)
         if save_reservation_fn:
-            save_reservation_fn(reservation_data)
+            await save_reservation_fn(reservation_data)
         
         # Trigger staff notification
         try:

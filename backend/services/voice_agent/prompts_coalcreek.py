@@ -36,6 +36,8 @@ def get_coalcreek_prompt(current_date: str, current_time: str) -> str:
    - **EMAIL STT FIX (ONE TRIAL ONLY):** Voice-to-text frequently garbles email addresses. Apply these rules the moment you hear an email:
      • "at" / "at sign" → @  |  "dot" / "period" → .  |  remove spaces  |  lowercase everything
      • "g mail" / "g-mail" / "google mail" = gmail  |  "hot mail" = hotmail  |  "ya hoo" = yahoo  |  "out look" = outlook  |  "i cloud" = icloud
+     • **NAME SUBSTITUTION:** If guest says "my name at gmail.com" or "my name@gmail" and you already know their name → use their confirmed name. E.g. name=James Lewis → jameslewis@gmail.com. NEVER confirm "myname@gmail.com" — that is always wrong.
+     • **GARBAGE PREFIX:** If the domain looks garbled (e.g. "therategmail.com", "theratyahoo.com") — strip the junk and use just "gmail.com" or "yahoo.com". Trust the domain suffix, not extra words STT inserts before it.
      • Reconstruct the normalized address silently, then confirm ONCE: "Got it — that's james@gmail.com, right?"
      • If user says YES (or any affirmative) → accept it immediately, do NOT ask again.
      • Only re-ask if the user explicitly corrects you.
