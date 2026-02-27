@@ -127,35 +127,36 @@ class TranscriptsMixin:
             collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
             doc_id = ID.unique()
             now = datetime.now(MELBOURNE_TZ).isoformat()
-            
-            # STANDARDIZED SCHEMA (Consistent across all tenants)
-            # STANDARDIZED SCHEMA (Consistent across all tenants)
-            data = {
-                "call_sid": call_sid,
-                "caller_phone": caller_phone or "",
-                "duration_seconds": duration or 0,
-                "outcome": status or "completed",
-                "pms_reference": booking_ref or "",
-                "call_summary": call_summary or "",
-                "customer_name": customer_name or "Not provided",
-                "metadata_json": json.dumps(metadata) if metadata else "{}",
-                "created_at": now
-            }
-            
-            # Add transcript specifically based on tenant schema support
-            # For Coal Creek, we use the old 'transcript' field, not 'transcript_json'
-            if tenant_id == "coalcreek":
-                data["transcript"] = transcript[:10000] if transcript else ""
-            else:
-                data["transcript_json"] = transcript
 
-            # BACKWARD COMPATIBILITY for Coal Creek (until pms_reference is added to Appwrite)
             if tenant_id == "coalcreek":
-                data["transcript"] = transcript[:10000] if transcript else ""
-                data["duration"] = duration or 0
-                data["booking_ref"] = booking_ref or ""
-                data["status"] = status or ""
-            
+                # Matches the actual Appwrite schema for call_transcripts_coalcreek
+                data = {
+                    "call_sid": call_sid or "",
+                    "caller_phone": caller_phone or "",
+                    "duration": duration or 0,
+                    "outcome": status or "completed",
+                    "status": status or "completed",
+                    "booking_ref": booking_ref or "",
+                    "call_summary": call_summary or "",
+                    "customer_name": customer_name or "Not provided",
+                    "transcript": (transcript[:10000] if transcript else ""),
+                    "metadata_json": json.dumps(metadata) if metadata else "{}",
+                    "created_at": now,
+                }
+            else:
+                data = {
+                    "call_sid": call_sid,
+                    "caller_phone": caller_phone or "",
+                    "duration_seconds": duration or 0,
+                    "outcome": status or "completed",
+                    "pms_reference": booking_ref or "",
+                    "call_summary": call_summary or "",
+                    "customer_name": customer_name or "Not provided",
+                    "transcript_json": transcript,
+                    "metadata_json": json.dumps(metadata) if metadata else "{}",
+                    "created_at": now,
+                }
+
             result = await self._make_request(
                 "POST",
                 f"/databases/{self.motel_db_id}/collections/{collection_id}/documents",

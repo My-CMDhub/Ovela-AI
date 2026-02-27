@@ -724,7 +724,7 @@ class EmailService:
 </body>
 </html>'''
         
-        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
+        sender = settings.MAIL_BOOKINGS
         success = await self.send_email(guest_email, subject, html, from_email=sender)
         
         if success:
@@ -978,7 +978,7 @@ class EmailService:
             action_buttons_html=action_buttons_html
         )
         
-        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
+        sender = settings.MAIL_BOOKINGS
         return await self.send_email(staff_email, subject, html, from_email=sender)
 
     async def send_coalcreek_guest_confirmation(
@@ -1026,7 +1026,7 @@ class EmailService:
             button_url="tel:0492897718"
         )
         
-        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
+        sender = settings.MAIL_BOOKINGS
         success = await self.send_email(guest_email, subject, html, from_email=sender)
         
         if success:
@@ -1088,7 +1088,7 @@ class EmailService:
             action_buttons_html=action_html
         )
         
-        sender = f"Coal Creek Motel <{settings.MAIL_NOTIFICATIONS.split('<')[-1][:-1]}>"
+        sender = settings.MAIL_BOOKINGS
         success = await self.send_email(staff_email, subject, html, from_email=sender)
         
         if success:

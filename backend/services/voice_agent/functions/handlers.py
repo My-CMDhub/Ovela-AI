@@ -208,7 +208,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         "rate_per_night": rate,
         "total_amount": total,
         "deposit_paid": 0,
-        "status": "pending_confirmation", # Explicit Soft Hold status
+        "status": "pending", # Explicit Soft Hold status
         "source": "voice_ai_soft_hold",
         "booking_reference": booking_ref,
         "notes": notes or "Soft Hold Request via AI",
