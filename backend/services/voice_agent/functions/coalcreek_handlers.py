@@ -532,6 +532,74 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
 
 
 # =============================================================================
+# LOOKUP BOOKING HANDLER
+# =============================================================================
+
+async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict:
+    """
+    Look up an existing reservation in motel_reservations.
+    Tries reference → phone → guest name, returns the most recent match.
+    """
+    from services.voice_agent.text_utils import normalize_phone_number
+
+    guest_name = (args.get("guest_name") or "").strip()
+    reference = (args.get("reference") or "").strip().upper()
+    raw_phone = (args.get("phone") or "").strip()
+
+    # Normalise phone if provided
+    phone = None
+    if raw_phone:
+        try:
+            phone = normalize_phone_number(raw_phone)
+        except Exception:
+            phone = raw_phone
+
+    # Also try caller's own phone as last resort if no other identifier
+    caller_phone = None
+    if not phone and not reference:
+        try:
+            caller_phone = normalize_phone_number(user_phone) if user_phone else None
+        except Exception:
+            caller_phone = user_phone
+
+    try:
+        docs = await db_service.lookup_motel_reservation(
+            guest_name=guest_name or None,
+            phone=phone or caller_phone,
+            booking_reference=reference or None,
+            tenant_id="coalcreek"
+        )
+    except Exception as e:
+        logger.error(f"lookup_booking DB error: {e}")
+        return {
+            "found": False,
+            "error": "db_error",
+            "message": "I had trouble reaching the bookings system. Let me transfer you to reception."
+        }
+
+    if not docs:
+        return {
+            "found": False,
+            "message": "I couldn't find a booking under that name or number. Could you double-check the name or booking reference?"
+        }
+
+    # Return the most recent booking (docs already ordered desc)
+    doc = docs[0]
+    return {
+        "found": True,
+        "booking_reference": doc.get("booking_reference", ""),
+        "guest_name": doc.get("guest_name", ""),
+        "room_type": doc.get("room_type", ""),
+        "check_in_date": doc.get("check_in_date", ""),
+        "check_out_date": doc.get("check_out_date", ""),
+        "num_nights": doc.get("num_nights", ""),
+        "status": doc.get("status", ""),
+        "total_amount": doc.get("total_amount", ""),
+        "other_bookings": len(docs) - 1  # how many more exist for this guest
+    }
+
+
+# =============================================================================
 # HUMAN & UTILITY HANDLERS
 # =============================================================================
 
@@ -698,11 +766,7 @@ class CoalCreekFunctionDispatcher:
             return await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn)
             
         elif function_name == "lookup_booking":
-            # For trial, return the generic "not connected" message
-            return {
-                "found": False,
-                "message": "I don't have access to the main booking calendar right now. If you have a confirmation email, I can forward your details to reception?"
-            }
+            return await handle_lookup_booking(args, self.db_service, self.user_phone)
         
         # Knowledge Base (Direct calls to motel_knowledge_base service)
         elif function_name == "get_room_pricing":

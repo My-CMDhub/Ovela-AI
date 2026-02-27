@@ -326,3 +326,74 @@ class BookingsMixin:
         except Exception as e:
             logger.error(f"Error finding booking by reference: {e}")
             return None
+
+    async def lookup_motel_reservation(
+        self,
+        guest_name: str = None,
+        phone: str = None,
+        booking_reference: str = None,
+        tenant_id: str = "coalcreek"
+    ) -> list:
+        """
+        Look up motel reservations by reference, phone, or guest name.
+        Priority: reference > phone > name.
+        Returns up to 5 matching documents.
+        ENFORCED: tenant_id isolation.
+        """
+        try:
+            base_tenant = f'equal("tenant_id", "{tenant_id}")'
+
+            # 1. Reference is most precise — try first
+            if booking_reference:
+                ref_clean = booking_reference.strip().upper()
+                queries = [base_tenant, f'equal("booking_reference", "{ref_clean}")']
+                result = await self._motel_request(
+                    "GET",
+                    f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                    params={"queries": queries}
+                )
+                docs = result.get("documents", []) if result else []
+                if docs:
+                    return docs
+
+            # 2. Phone match
+            if phone:
+                queries = [base_tenant, f'equal("guest_phone", "{phone}")', 'orderDesc("created_at")', 'limit(5)']
+                result = await self._motel_request(
+                    "GET",
+                    f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                    params={"queries": queries}
+                )
+                docs = result.get("documents", []) if result else []
+                if docs:
+                    return docs
+
+            # 3. Guest name — exact match (title-cased)
+            if guest_name:
+                name_clean = guest_name.strip().title()
+                queries = [base_tenant, f'equal("guest_name", "{name_clean}")', 'orderDesc("created_at")', 'limit(5)']
+                result = await self._motel_request(
+                    "GET",
+                    f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                    params={"queries": queries}
+                )
+                docs = result.get("documents", []) if result else []
+                if docs:
+                    return docs
+
+                # 3b. Fallback: search (full-text index, if available)
+                queries = [base_tenant, f'search("guest_name", "{name_clean}")', 'limit(5)']
+                result = await self._motel_request(
+                    "GET",
+                    f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                    params={"queries": queries}
+                )
+                docs = result.get("documents", []) if result else []
+                if docs:
+                    return docs
+
+            return []
+
+        except Exception as e:
+            logger.error(f"Error in lookup_motel_reservation: {e}")
+            return []
