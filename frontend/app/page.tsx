@@ -45,6 +45,11 @@ const Contact = dynamic(() => import("@/components/contact").then(mod => ({ defa
   ssr: false,
 })
 
+const FAQ = dynamic(() => import("@/components/faq").then(mod => ({ default: mod.FAQ })), {
+  loading: () => <div className="min-h-[400px]" />,
+  ssr: false,
+})
+
 const LogoLoop = dynamic(() => import("@/components/logo-loop").then(mod => ({ default: mod.LogoLoop })), {
   loading: () => <div className="h-20" />,
   ssr: false,
@@ -146,7 +151,7 @@ export default function Home() {
               className="py-16 border-b border-white/5 bg-background/50 backdrop-blur-sm"
             >
               <div className="container mx-auto px-6 mb-10 text-center">
-                <p className="text-sm font-medium text-muted-foreground">Trusted by forward-thinking businesses</p>
+                <p className="text-sm font-medium text-muted-foreground">Reads and writes directly to the software you already use</p>
               </div>
               <LogoLoop
                 logos={partnerLogos}
@@ -170,6 +175,7 @@ export default function Home() {
               <Features />
               <LivePreview />
               <Testimonials />
+              <FAQ />
               <Pricing />
               <Contact />
               <Footer />

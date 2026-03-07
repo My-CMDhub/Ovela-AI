@@ -1,52 +1,18 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useAuth } from "./AuthContext";
 
-export type TenantId = "coalcreek" | "saranda" | string;
-
-interface TenantConfig {
-    id: TenantId;
+export interface TenantConfig {
+    id: string;
     name: string;
-    colors: {
-        primary: string; // Brand color
-        secondary: string; // Accent color
-    };
-    logoChar: string; // Fallback logo
-    industry: "hospitality" | "food"; // Niche-specific UI
+    logoChar: string;
     contact_phone: string;
+    industry: string;
 }
-
-// Tenant Registry
-export const TENANTS: Record<string, TenantConfig> = {
-    coalcreek: {
-        id: "coalcreek",
-        name: "Coal Creek Motel",
-        colors: {
-            primary: "#D4AF37", // Gold
-            secondary: "#1E293B", // Slate 800
-        },
-        logoChar: "C",
-        industry: "hospitality",
-        contact_phone: "0492897718"
-    },
-    saranda: {
-        id: "saranda",
-        name: "Saranda Cafe",
-        colors: {
-            primary: "#0EA5E9", // Sky Blue
-            secondary: "#0F172A", // Slate 900
-        },
-        logoChar: "S",
-        industry: "food",
-        contact_phone: "0452 557 167"
-    },
-};
 
 interface TenantContextType {
     tenant: TenantConfig;
-    setTenant: (id: string) => void;
     isLoading: boolean;
 }
 
@@ -54,60 +20,37 @@ const TenantContext = createContext<TenantContextType | undefined>(undefined);
 
 export function TenantProvider({ children }: { children: ReactNode }) {
     const { user, loading: authLoading } = useAuth();
-    const searchParams = useSearchParams();
-    const router = useRouter();
-    const pathname = usePathname();
-
-    const [currentTenantId, setCurrentTenantId] = useState<string>("coalcreek");
+    const [tenant, setTenant] = useState<TenantConfig | null>(null);
     const [isLoading, setIsLoading] = useState(true);
 
-    // Resolve Tenant
     useEffect(() => {
         if (authLoading) return;
 
-        // 1. Check URL Param
-        const paramTenant = searchParams.get("tenant");
+        if (user) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const prefs = user.prefs as any;
+            const tenantId = prefs?.tenant_id || "coalcreek"; // Default fallback
 
-        // 2. Check User Preferences (if logged in)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const userTenant = (user?.prefs as any)?.tenant_id;
-
-        // Priority: Param > User Pref > Default (Coal Creek)
-        let resolvedTenant = paramTenant || userTenant || "coalcreek";
-
-        // Validate
-        if (!TENANTS[resolvedTenant]) {
-            console.warn(`Unknown tenant '${resolvedTenant}', falling back to Coal Creek`);
-            resolvedTenant = "coalcreek";
+            // Build tenant dynamically from user prefs directly
+            // This guarantees complete data isolation without hardcoded dictionary mappings
+            setTenant({
+                id: tenantId,
+                name: prefs?.tenant_name || (tenantId === "coalcreek" ? "Coal Creek Motel" : "Ovela Client"),
+                logoChar: (prefs?.tenant_name?.[0] || tenantId[0] || "O").toUpperCase(),
+                contact_phone: prefs?.tenant_phone || "0400 000 000",
+                industry: prefs?.tenant_industry || "universal" // Unified architecture strategy
+            });
         }
 
-        setCurrentTenantId(resolvedTenant);
         setIsLoading(false);
+    }, [user, authLoading]);
 
-    }, [searchParams, user, authLoading]);
-
-    // Function to switch tenant
-    const handleSetTenant = (id: string) => {
-        if (!TENANTS[id]) return;
-
-        // Persist to URL
-        const params = new URLSearchParams(searchParams.toString());
-        params.set("tenant", id);
-        router.push(`${pathname}?${params.toString()}`);
-
-        setCurrentTenantId(id);
-    };
-
-    const tenant = TENANTS[currentTenantId] || TENANTS["coalcreek"];
+    if (!tenant && !isLoading && user) {
+        return <div className="min-h-screen flex items-center justify-center text-[var(--theme-muted)]">Loading Environment...</div>;
+    }
 
     return (
-        <TenantContext.Provider
-            value={{
-                tenant,
-                setTenant: handleSetTenant,
-                isLoading
-            }}
-        >
+        <TenantContext.Provider value={{ tenant: tenant!, isLoading }}>
             {children}
         </TenantContext.Provider>
     );

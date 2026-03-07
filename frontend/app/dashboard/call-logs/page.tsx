@@ -10,7 +10,8 @@ import {
 import { Button } from "@/components/ui/button";
 
 import { useAuth } from "@/contexts/AuthContext";
-import { client, DATABASE_ID } from "@/lib/appwrite";
+import { client, account, DATABASE_ID } from "@/lib/appwrite";
+import { fetchWithAuth } from "@/lib/api-client";
 
 const API_URL = "";
 // Force relative path to use Next.js Proxy (route.ts) for auth and routing.
@@ -37,7 +38,7 @@ export default function CallLogsPage() {
                 params.append("tenant_id", user.prefs['tenant_id'] as string);
             }
 
-            const res = await fetch(`${API_URL}/api/dashboard/call-logs?${params.toString()}`);
+            const res = await fetchWithAuth(`${API_URL}/api/dashboard/call-logs?${params.toString()}`);
             const data = await res.json();
 
             if (data.success) {
@@ -56,30 +57,17 @@ export default function CallLogsPage() {
             fetchLogs();
         }
 
-        // --- REALTIME SUBSCRIPTION ---
+        // --- POLLING FALLBACK (Replaces Appwrite Realtime) ---
+        // Realtime WebSockets natively struggle with 3rd-party cookie blocking
+        // in modern browsers. Switching to REST polling perfectly mitigates this
+        // because it routes through fetchWithAuth (JWT) instead.
         if (!user) return;
 
-        const tenantId = ((user.prefs as any)['tenant_id'] as string) || "coalcreek";
-        const collectionId = `call_transcripts_${tenantId}`;
+        const interval = setInterval(() => {
+            fetchLogs(true);
+        }, 15000); // 15 seconds is more than enough for call logs 
 
-        console.log(`📡 Subscribing to realtime updates for: ${collectionId}`);
-
-        const unsubscribe = client.subscribe(
-            `databases.${DATABASE_ID}.collections.${collectionId}.documents`,
-            (response) => {
-                // When a new transcript record is CREATED
-                if (response.events.some(e => e.includes(".create"))) {
-                    console.log("🆕 New call log detected via Realtime!");
-                    // Re-fetch to get the fully mapped data from backend
-                    fetchLogs(true);
-                }
-            }
-        );
-
-        return () => {
-            console.log("🔌 Unsubscribing from Realtime");
-            unsubscribe();
-        };
+        return () => clearInterval(interval);
     }, [fetchLogs, user]);
 
     const exportToCSV = () => {

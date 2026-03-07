@@ -10,6 +10,7 @@ import {
     Moon,
     Phone,
 } from "lucide-react";
+import { fetchWithAuth } from "@/lib/api-client";
 import { useTenant } from "@/contexts/TenantContext";
 
 interface Reservation {
@@ -33,7 +34,7 @@ interface Stats {
     totalGuests: number;
 }
 
-export default function MotelDashboard() {
+export default function ClientDashboard() {
     const { tenant } = useTenant();
     const [stats, setStats] = useState<Stats>({
         todayCheckIns: 0,
@@ -47,14 +48,17 @@ export default function MotelDashboard() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetchDashboardData();
-    }, []);
+        if (tenant?.id) {
+            setLoading(true);
+            fetchDashboardData();
+        }
+    }, [tenant?.id]);
 
     const fetchDashboardData = async () => {
         try {
             const [statsRes, reservationsRes] = await Promise.all([
-                fetch(`/api/dashboard/stats?tenant_id=${tenant.id}`),
-                fetch(`/api/dashboard/reservations?limit=5&tenant_id=${tenant.id}`),
+                fetchWithAuth(`/api/dashboard/stats?tenant_id=${tenant.id}`),
+                fetchWithAuth(`/api/dashboard/reservations?limit=5&tenant_id=${tenant.id}`),
             ]);
 
             if (statsRes.ok) {
@@ -86,7 +90,8 @@ export default function MotelDashboard() {
     const getStatusColor = (status: string) => {
         switch (status) {
             case "confirmed": return "bg-green-100 text-green-700";
-            case "pending": return "bg-yellow-100 text-yellow-700";
+            case "pending":
+            case "pending_confirmation": return "bg-yellow-100 text-yellow-700";
             case "checked_in": return "bg-blue-100 text-blue-700";
             case "cancelled": return "bg-red-100 text-red-700";
             default: return "bg-gray-100 text-gray-700";
@@ -94,13 +99,7 @@ export default function MotelDashboard() {
     };
 
     const getRoomTypeIcon = (type: string) => {
-        switch (type) {
-            case "queen": return "👑";
-            case "twin": return "🛏️";
-            case "family": return "👨‍👩‍👧‍👦";
-            case "accessible": return "♿";
-            default: return "🏨";
-        }
+        return <BedDouble className="w-5 h-5" />;
     };
 
     const kpiCards = [
@@ -140,14 +139,14 @@ export default function MotelDashboard() {
             {/* Welcome Header */}
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold text-gray-900">
+                    <h1 className="text-2xl font-bold" style={{ color: "var(--theme-text)" }}>
                         Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 17 ? "afternoon" : "evening"}!
                     </h1>
-                    <p className="text-gray-600 mt-1">
+                    <p className="mt-1" style={{ color: "var(--theme-muted)" }}>
                         Here's what's happening at {tenant.name} today
                     </p>
                 </div>
-                <div className="text-sm text-gray-500">
+                <div className="text-sm font-medium" style={{ color: "var(--theme-muted)" }}>
                     {new Date().toLocaleDateString("en-AU", {
                         weekday: "long",
                         day: "numeric",
@@ -165,20 +164,21 @@ export default function MotelDashboard() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: index * 0.1 }}
-                        className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 hover:shadow-md transition-shadow"
+                        className="rounded-2xl p-6 shadow-sm border transition-shadow"
+                        style={{ backgroundColor: "var(--theme-surface)", borderColor: "var(--theme-border)" }}
                     >
                         <div className="flex items-start justify-between">
                             <div>
-                                <p className="text-sm text-gray-500 font-medium">{card.title}</p>
-                                <p className="text-3xl font-bold text-gray-900 mt-2">
+                                <p className="text-sm font-medium" style={{ color: "var(--theme-muted)" }}>{card.title}</p>
+                                <p className="text-3xl font-bold mt-2" style={{ color: "var(--theme-text)" }}>
                                     {loading ? "—" : card.value}
                                 </p>
                                 {card.subtitle && (
-                                    <p className="text-xs text-gray-400 mt-1">{card.subtitle}</p>
+                                    <p className="text-xs mt-1" style={{ color: "var(--theme-muted)" }}>{card.subtitle}</p>
                                 )}
                             </div>
-                            <div className={`p-3 rounded-xl ${card.bg}`}>
-                                <card.icon className={`w-6 h-6 ${card.color}`} />
+                            <div className={`p-3 rounded-xl`} style={{ backgroundColor: "var(--theme-bg)" }}>
+                                <card.icon className={`w-6 h-6`} style={{ color: "var(--theme-primary)" }} />
                             </div>
                         </div>
                     </motion.div>
@@ -192,17 +192,18 @@ export default function MotelDashboard() {
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.4 }}
-                    className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-gray-100"
+                    className="lg:col-span-2 rounded-2xl shadow-sm border"
+                    style={{ backgroundColor: "var(--theme-surface)", borderColor: "var(--theme-border)" }}
                 >
-                    <div className="p-6 border-b border-gray-100">
+                    <div className="p-6 border-b" style={{ borderColor: "var(--theme-border)" }}>
                         <div className="flex items-center justify-between">
-                            <h2 className="text-lg font-semibold text-gray-900">
+                            <h2 className="text-lg font-semibold" style={{ color: "var(--theme-text)" }}>
                                 Recent Reservations
                             </h2>
                             <a
                                 href="/dashboard/reservations"
                                 className="text-sm hover:underline font-medium"
-                                style={{ color: tenant.colors.primary }}
+                                style={{ color: "var(--theme-primary)" }}
                             >
                                 View all
                             </a>
@@ -223,18 +224,18 @@ export default function MotelDashboard() {
                             recentReservations.map((res) => (
                                 <div
                                     key={res.$id}
-                                    className="p-4 hover:bg-gray-50 transition-colors"
+                                    className="p-4 transition-colors hover:bg-black/5 dark:hover:bg-white/5"
                                 >
                                     <div className="flex items-center justify-between">
                                         <div className="flex items-center gap-4">
-                                            <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center text-lg">
+                                            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shadow-sm" style={{ backgroundColor: "var(--theme-bg)", color: "var(--theme-primary)" }}>
                                                 {getRoomTypeIcon(res.room_type)}
                                             </div>
                                             <div>
-                                                <p className="font-medium text-gray-900">
+                                                <p className="font-medium" style={{ color: "var(--theme-text)" }}>
                                                     {res.guest_name}
                                                 </p>
-                                                <p className="text-sm text-gray-500">
+                                                <p className="text-sm" style={{ color: "var(--theme-muted)" }}>
                                                     {res.room_type?.charAt(0).toUpperCase() + res.room_type?.slice(1)} Room
                                                     {" · "}
                                                     {formatDate(res.check_in_date)} → {formatDate(res.check_out_date)}
@@ -243,7 +244,7 @@ export default function MotelDashboard() {
                                         </div>
                                         <div className="flex items-center gap-3">
                                             <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(res.status)}`}>
-                                                {res.status}
+                                                {res.status.replace("_", " ")}
                                             </span>
                                             <span className="text-xs text-gray-400 font-mono">
                                                 {res.booking_reference}
@@ -263,47 +264,24 @@ export default function MotelDashboard() {
                     transition={{ delay: 0.5 }}
                     className="space-y-6"
                 >
-                    {/* Room Status Summary */}
-                    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                        <h3 className="font-semibold text-gray-900 mb-4">Room Status</h3>
-                        <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                                <span className="text-gray-600">Queen Rooms</span>
-                                <span className="text-sm font-medium">6 total</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                                <span className="text-gray-600">Twin Rooms</span>
-                                <span className="text-sm font-medium">4 total</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                                <span className="text-gray-600">Family Rooms</span>
-                                <span className="text-sm font-medium">3 total</span>
-                            </div>
-                            <div className="flex items-center justify-between">
-                                <span className="text-gray-600">Accessible</span>
-                                <span className="text-sm font-medium">2 total</span>
-                            </div>
-                        </div>
-                    </div>
-
                     {/* Voice AI Status */}
-                    <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 text-white"
-                        style={{ borderColor: `${tenant.colors.primary}40`, borderWidth: '1px' }}>
+                    <div className="rounded-2xl p-6"
+                        style={{ backgroundColor: "var(--theme-bg)", borderColor: "var(--theme-primary)", borderWidth: '1px' }}>
                         <div className="flex items-center gap-3 mb-4">
-                            <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center"
-                                style={{ color: tenant.colors.primary }}>
+                            <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                                style={{ backgroundColor: "var(--theme-surface)", color: "var(--theme-primary)" }}>
                                 <Phone className="w-5 h-5" />
                             </div>
                             <div>
-                                <h3 className="font-semibold text-white">Voice AI</h3>
-                                <p className="text-sm" style={{ color: tenant.colors.primary }}>Ovela Receptionist</p>
+                                <h3 className="font-semibold" style={{ color: "var(--theme-text)" }}>Voice AI</h3>
+                                <p className="text-sm" style={{ color: "var(--theme-primary)" }}>Ovela Receptionist</p>
                             </div>
                         </div>
                         <div className="flex items-center gap-2 mb-3">
-                            <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse shadow-[0_0_10px_rgba(74,222,128,0.5)]"></span>
-                            <span className="text-sm">Active & Ready</span>
+                            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.5)]"></span>
+                            <span className="text-sm font-medium" style={{ color: "var(--theme-text)" }}>Active & Ready</span>
                         </div>
-                        <p className="text-sm text-slate-400">
+                        <p className="text-sm" style={{ color: "var(--theme-muted)" }}>
                             Answering calls 24/7, booking rooms, and helping guests
                         </p>
                     </div>

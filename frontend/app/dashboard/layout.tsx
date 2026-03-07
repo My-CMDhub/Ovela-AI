@@ -20,6 +20,7 @@ import {
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { TenantProvider, useTenant } from "@/contexts/TenantContext";
 import SystemAlerts from "@/components/ui/system-alerts";
+import { ThemeStudio } from "@/components/ui/theme-switcher";
 
 const navigation = [
     { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -47,17 +48,8 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
 
     const isAdmin = user?.labels?.includes("admin");
 
-    // Security check: Ensure non-admins stay on their assigned tenant
-    useEffect(() => {
-        if (!isAdmin && user && tenant) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const userTenant = (user.prefs as any)?.tenant_id;
-            if (userTenant && userTenant !== tenant.id) {
-                // User trying to access unauthorized tenant -> Force back to their tenant
-                router.push(`${pathname}?tenant=${userTenant}`);
-            }
-        }
-    }, [user, tenant, isAdmin, pathname, router]);
+    // Note: Admin switching logic removed for unified architecture and security
+    // The dashboard now purely reflects the user's assigned tenant context automatically
 
     const isActive = (href: string) => {
         if (href === "/dashboard") return pathname === "/dashboard";
@@ -81,7 +73,8 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
 
 
     return (
-        <div className="min-h-screen bg-[#FBF8F5]">
+        <div className="min-h-screen font-sans transition-colors duration-300" style={{ backgroundColor: "var(--theme-bg)", color: "var(--theme-text)" }}>
+            <ThemeStudio />
             {/* Mobile sidebar overlay */}
             <AnimatePresence>
                 {sidebarOpen && (
@@ -97,62 +90,40 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
 
             {/* Sidebar */}
             <aside
-                className={`fixed top-0 left-0 z-50 h-full bg-gradient-to-b from-slate-900 to-slate-800 text-white transition-all duration-300 
+                className={`fixed top-0 left-0 z-50 h-full transition-all duration-300 border-r
                     ${sidebarOpen ? "translate-x-0" : "-translate-x-full"} 
                     lg:translate-x-0
                     ${collapsed ? "lg:w-20" : "lg:w-64"}`}
+                style={{
+                    backgroundColor: "var(--theme-surface)",
+                    borderColor: "var(--theme-border)",
+                    color: "var(--theme-text)"
+                }}
             >
                 {/* Logo Area */}
-                <div className="h-20 flex items-center justify-between px-4 border-b border-white/10">
-                    {!collapsed && (
-                        <div className="flex items-center gap-3">
-                            {/* Logo placeholder */}
-                            <div
-                                className={`w-10 h-10 rounded-lg flex items-center justify-center border transition-colors ${isAdmin ? "cursor-pointer hover:bg-white/5" : ""}`}
-                                style={{
-                                    backgroundColor: `${tenant.colors.primary}20`,
-                                    color: tenant.colors.primary,
-                                    borderColor: `${tenant.colors.primary}20`
-                                }}
-                                onClick={isAdmin ? () => router.push(pathname + "?tenant=" + (tenant.id === "coalcreek" ? "saranda" : "coalcreek")) : undefined}
-                                title={isAdmin ? "Click to Switch Tenant" : undefined}
-                            >
-                                <span className="text-lg font-bold">{tenant.logoChar}</span>
-                            </div>
-                            <div>
-                                <h1 className="font-bold text-lg leading-tight text-white">{tenant.name}</h1>
-                                {isAdmin ? (
-                                    <button
-                                        onClick={() => router.push(pathname + "?tenant=" + (tenant.id === "coalcreek" ? "saranda" : "coalcreek"))}
-                                        className="text-xs hover:underline flex items-center gap-1 opacity-80 hover:opacity-100"
-                                        style={{ color: tenant.colors.primary }}
-                                    >
-                                        Switch Client <LayoutDashboard className="w-3 h-3" />
-                                    </button>
-                                ) : (
-                                    <p className="text-xs opacity-60 flex items-center gap-1" style={{ color: tenant.colors.primary }}>
-                                        CRM Dashboard
-                                    </p>
-                                )}
-                            </div>
+                <div className="h-20 flex flex-col items-center justify-center border-b" style={{ borderColor: "var(--theme-border)" }}>
+                    <div className="flex items-center gap-3 w-full px-6">
+                        {/* Logo */}
+                        <div
+                            className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg shadow-sm"
+                            style={{
+                                backgroundColor: "var(--theme-primary)",
+                                color: "var(--theme-bg)"
+                            }}
+                        >
+                            {tenant.logoChar}
                         </div>
-                    )}
-                    {collapsed && (
-                        <div className="w-full flex justify-center">
-                            <div
-                                className={`w-10 h-10 rounded-lg flex items-center justify-center border ${isAdmin ? "cursor-pointer hover:bg-white/5" : ""}`}
-                                style={{
-                                    backgroundColor: `${tenant.colors.primary}20`,
-                                    color: tenant.colors.primary,
-                                    borderColor: `${tenant.colors.primary}20`
-                                }}
-                                onClick={isAdmin ? () => router.push(pathname + "?tenant=" + (tenant.id === "coalcreek" ? "saranda" : "coalcreek")) : undefined}
-                                title={isAdmin ? "Switch Tenant" : undefined}
-                            >
-                                <span className="text-lg font-bold">{tenant.logoChar}</span>
+                        {!collapsed && (
+                            <div className="flex flex-col justify-center min-w-0 flex-1">
+                                <h1 className="font-bold text-base leading-tight truncate" style={{ color: "var(--theme-text)" }}>
+                                    {tenant.name}
+                                </h1>
+                                <p className="text-xs truncate" style={{ color: "var(--theme-muted)" }}>
+                                    CRM Dashboard
+                                </p>
                             </div>
-                        </div>
-                    )}
+                        )}
+                    </div>
 
                     {/* Close button for mobile */}
                     <button
@@ -176,17 +147,13 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                             <Link
                                 key={item.name}
                                 href={`${item.href}?tenant=${tenant.id}`}
-                                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200
-                                    ${isActive(item.href)
-                                        ? "shadow-lg border"
-                                        : "text-slate-400 hover:bg-white/5 hover:text-white"
-                                    }
+                                className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 font-medium
+                                    ${isActive(item.href) ? "shadow-sm" : "hover:bg-black/5 dark:hover:bg-white/5"}
                                     ${collapsed ? "justify-center" : ""}`}
                                 style={isActive(item.href) ? {
-                                    backgroundColor: `${tenant.colors.primary}10`,
-                                    color: tenant.colors.primary,
-                                    borderColor: `${tenant.colors.primary}20`
-                                } : {}}
+                                    backgroundColor: "var(--theme-primary)",
+                                    color: "var(--theme-bg)",
+                                } : { color: "var(--theme-muted)" }}
                                 title={collapsed ? item.name : undefined}
                             >
                                 <item.icon className="w-5 h-5 flex-shrink-0" />
@@ -211,11 +178,12 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                 </nav>
 
                 {/* Bottom Section */}
-                <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-white/10">
+                <div className="absolute bottom-0 left-0 right-0 p-4 border-t" style={{ borderColor: "var(--theme-border)", backgroundColor: "var(--theme-surface)" }}>
                     {/* Collapse Toggle (desktop only) */}
                     <button
                         onClick={() => setCollapsed(!collapsed)}
-                        className="hidden lg:flex w-full items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-white/5 hover:text-white transition-colors mb-2"
+                        className="hidden lg:flex w-full items-center gap-3 px-4 py-3 rounded-xl transition-colors mb-2 font-medium"
+                        style={{ color: "var(--theme-muted)" }}
                     >
                         <ChevronLeft className={`w-5 h-5 transition-transform ${collapsed ? "rotate-180" : ""}`} />
                         {!collapsed && <span className="font-medium">Collapse</span>}
@@ -230,8 +198,9 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                             } catch { }
                             window.location.href = "/login";
                         }}
-                        className={`flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-red-500/10 hover:text-red-400 transition-colors w-full
+                        className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors w-full font-medium hover:bg-red-50 dark:hover:bg-red-950/30 hover:text-red-500
                             ${collapsed ? "justify-center" : ""}`}
+                        style={{ color: "var(--theme-muted)" }}
                     >
                         <LogOut className="w-5 h-5" />
                         {!collapsed && <span className="font-medium">Log Out</span>}
@@ -240,8 +209,8 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                     {/* Powered by Ovela */}
                     {!collapsed && (
                         <div className="mt-4 text-center">
-                            <p className="text-xs text-slate-600">Powered by</p>
-                            <p className="text-sm font-semibold text-slate-500">Ovela AI</p>
+                            <p className="text-xs" style={{ color: "var(--theme-muted)" }}>Powered by</p>
+                            <p className="text-sm font-semibold" style={{ color: "var(--theme-text)" }}>Ovela AI</p>
                         </div>
                     )}
                 </div>
@@ -250,18 +219,20 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
             {/* Main Content */}
             <div className={`transition-all duration-300 ${collapsed ? "lg:ml-20" : "lg:ml-64"}`}>
                 {/* Top Header */}
-                <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-4 lg:px-8 sticky top-0 z-30">
+                <header className="h-16 border-b flex items-center justify-between px-4 lg:px-8 sticky top-0 z-30"
+                    style={{ backgroundColor: "var(--theme-bg)", borderColor: "var(--theme-border)" }}>
                     {/* Mobile menu button */}
                     <button
                         onClick={() => setSidebarOpen(true)}
-                        className="lg:hidden p-2 hover:bg-gray-100 rounded-lg"
+                        className="lg:hidden p-2 rounded-lg"
+                        style={{ color: "var(--theme-muted)" }}
                     >
                         <Menu className="w-5 h-5 text-gray-600" />
                     </button>
 
                     {/* Page title area */}
                     <div className="hidden lg:block">
-                        <h2 className="text-lg font-semibold text-gray-900">
+                        <h2 className="text-lg font-semibold" style={{ color: "var(--theme-text)" }}>
                             {navigation.find((n) => isActive(n.href))?.name || "Dashboard"}
                         </h2>
                     </div>
@@ -269,7 +240,7 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                     {/* Right side */}
                     <div className="flex items-center gap-4">
                         {/* Reception Phone */}
-                        <div className="hidden md:flex items-center gap-2 text-sm text-gray-600">
+                        <div className="hidden md:flex items-center gap-2 text-sm" style={{ color: "var(--theme-muted)" }}>
                             <Phone className="w-4 h-4" />
                             <span>{tenant.contact_phone}</span>
                         </div>
@@ -286,8 +257,10 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                 </header>
 
                 {/* Page Content */}
-                <main className="p-4 lg:p-8">
-                    {children}
+                <main className="p-4 lg:p-8 overflow-hidden relative">
+                    <AnimatePresence mode="wait">
+                        {children}
+                    </AnimatePresence>
                 </main>
             </div>
         </div>

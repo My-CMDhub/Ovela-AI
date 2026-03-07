@@ -1,21 +1,21 @@
 "use client";
 
 import { useTenant } from "@/contexts/TenantContext";
-import MotelDashboard from "@/components/dashboard/motel-dashboard";
-import RestaurantDashboard from "@/components/dashboard/restaurant-dashboard";
+import ClientDashboard from "@/components/dashboard/client-dashboard";
+import { Loader2 } from "lucide-react";
 
 export default function DashboardPage() {
     const { tenant, isLoading } = useTenant();
 
-    if (isLoading) {
-        return <div className="p-8 text-center text-gray-400">Loading Dashboard...</div>;
+    if (isLoading || !tenant) {
+        return (
+            <div className="flex h-[80vh] items-center justify-center" style={{ color: "var(--theme-primary)" }}>
+                <Loader2 className="w-8 h-8 animate-spin" />
+            </div>
+        );
     }
 
-    // Niche Router
-    if (tenant.industry === "food") {
-        return <RestaurantDashboard />;
-    }
-
-    // Default to Motel (Hospitality)
-    return <MotelDashboard />;
+    // Unified Architecture: All tenants get the same powerful ClientDashboard
+    // Data isolation is guaranteed backend-side.
+    return <ClientDashboard />;
 }

@@ -4,7 +4,6 @@ import type React from "react"
 import { motion, useMotionValue, useSpring, AnimatePresence } from "framer-motion"
 import { useState, useEffect } from "react"
 import { EcosystemLoop } from "@/components/ecosystem-loop"
-import { TextRotator } from "@/components/text-rotator"
 import { VoiceDemoForm } from "@/components/VoiceDemoForm"
 import { ArrowRight, X, Check, ShieldCheck } from "lucide-react"
 import Link from "next/link"
@@ -312,6 +311,8 @@ export function Hero() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [activeBooking, setActiveBooking] = useState(0)
   const [isDemoOpen, setIsDemoOpen] = useState(false) // State for modal
+  const rotatingNouns = ["booking.", "job.", "client.", "customer."]
+  const [nounIndex, setNounIndex] = useState(0)
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -323,6 +324,13 @@ export function Hero() {
       setActiveBooking((prev) => (prev + 1) % recentCalls.length)
     }, 2500)
     return () => clearInterval(callTimer)
+  }, [])
+
+  useEffect(() => {
+    const nounTimer = setInterval(() => {
+      setNounIndex((prev) => (prev + 1) % rotatingNouns.length)
+    }, 2500)
+    return () => clearInterval(nounTimer)
   }, [])
 
   // Close modal on escape
@@ -381,7 +389,7 @@ export function Hero() {
             className="mb-6 inline-flex flex-row items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs sm:text-sm text-primary backdrop-blur-sm max-w-full text-left"
           >
             <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse shrink-0"> </span>
-            <span className="whitespace-nowrap overflow-hidden text-ellipsis">Native Integrations • ServiceM8 • RMS Cloud • Vagaro</span>
+            <span className="whitespace-nowrap overflow-hidden text-ellipsis">Founding cohort open • AUD $300 setup • 21-day free trial</span>
           </motion.div>
 
           {/* Main Heading */}
@@ -396,12 +404,27 @@ export function Hero() {
             animate="visible"
             className="mx-auto max-w-4xl font-serif text-4xl font-medium tracking-tight text-foreground sm:text-7xl"
           >
-            The AI Front Desk for <br />
-            <span className="text-muted-foreground">
-              <TextRotator
-                texts={["ServiceM8", "RMS Cloud", "Tradify", "Cliniko", "Fergus", "Xero", "Halaxy", "Apaleo", "Zoho CRM", "Vagaro"]}
-                className="font-serif italic"
-              />
+            Never miss a call.<br />
+            <span className="block text-[0.82em] sm:text-[0.78em] text-muted-foreground font-serif italic leading-tight">
+              Never lose a{" "}
+              <span
+                className="inline-flex overflow-hidden align-baseline"
+                style={{ height: "1.05em", verticalAlign: "baseline" }}
+              >
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.span
+                    key={nounIndex}
+                    initial={{ y: "100%", opacity: 0 }}
+                    animate={{ y: "0%", opacity: 1 }}
+                    exit={{ y: "-100%", opacity: 0 }}
+                    transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+                    style={{ color: "var(--accent)" }}
+                    className="inline-block leading-none"
+                  >
+                    {rotatingNouns[nounIndex]}
+                  </motion.span>
+                </AnimatePresence>
+              </span>
             </span>
           </motion.h1>
 
@@ -417,7 +440,7 @@ export function Hero() {
             animate="visible"
             className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground sm:text-xl"
           >
-            Answering calls, qualifying leads, and <strong className="text-foreground font-medium">injecting bookings directly</strong> into your schedule. No double-entry.
+            Ovela answers your calls, checks real-time availability, and <strong className="text-foreground font-medium">books directly into your existing software</strong> — while you focus on the work.
           </motion.p>
 
           {/* CTA Buttons */}
@@ -481,12 +504,15 @@ export function Hero() {
           </motion.div>
         </motion.div>
 
+        <div
+          className="relative mx-auto max-w-4xl"
+          style={{ perspective: "1500px" }}
+        >
         <motion.div
           initial={{ opacity: 0, y: 80, rotateX: 8 }}
           animate={{ opacity: 1, y: 0, rotateX: 0 }}
           transition={{ duration: 1.2, ease: "easeOut", delay: 0.5 }}
-          className="relative mx-auto max-w-4xl"
-          style={{ perspective: "1500px" }}
+          className="relative"
         >
           <MacBookMockup>
             {/* Browser chrome */}
@@ -704,6 +730,7 @@ export function Hero() {
             </div>
           </MacBookMockup>
         </motion.div>
+        </div>
 
         {/* Voice Demo Modal Overlay */}
         <AnimatePresence>

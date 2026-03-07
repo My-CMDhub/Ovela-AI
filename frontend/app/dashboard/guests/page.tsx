@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { columns } from "@/components/guests/columns";
 import { DataTable } from "@/components/guests/data-table";
+import { fetchWithAuth } from "@/lib/api-client";
 
 interface Guest {
     $id: string;
@@ -34,7 +35,7 @@ export default function GuestsPage() {
 
     const fetchGuests = async () => {
         try {
-            const res = await fetch(`/api/dashboard/guests?tenant_id=${tenant.id}`);
+            const res = await fetchWithAuth(`/api/dashboard/guests?tenant_id=${tenant.id}`);
             const data = await res.json();
             if (data.success) {
                 setGuests(data.guests);

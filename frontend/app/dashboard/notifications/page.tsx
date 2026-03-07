@@ -5,6 +5,7 @@ import { getColumns, StaffNotification } from "@/components/notifications/column
 import { DataTable } from "@/components/notifications/data-table";
 import { RefreshCw, Plus, CheckCircle, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { fetchWithAuth } from "@/lib/api-client";
 
 const API_URL = "";
 // Force relative path to use Next.js Proxy for auth and routing.
@@ -36,7 +37,7 @@ export default function NotificationsPage() {
         setLoading(true);
         try {
             // Route through dashboard proxy (mapped to /api/motel/notifications on backend)
-            const res = await fetch(`${API_URL}/api/dashboard/notifications?limit=200`);
+            const res = await fetchWithAuth(`${API_URL}/api/dashboard/notifications?limit=200`);
             const data = await res.json();
             if (data.notifications) {
                 setNotifications(data.notifications);
@@ -54,7 +55,7 @@ export default function NotificationsPage() {
         // Auto-refresh every 30 seconds
         const interval = setInterval(() => {
             // optimized to not set loading state on poll
-            fetch(`${API_URL}/api/dashboard/notifications?limit=200`)
+            fetchWithAuth(`${API_URL}/api/dashboard/notifications?limit=200`)
                 .then(res => res.json())
                 .then(data => {
                     if (data.notifications) setNotifications(data.notifications);
@@ -68,9 +69,8 @@ export default function NotificationsPage() {
     const updateStatus = async (id: string, newStatus: StaffNotification["status"]) => {
         setActionLoading(id);
         try {
-            await fetch(`${API_URL}/api/notifications/${id}`, {
+            await fetchWithAuth(`${API_URL}/api/dashboard/notifications/${id}`, {
                 method: "PATCH",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ status: newStatus })
             });
             // Update local state immediately
@@ -87,7 +87,7 @@ export default function NotificationsPage() {
         if (!confirm("Are you sure you want to archive this notification?")) return;
         setActionLoading(id);
         try {
-            await fetch(`${API_URL}/api/notifications/${id}`, {
+            await fetchWithAuth(`${API_URL}/api/dashboard/notifications/${id}`, {
                 method: "DELETE"
             });
             setNotifications(prev => prev.filter(n => n.$id !== id));
@@ -109,9 +109,8 @@ export default function NotificationsPage() {
         if (!editingId) return;
         setActionLoading(editingId);
         try {
-            await fetch(`${API_URL}/api/notifications/${editingId}`, {
+            await fetchWithAuth(`${API_URL}/api/dashboard/notifications/${editingId}`, {
                 method: "PATCH",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ staff_notes: notesText })
             });
             setNotifications(prev => prev.map(n => n.$id === editingId ? { ...n, staff_notes: notesText } : n));
@@ -132,9 +131,8 @@ export default function NotificationsPage() {
         }
         setCreating(true);
         try {
-            await fetch(`${API_URL}/api/notifications`, {
+            await fetchWithAuth(`${API_URL}/api/dashboard/notifications`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(createForm)
             });
             setShowCreateModal(false);

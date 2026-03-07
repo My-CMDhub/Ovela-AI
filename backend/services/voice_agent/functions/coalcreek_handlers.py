@@ -537,16 +537,21 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
 
 async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict:
     """
-    Look up an existing reservation in motel_reservations.
-    Tries reference → phone → guest name, returns the most recent match.
+    Two-step booking lookup:
+      Step 1 (primary): name + phone must BOTH match.
+      Step 2 (fallback): if step 1 finds nothing and email/reference is also
+                         provided, try those as secondary identifiers.
+    Returns need_more_info=True when step 1 fails and no fallback provided,
+    so the AI knows to ask for email or booking reference.
     """
     from services.voice_agent.text_utils import normalize_phone_number
 
     guest_name = (args.get("guest_name") or "").strip()
-    reference = (args.get("reference") or "").strip().upper()
-    raw_phone = (args.get("phone") or "").strip()
+    reference  = (args.get("reference")  or "").strip().upper()
+    raw_phone  = (args.get("phone")       or "").strip()
+    email      = (args.get("email")       or "").strip().lower()
 
-    # Normalise phone if provided
+    # Normalise phone
     phone = None
     if raw_phone:
         try:
@@ -554,49 +559,114 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         except Exception:
             phone = raw_phone
 
-    # Also try caller's own phone as last resort if no other identifier
-    caller_phone = None
-    if not phone and not reference:
+    # Also try the inbound caller number if nothing else was given
+    if not phone:
         try:
-            caller_phone = normalize_phone_number(user_phone) if user_phone else None
+            phone = normalize_phone_number(user_phone) if user_phone else None
         except Exception:
-            caller_phone = user_phone
+            phone = user_phone
+
+    def _format_doc(doc, total_docs):
+        return {
+            "found": True,
+            "booking_reference": doc.get("booking_reference", ""),
+            "guest_name":        doc.get("guest_name", ""),
+            "room_type":         doc.get("room_type", ""),
+            "check_in_date":     doc.get("check_in_date", ""),
+            "check_out_date":    doc.get("check_out_date", ""),
+            "num_nights":        doc.get("num_nights", ""),
+            "status":            doc.get("status", ""),
+            "total_amount":      doc.get("total_amount", ""),
+            "other_bookings":    total_docs - 1,
+        }
 
     try:
-        docs = await db_service.lookup_motel_reservation(
-            guest_name=guest_name or None,
-            phone=phone or caller_phone,
-            booking_reference=reference or None,
-            tenant_id="coalcreek"
-        )
+        # ── Step 1: reference lookup (most precise, skip other steps) ──────
+        if reference:
+            docs = await db_service.lookup_motel_reservation(
+                booking_reference=reference,
+                tenant_id="coalcreek"
+            )
+            if docs:
+                # Verify name loosely if we also have a name
+                if guest_name:
+                    match = next(
+                        (d for d in docs if guest_name.lower() in d.get("guest_name", "").lower()),
+                        None
+                    )
+                    if match:
+                        return _format_doc(match, 1)
+                    # Reference found but name mismatch — still return, flag it
+                    doc = docs[0]
+                    result = _format_doc(doc, len(docs))
+                    result["name_mismatch"] = True
+                    return result
+                return _format_doc(docs[0], len(docs))
+
+        # ── Step 2 (primary): name + phone must BOTH match ─────────────────
+        if guest_name and phone:
+            # Fetch by phone first (indexed), then filter by name in Python
+            docs = await db_service.lookup_motel_reservation(
+                phone=phone,
+                tenant_id="coalcreek"
+            )
+            if docs:
+                name_lower = guest_name.lower()
+                matched = [
+                    d for d in docs
+                    if name_lower in d.get("guest_name", "").lower()
+                    or d.get("guest_name", "").lower() in name_lower
+                ]
+                if matched:
+                    return _format_doc(matched[0], len(matched))
+
+            # Phone matched nothing, or name didn't match — try name-only search
+            name_docs = await db_service.lookup_motel_reservation(
+                guest_name=guest_name,
+                tenant_id="coalcreek"
+            )
+            if name_docs:
+                # Name found but phone didn't match — proceed to step 3
+                pass
+            else:
+                # Truly nothing found by name or phone
+                if not email:
+                    return {
+                        "found": False,
+                        "need_more_info": True,
+                        "message": "I couldn't find a booking under that name and number. Could you give me your email address or booking reference so I can search further?"
+                    }
+
+        # ── Step 3 (fallback): email ───────────────────────────────────────
+        if email:
+            docs = await db_service.lookup_motel_reservation(
+                email=email,
+                tenant_id="coalcreek"
+            )
+            if docs:
+                if guest_name:
+                    matched = [
+                        d for d in docs
+                        if guest_name.lower() in d.get("guest_name", "").lower()
+                    ]
+                    if matched:
+                        return _format_doc(matched[0], len(matched))
+                return _format_doc(docs[0], len(docs))
+
+        # ── Nothing found across all strategies ───────────────────────────
+        return {
+            "found": False,
+            "need_more_info": False,
+            "message": "I've searched by name, number, and email but couldn't find a matching booking. Would you like me to connect you to reception?"
+        }
+
     except Exception as e:
-        logger.error(f"lookup_booking DB error: {e}")
+        logger.error(f"lookup_booking error: {e}")
         return {
             "found": False,
             "error": "db_error",
             "message": "I had trouble reaching the bookings system. Let me transfer you to reception."
         }
-
-    if not docs:
-        return {
-            "found": False,
-            "message": "I couldn't find a booking under that name or number. Could you double-check the name or booking reference?"
-        }
-
-    # Return the most recent booking (docs already ordered desc)
-    doc = docs[0]
-    return {
-        "found": True,
-        "booking_reference": doc.get("booking_reference", ""),
-        "guest_name": doc.get("guest_name", ""),
-        "room_type": doc.get("room_type", ""),
-        "check_in_date": doc.get("check_in_date", ""),
-        "check_out_date": doc.get("check_out_date", ""),
-        "num_nights": doc.get("num_nights", ""),
-        "status": doc.get("status", ""),
-        "total_amount": doc.get("total_amount", ""),
-        "other_bookings": len(docs) - 1  # how many more exist for this guest
-    }
 
 
 # =============================================================================

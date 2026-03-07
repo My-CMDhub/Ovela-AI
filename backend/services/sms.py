@@ -27,8 +27,8 @@ class SmsService:
             return False
             
         try:
-            # Determine sender number
-            from_number = self.from_number
+            # Determine sender number (fallback to default Ovela proxy number)
+            from_number = settings.TWILIO_PHONE_NUMBER
             
             if tenant_id:
                 try:

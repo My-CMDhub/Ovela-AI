@@ -192,15 +192,16 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         # =================================================================
         {
             "name": "lookup_booking",
-            "description": "Look up an existing booking. Ask for name first.",
+            "description": "Look up an existing booking. ALWAYS collect both guest_name AND phone before calling — ask for both if not already given. Only add email or reference if the first lookup (name+phone) returns need_more_info=true, meaning no match was found.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "guest_name": {"type": "string", "description": "Guest name"},
-                    "phone": {"type": "string", "description": "Guest phone (optional)"},
-                    "reference": {"type": "string", "description": "Booking reference (optional)"}
+                    "guest_name": {"type": "string", "description": "Full name of the guest — required"},
+                    "phone": {"type": "string", "description": "Guest phone number — required"},
+                    "email": {"type": "string", "description": "Guest email — only provide if name+phone lookup returned need_more_info=true"},
+                    "reference": {"type": "string", "description": "Booking reference code — only provide if name+phone lookup returned need_more_info=true"}
                 },
-                "required": ["guest_name"]
+                "required": ["guest_name", "phone"]
             }
         },
         {

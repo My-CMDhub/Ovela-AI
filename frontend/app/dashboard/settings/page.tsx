@@ -6,13 +6,9 @@ import { Save, Building2, Clock, RefreshCw, Check, Lock, ShieldCheck, Phone } fr
 import { useAuth } from "@/contexts/AuthContext";
 import { useTenant } from "@/contexts/TenantContext";
 import { account } from "@/lib/appwrite";
+import { fetchWithAuth } from "@/lib/api-client";
 
-// Use localhost for development if env var is missing
-// Use relative path for client-side fetches to hit Next.js Proxy
-// This ensures route.ts handles the request (and potential rewrites)
 const API_URL = "";
-// Note: We used to rely on NEXT_PUBLIC_API_URL but that points to Backend directly in some envs, bypassing Proxy.
-// By using "", we force it to /api/dashboard/... on the local domain.
 
 interface BusinessSettings {
     business_name: string;
@@ -65,7 +61,7 @@ export default function MotelSettingsPage() {
 
     const fetchSettings = async () => {
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/settings?tenant_id=${tenant.id}`);
+            const res = await fetchWithAuth(`${API_URL}/api/dashboard/settings?tenant_id=${tenant.id}`);
             if (!res.ok) throw new Error("Failed to fetch settings");
 
             const data = await res.json();
@@ -84,9 +80,8 @@ export default function MotelSettingsPage() {
         setSaving(true);
         setSaved(false);
         try {
-            const res = await fetch(`${API_URL}/api/dashboard/settings?tenant_id=${tenant.id}`, {
+            const res = await fetchWithAuth(`${API_URL}/api/dashboard/settings?tenant_id=${tenant.id}`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(settings)
             });
             const data = await res.json();
@@ -160,7 +155,7 @@ export default function MotelSettingsPage() {
                         ? "border-b-2 text-slate-900"
                         : "text-slate-500 hover:text-slate-700"
                         }`}
-                    style={activeTab === "general" ? { borderColor: tenant?.colors?.primary } : {}}
+                    style={activeTab === "general" ? { borderColor: "var(--theme-primary)" } : {}}
                 >
                     Business Info
                 </button>
@@ -170,7 +165,7 @@ export default function MotelSettingsPage() {
                         ? "border-b-2 text-slate-900"
                         : "text-slate-500 hover:text-slate-700"
                         }`}
-                    style={activeTab === "security" ? { borderColor: tenant?.colors?.primary } : {}}
+                    style={activeTab === "security" ? { borderColor: "var(--theme-primary)" } : {}}
                 >
                     Security
                 </button>
@@ -185,7 +180,7 @@ export default function MotelSettingsPage() {
                         className="rounded-xl border border-slate-200 p-6 bg-white"
                     >
                         <div className="flex items-center gap-2 mb-6">
-                            <Building2 className="w-5 h-5" style={{ color: tenant?.colors?.primary }} />
+                            <Building2 className="w-5 h-5" style={{ color: "var(--theme-primary)" }} />
                             <h2 className="text-lg font-semibold text-slate-900">
                                 {tenant?.industry === "food" ? "Restaurant Information" : "Motel Information"}
                             </h2>
@@ -254,7 +249,7 @@ export default function MotelSettingsPage() {
                         className="rounded-xl border border-slate-200 p-6 bg-white"
                     >
                         <div className="flex items-center gap-2 mb-4">
-                            <Clock className="w-5 h-5" style={{ color: tenant?.colors?.primary }} />
+                            <Clock className="w-5 h-5" style={{ color: "var(--theme-primary)" }} />
                             <h2 className="text-lg font-semibold text-slate-900">
                                 {tenant?.industry === "food" ? "Opening Hours" : "Check-in / Check-out"}
                             </h2>
@@ -315,7 +310,7 @@ export default function MotelSettingsPage() {
                     {/* Change Password */}
                     <div className="rounded-xl border border-slate-200 p-6 bg-white">
                         <div className="flex items-center gap-2 mb-6">
-                            <Lock className="w-5 h-5" style={{ color: tenant?.colors?.primary }} />
+                            <Lock className="w-5 h-5" style={{ color: "var(--theme-primary)" }} />
                             <h2 className="text-lg font-semibold text-slate-900">Change Password</h2>
                         </div>
 

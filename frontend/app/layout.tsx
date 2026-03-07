@@ -23,20 +23,23 @@ const playfair = Playfair_Display({
 
 export const metadata: Metadata = {
   title: {
-    default: "Ovela | Enterprise-Grade AI Phone Agents",
+    default: "Ovela | AI Phone Answering for Australian Service Businesses",
     template: "%s | Ovela"
   },
-  description: "Empower your business with Ovela's human-like AI. Instantly handle 100% of phone calls, secure bookings, and drive revenue 24/7 without lifting a finger.",
+  description: "Ovela answers your calls, checks live availability, and books directly into your software — 24/7. No missed bookings, no interruptions. Australian AI receptionist. Free 21-day trial.",
   keywords: [
-    "Enterprise AI Voice Agent",
-    "Automated Receptionist Australia",
-    "Business Phone Automation",
-    "AI Phone Answering Service",
-    "24/7 Booking Assistant",
-    "Healthcare Appointment AI",
-    "Trades Scheduling Automation",
-    "Revenue Driving AI",
-    "Human-like Voice AI"
+    "AI receptionist Australia",
+    "automated phone answering service Australia",
+    "virtual receptionist Australia",
+    "AI receptionist for small business",
+    "missed call answering service Australia",
+    "AI receptionist for tradies",
+    "after hours answering service Australia",
+    "ServiceM8 AI integration",
+    "Cliniko phone answering automation",
+    "phone answering service hospitality Australia",
+    "AI phone answering 24 7",
+    "automated booking service Australia"
   ],
   authors: [{ name: "Ovela AI" }],
   creator: "Ovela AI",
@@ -44,8 +47,8 @@ export const metadata: Metadata = {
     type: "website",
     locale: "en_AU",
     url: "https://ovela.dev",
-    title: "Ovela | Enterprise-Grade AI Phone Agents",
-    description: "Empower your business with Ovela's human-like AI. Instantly handle 100% of phone calls, secure bookings, and drive revenue 24/7.",
+    title: "Ovela | AI Phone Answering for Australian Service Businesses",
+    description: "Ovela answers your calls, checks live availability, and books directly into your software — 24/7. No missed bookings. Free 21-day trial.",
     siteName: "Ovela",
     images: [
       {
@@ -58,8 +61,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "Ovela | Enterprise-Grade AI Phone Agents",
-    description: "Empower your business with Ovela's human-like AI. Instantly handle 100% of phone calls, secure bookings, and drive revenue 24/7.",
+    title: "Ovela | AI Phone Answering for Australian Service Businesses",
+    description: "Ovela answers your calls, checks live availability, and books directly into your software — 24/7. No missed bookings. Free 21-day trial.",
     images: ["/og-image.jpg"],
     creator: "@ovela_ai"
   },
@@ -100,6 +103,50 @@ export default function RootLayout({
         <link rel="dns-prefetch" href="https://www.googletagmanager.com" />
         <link rel="dns-prefetch" href="https://connect.facebook.net" />
         <link rel="preconnect" href="https://images.unsplash.com" crossOrigin="anonymous" />
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify({
+              "@context": "https://schema.org",
+              "@graph": [
+                {
+                  "@type": "SoftwareApplication",
+                  "name": "Ovela",
+                  "url": "https://ovela.dev",
+                  "description": "AI voice receptionist for Australian service businesses. Answers calls, checks live availability, and books directly into your existing software — 24/7.",
+                  "applicationCategory": "BusinessApplication",
+                  "operatingSystem": "Web",
+                  "offers": {
+                    "@type": "Offer",
+                    "price": "200",
+                    "priceCurrency": "AUD",
+                    "availability": "https://schema.org/InStock"
+                  },
+                  "provider": {
+                    "@type": "Organization",
+                    "name": "Ovela",
+                    "url": "https://ovela.dev",
+                    "areaServed": "AU"
+                  },
+                  "featureList": [
+                    "Answers calls 24/7",
+                    "Books appointments directly in your software",
+                    "Integrates with ServiceM8, Tradify, Cliniko, RMS Cloud and more",
+                    "Handles reschedules and cancellations",
+                    "Transfers urgent calls to staff"
+                  ]
+                },
+                {
+                  "@type": "Organization",
+                  "name": "Ovela",
+                  "url": "https://ovela.dev",
+                  "description": "AI voice receptionist software for Australian service businesses",
+                  "areaServed": "AU"
+                }
+              ]
+            })
+          }}
+        />
       </head>
       <body className={`font-sans antialiased ${dmSans.variable} ${playfair.variable}`}>
         {children}

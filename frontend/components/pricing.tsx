@@ -25,10 +25,21 @@ export function Pricing() {
           <h2 className="font-serif text-4xl md:text-5xl tracking-tight mb-6">
             Simple, Transparent Pricing
           </h2>
-          <p className="text-muted-foreground text-lg max-w-2xl mx-auto leading-relaxed">
-            Our AI receptionist uses a straightforward two-part pricing structure.
-            No hidden fees. No surprises.
+          <p className="text-muted-foreground text-lg max-w-2xl mx-auto leading-relaxed mb-6">
+            One setup fee. One monthly subscription. No hidden costs, no locked-in contracts, no surprises.
           </p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <div className="flex flex-col items-center px-8 py-5 rounded-2xl bg-accent/5 border border-accent/20">
+              <span className="text-3xl font-serif font-medium text-foreground">AUD $300</span>
+              <span className="text-xs text-muted-foreground mt-1">One-time setup</span>
+            </div>
+            <div className="hidden sm:block text-muted-foreground text-2xl font-light">+</div>
+            <div className="flex flex-col items-center px-8 py-5 rounded-2xl bg-primary/5 border border-primary/20">
+              <span className="text-3xl font-serif font-medium text-foreground">AUD $200</span>
+              <span className="text-xs text-muted-foreground mt-1">/month recurring</span>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground mt-5">Exact monthly cost confirmed after your 21-day free trial based on real usage.</p>
         </motion.div>
 
         {/* Pricing Structure Cards */}
@@ -44,15 +55,15 @@ export function Pricing() {
             <div className="w-12 h-12 rounded-2xl bg-accent/10 flex items-center justify-center mb-6">
               <Zap className="w-6 h-6 text-accent" />
             </div>
-            <h3 className="text-2xl font-serif mb-3">One-Time Setup Fee</h3>
+            <h3 className="text-2xl font-serif mb-1">One-Time Setup</h3>
+            <p className="text-3xl font-serif font-medium text-foreground mb-4">AUD $300</p>
             <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
-              A single onboarding payment that covers everything needed to get your AI receptionist live.
+              We configure everything for you. You don’t touch a single setting. Includes your dedicated number, AI training, and integration with your existing software.
             </p>
 
-            {/* 7-Day Trial Highlight */}
             <div className="mb-6 p-3 rounded-xl bg-accent/10 border border-accent/20">
               <p className="text-sm text-accent font-medium">✨ 21-Day Free Trial Included</p>
-              <p className="text-xs text-muted-foreground mt-1">Test after setup. Cancel if not satisfied.</p>
+              <p className="text-xs text-muted-foreground mt-1">See your exact costs from real usage before you pay a cent.</p>
             </div>
 
             <ul className="space-y-3">
@@ -86,9 +97,10 @@ export function Pricing() {
             <div className="w-12 h-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-6">
               <Users className="w-6 h-6 text-primary" />
             </div>
-            <h3 className="text-2xl font-serif mb-3">Monthly Subscription</h3>
+            <h3 className="text-2xl font-serif mb-1">Monthly Recurring</h3>
+            <p className="text-3xl font-serif font-medium text-foreground mb-4">AUD $200<span className="text-base font-sans font-normal text-muted-foreground">/month</span></p>
             <p className="text-sm text-muted-foreground mb-6 leading-relaxed">
-              Ongoing monthly fee that keeps your AI receptionist running and improving.
+              Fixed monthly fee. Your exact quote is confirmed after the free trial based on your real call volume — no guesswork, no surprises.
             </p>
 
             <ul className="space-y-3">

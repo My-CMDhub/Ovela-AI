@@ -17,10 +17,10 @@ const painPoints = [
         <path d="M12 6v6l4 2" />
       </svg>
     ),
-    title: "Endless Waiting",
-    description: "Your clients hate waiting for responses",
+    title: "Calls Going to Voicemail",
+    description: "When you're on the job, calls get missed — and most callers won't leave a message",
     stat: "67%",
-    statLabel: "clients abandon slow responders",
+    statLabel: "of callers don't call back after voicemail",
   },
   {
     icon: (
@@ -28,10 +28,10 @@ const painPoints = [
         <path d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
       </svg>
     ),
-    title: "Repetitive Messages",
-    description: "Same questions, every single day",
+    title: "Constant Interruptions",
+    description: "The same questions — availability, pricing, directions — pull you away from the work every day",
     stat: "40+",
-    statLabel: "messages answered daily",
+    statLabel: "routine calls handled per week on average",
   },
   {
     icon: (
@@ -39,10 +39,10 @@ const painPoints = [
         <path d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
       </svg>
     ),
-    title: "Lost Revenue",
-    description: "Missed bookings = money left on table",
-    stat: "$2.4k",
-    statLabel: "average monthly loss",
+    title: "Lost Bookings",
+    description: "A missed call at the wrong moment often means the customer books with your competitor instead",
+    stat: "1 in 3",
+    statLabel: "missed calls become a lost booking",
   },
 ]
 
@@ -343,11 +343,11 @@ export function ProblemSolution() {
                     <div className="flex items-end gap-2">
                       <motion.span
                         animate={{ opacity: activePain === index ? 1 : 0.5 }}
-                        className="font-serif text-4xl text-accent"
+                        className="font-serif text-4xl text-accent whitespace-nowrap shrink-0"
                       >
                         {pain.stat}
                       </motion.span>
-                      <span className="text-sm text-muted-foreground mb-1">{pain.statLabel}</span>
+                      <span className="text-sm text-muted-foreground mb-1 leading-tight">{pain.statLabel}</span>
                     </div>
                   </div>
 

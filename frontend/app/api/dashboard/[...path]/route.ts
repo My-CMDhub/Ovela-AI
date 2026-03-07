@@ -32,11 +32,15 @@ async function proxyRequest(request: NextRequest, path: string) {
     try {
         console.log(`[Proxy] ${request.method} /api/dashboard/${path} -> ${targetUrl}`);
 
+        // Extract Appwrite JWT passed from the frontend client
+        const authHeader = request.headers.get('authorization') || "";
+
         const response = await fetch(targetUrl, {
             method: request.method,
             headers: {
                 "Content-Type": "application/json",
-                "X-API-Key": API_KEY,
+                "X-API-Key": API_KEY, // Backend layer security
+                "Authorization": authHeader, // User context security (JWT)
             },
             body: request.method !== "GET" && request.method !== "HEAD"
                 ? await request.text()

@@ -19,7 +19,7 @@ export function TextRotator({ texts, className = "" }: TextRotatorProps) {
     }, [texts.length])
 
     return (
-        <div className={`relative inline-block overflow-hidden align-top h-[1.3em] min-w-[280px] sm:min-w-[500px] text-center mx-auto ${className}`}>
+        <div className={`relative block overflow-hidden w-full h-[1.4em] text-center ${className}`}>
             <AnimatePresence mode="popLayout" initial={false}>
                 <motion.span
                     key={index}
@@ -31,7 +31,7 @@ export function TextRotator({ texts, className = "" }: TextRotatorProps) {
                         opacity: { duration: 0.4 },
                         filter: { duration: 0.4 }
                     }}
-                    className="absolute inset-0 block w-full text-accent bg-clip-text text-transparent bg-gradient-to-r from-accent to-accent/80 pb-2"
+                    className="absolute inset-0 block w-full text-accent bg-clip-text text-transparent bg-gradient-to-r from-accent to-accent/80"
                 >
                     {texts[index]}
                 </motion.span>

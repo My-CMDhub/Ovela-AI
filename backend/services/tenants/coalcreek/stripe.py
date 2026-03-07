@@ -45,7 +45,9 @@ class CoalCreekStripeService:
         customer_email: str,
         customer_name: str,
         check_in: str,
-        check_out: str
+        check_out: str,
+        success_url: str = None,
+        cancel_url: str = None
     ) -> dict:
         """
         Create Stripe Checkout Session (Payment Mode) for booking.
@@ -89,8 +91,8 @@ class CoalCreekStripeService:
                     "type": "payment"
                 },
                 expires_at=expiry_time,
-                success_url="https://coalcreekmotel.com.au/booking/success?ref=" + booking_ref, 
-                cancel_url="https://coalcreekmotel.com.au/booking/cancel?ref=" + booking_ref,
+                success_url=success_url or "https://coalcreekmotel.com.au/booking/success?ref=" + booking_ref, 
+                cancel_url=cancel_url or "https://coalcreekmotel.com.au/booking/cancel?ref=" + booking_ref,
             )
             
             logger.info(f"✅ [Coal Creek] Payment session created: {booking_ref} (Expires in 24h)")
@@ -142,8 +144,8 @@ class CoalCreekStripeService:
                     "num_nights": str(num_nights),
                     "type": "setup" # Flag to identify setup vs payment
                 },
-                success_url="https://coalcreekmotel.com.au/booking/success?ref=" + booking_ref, # Placeholder URL
-                cancel_url="https://coalcreekmotel.com.au/booking/cancel?ref=" + booking_ref,
+                success_url=success_url or "https://coalcreekmotel.com.au/booking/success?ref=" + booking_ref, 
+                cancel_url=cancel_url or "https://coalcreekmotel.com.au/booking/cancel?ref=" + booking_ref,
             )
             
             logger.info(f"✅ [Coal Creek] Setup session created: {booking_ref}")
