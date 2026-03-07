@@ -18,7 +18,7 @@ const painPoints = [
       </svg>
     ),
     title: "Calls Going to Voicemail",
-    description: "When you're on the job, calls get missed — and most callers won't leave a message",
+    description: "When you're on the job, calls get missed and most callers won't leave a message",
     stat: "67%",
     statLabel: "of callers don't call back after voicemail",
   },
@@ -29,7 +29,7 @@ const painPoints = [
       </svg>
     ),
     title: "Constant Interruptions",
-    description: "The same questions — availability, pricing, directions — pull you away from the work every day",
+    description: "The same questions: availability, pricing, directions - pull you away from the work every day",
     stat: "40+",
     statLabel: "routine calls handled per week on average",
   },
@@ -297,6 +297,19 @@ export function ProblemSolution() {
   return (
     <section className="py-16 md:py-32 px-6 bg-card overflow-hidden">
       <div className="max-w-6xl mx-auto">
+        {/* Core Insight Statement */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true }}
+          className="max-w-4xl mx-auto text-center mb-24 px-6"
+        >
+          <p className="text-xl md:text-2xl font-serif text-foreground/90 leading-relaxed text-balance">
+            Most businesses optimise staff, pricing, and schedules — but ignore call capacity. <br className="hidden md:block" />
+            <span className="text-accent italic">Ovela ensures every inquiry gets handled.</span>
+          </p>
+        </motion.div>
+
         {/* Pain Points */}
         <div className="mb-32">
           <p className="text-sm text-muted-foreground uppercase tracking-[0.2em] mb-4 text-center">The Problem</p>
@@ -307,9 +320,9 @@ export function ProblemSolution() {
             viewport={{ once: true }}
             className="font-serif text-4xl md:text-5xl text-center mb-16 text-balance"
           >
-            Stop Losing Appointments
+            When calls overlap,
             <br />
-            <span className="italic">to Missed Calls</span>
+            <span className="italic">bookings slip through.</span>
           </motion.p>
 
           <div className="grid md:grid-cols-3 gap-6">
@@ -378,9 +391,9 @@ export function ProblemSolution() {
         >
           <p className="text-sm text-muted-foreground uppercase tracking-[0.2em] mb-4 text-center">The Solution</p>
           <h2 className="font-serif text-4xl md:text-5xl text-center mb-6 text-balance">
-            From Ring to Booking
+            Every call answered.
             <br />
-            <span className="italic">In Seconds</span>
+            <span className="italic">Every booking handled.</span>
           </h2>
           <p className="text-center text-muted-foreground max-w-xl mx-auto mb-16">
             Ovela handles every call with natural conversation, turning inquiries into confirmed appointments.

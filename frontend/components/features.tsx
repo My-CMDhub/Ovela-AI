@@ -53,9 +53,9 @@ export function Features() {
           transition={{ duration: 0.6, ease: "easeOut" }}
           className="text-center mb-20"
         >
-          <h2 className="font-serif text-4xl md:text-5xl tracking-tight mb-4">A receptionist that never stops working</h2>
-          <p className="text-muted-foreground text-lg max-w-xl mx-auto">
-            Everything that used to require a staff member — answered, booked, and synced — automatically.
+          <h2 className="font-serif text-4xl md:text-5xl tracking-tight mb-4 text-balance">Call handling infrastructure for modern service businesses</h2>
+          <p className="text-muted-foreground text-lg max-w-xl mx-auto text-balance">
+            Every inbound call — hotel inquiry, trade job, clinic appointment handled automatically and synced with your systems.
           </p>
         </motion.div>
       </div>
