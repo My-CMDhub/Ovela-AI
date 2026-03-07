@@ -101,6 +101,78 @@ class EmailService:
 </body>
 </html>'''
 
+    def _client_template(self, tenant_id: str, context: dict) -> str:
+        """
+        Load custom client HTML template and inject context variables.
+        Fallback to a generic template if tenant specific file doesn't exist.
+        """
+        import os
+        template_dir = os.path.join(os.path.dirname(__file__), "templates")
+        template_path = os.path.join(template_dir, f"{tenant_id}.html")
+        
+        # Determine payment section vs simple confirmed text
+        payment_section = ""
+        payment_link = context.get("payment_link")
+        amount = context.get("amount", 0)
+        
+        if payment_link:
+            is_setup = (amount == 0)
+            btn_text = "Pay to Secure Booking" if is_setup else f"Pay ${amount} to Secure Booking"
+            
+            # White professional rounded button
+            btn_style = (
+                "display: inline-block; padding: 14px 32px; "
+                "background-color: #ffffff; color: #111827; "
+                "text-decoration: none; font-weight: 600; "
+                "border-radius: 30px; border: 1px solid #d1d5db; "
+                "box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); font-size: 15px;"
+            )
+            
+            payment_section = f'''
+            <div style="text-align: center; margin: 30px 0; padding: 30px 20px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px;">
+                <h3 style="margin-top: 0; color: #111827; font-size: 18px;">Payment Required</h3>
+                <p style="font-size: 15px; color: #4b5563; margin-bottom: 25px; line-height: 1.5;">Please complete your payment securely using the link below to finalize and secure your reservation. Standard cancellation policies apply.</p>
+                <a href="{payment_link}" style="{btn_style}">{btn_text}</a>
+            </div>
+            '''
+        
+        # Build final context payload
+        ctx = {
+            "guest_name": context.get("guest_name", "Guest"),
+            "email_content": context.get("content", "Your booking has been approved. Please review the details below."),
+            "booking_ref": context.get("booking_ref", "N/A"),
+            "room_type": context.get("room_type", "").title() + " Room",
+            "check_in": context.get("check_in", ""),
+            "check_out": context.get("check_out", ""),
+            "payment_section": payment_section
+        }
+        
+        # Load custom template if exists
+        if os.path.exists(template_path):
+            with open(template_path, 'r', encoding='utf-8') as f:
+                html = f.read()
+                # Inject variables defined as {{var_name}}
+                for key, val in ctx.items():
+                    html = html.replace(f"{{{{{key}}}}}", str(val))
+                return html
+        
+        # FATAL FALLBACK (Shouldn't happen in prod if tenants are onboarded properly)
+        return self._base_template(
+            badge="Booking Confirmed" if not payment_link else "Action Required",
+            title=f"Hi {ctx['guest_name']}",
+            content=ctx['email_content'],
+            business_name=context.get("business_name", "Motel"),
+            steps=[
+                f"<strong>Booking Ref:</strong> {ctx['booking_ref']}",
+                f"<strong>Room:</strong> {ctx['room_type']}",
+                f"<strong>Check-in:</strong> {ctx['check_in']}",
+                f"<strong>Check-out:</strong> {ctx['check_out']}"
+            ],
+            button_text="Secure Booking" if payment_link else None,
+            button_url=payment_link,
+            closing_text="Have questions? Reply to this email."
+        )
+
     async def send_email(self, to_email: Union[str, List[str]], subject: str, html_content: str, from_email: str = None):
         """
         Send an email via Zoho SMTP.
@@ -402,7 +474,8 @@ class EmailService:
         booking_reference: str,
         num_nights: int = 1,
         notification_id: str = None,
-        guest_email: str = None
+        guest_email: str = None,
+        business_name: str = "Coal Creek Motel"
     ):
         """Notify staff about a new booking that needs approval with magic links."""
         if not owner_email:
@@ -474,13 +547,13 @@ class EmailService:
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
     <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
         <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
-            <div style="padding: 40px 30px 30px; text-align: center; background: #2C5F2D;">
-                <div style="font-size: 32px; font-weight: 700; color: #ffffff;">Coal Creek Motel</div>
-                <div style="font-size: 14px; color: #ffffff99; font-weight: 500;">New Booking Request</div>
+            <div style="padding: 40px 30px 30px; text-align: center; background: #ffffff; border-bottom: 1px solid #f0f0f0;">
+                <div style="font-size: 32px; font-weight: 700; letter-spacing: -0.03em; color: #000000; margin-bottom: 8px;">{business_name}</div>
+                <div style="font-size: 14px; color: #86868b; font-weight: 500;">New Booking Request</div>
             </div>
             
             <div style="padding: 32px 30px;">
-                <div style="display: inline-block; padding: 6px 12px; background: #22c55e; color: #ffffff; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Approval Needed</div>
+                <div style="display: inline-block; padding: 6px 12px; background: #000000; color: #ffffff; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Approval Needed</div>
                 
                 <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">New booking from {guest_name}</h1>
                 
@@ -499,7 +572,7 @@ class EmailService:
                 </div>
                 
                 <div style="text-align: center; margin: 30px 0;">
-                    <a href="tel:{guest_phone}" style="display: inline-block; padding: 14px 28px; background-color: #2C5F2D; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call {guest_name}</a>
+                    <a href="tel:{guest_phone}" style="display: inline-block; padding: 14px 28px; background-color: #000000; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call {guest_name}</a>
                 </div>
                 
                 {action_buttons_html}
@@ -647,14 +720,18 @@ class EmailService:
         check_in: str,
         check_out: str,
         num_nights: int,
-        total_amount: float
+        total_amount: float,
+        business_name: str = "Motel",
+        business_phone: str = "",
+        business_location: str = "",
+        tenant_id: str = "coalcreek"
     ):
-        """Send booking confirmation to guest when staff approves booking."""
+        """Send booking confirmation to guest using CLIENT'S custom template."""
         if not guest_email:
             logger.info("No guest email - skipping confirmation")
             return False
         
-        subject = f"✅ Booking Confirmed - Coal Creek Motel ({booking_reference})"
+        subject = f"✅ Booking Confirmed - {business_name} ({booking_reference})"
         
         # Format dates nicely
         try:
@@ -666,63 +743,15 @@ class EmailService:
             check_in_fmt = check_in
             check_out_fmt = check_out
         
-        html = f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
-    <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
-        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
-            <div style="padding: 40px 30px 30px; text-align: center; background: #2C5F2D;">
-                <div style="font-size: 32px; font-weight: 700; color: #ffffff;">Coal Creek Motel</div>
-                <div style="font-size: 14px; color: #ffffff99; font-weight: 500;">Motel & Function Centre</div>
-            </div>
-            
-            <div style="padding: 32px 30px;">
-                <div style="display: inline-block; padding: 6px 12px; background: #22c55e; color: #ffffff; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Booking Confirmed</div>
-                
-                <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">Your booking is confirmed, {guest_name}!</h1>
-                
-                <p style="font-size: 16px; color: #86868b; margin-bottom: 24px;">Thank you for choosing Coal Creek Motel. We look forward to welcoming you!</p>
-                
-                <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
-                    <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
-                        <tr><td style="padding: 8px 0; font-size: 13px; color: #86868b;">Booking Reference</td></tr>
-                        <tr><td style="padding: 0 0 16px; font-size: 20px; color: #1d1d1f; font-weight: 700;">{booking_reference}</td></tr>
-                        
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Room:</strong> {room_type.title()} Room</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-in:</strong> {check_in_fmt}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-out:</strong> {check_out_fmt}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Nights:</strong> {num_nights}</td></tr>
-                        <tr><td style="padding: 16px 0 8px; font-size: 20px; color: #1d1d1f; font-weight: 700; border-top: 1px solid #e5e5e7;">Total: ${total_amount}</td></tr>
-                    </table>
-                </div>
-                
-                <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 16px; margin: 24px 0;">
-                    <p style="margin: 0; font-size: 14px; color: #856404;">
-                        <strong>Check-in time:</strong> From 2:00 PM<br>
-                        <strong>Check-out time:</strong> By 10:00 AM
-                    </p>
-                </div>
-                
-                <div style="text-align: center; margin: 30px 0;">
-                    <a href="tel:0492897718" style="display: inline-block; padding: 14px 28px; background-color: #2C5F2D; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call Us: 0492 897 718</a>
-                </div>
-                
-                <p style="font-size: 14px; color: #86868b; text-align: center;">
-                    8444 South Gippsland Highway, Korumburra VIC 3950
-                </p>
-            </div>
-            
-            <div style="padding: 30px; text-align: center; background: #f9f9fa; border-top: 1px solid #f0f0f0;">
-                <p style="font-size: 12px; color: #86868b;">Powered by Ovela AI</p>
-            </div>
-        </div>
-    </div>
-</body>
-</html>'''
+        html = self._client_template(tenant_id, {
+            "guest_name": guest_name,
+            "content": f"Thank you for choosing {business_name}. Your booking has been fully confirmed and no further action is required.",
+            "booking_ref": booking_reference,
+            "room_type": room_type,
+            "check_in": check_in_fmt,
+            "check_out": check_out_fmt,
+            "business_name": business_name
+        })
         
         sender = settings.MAIL_BOOKINGS
         success = await self.send_email(guest_email, subject, html, from_email=sender)
@@ -773,16 +802,16 @@ class EmailService:
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
     <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
         <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
-            <div style="padding: 40px 30px 30px; text-align: center; background: #22c55e;">
+            <div style="padding: 40px 30px 30px; text-align: center; background: #ffffff; border-bottom: 1px solid #f0f0f0;">
                 <div style="font-size: 48px; margin-bottom: 8px;">💰</div>
-                <div style="font-size: 24px; font-weight: 700; color: #ffffff;">Payment Confirmed</div>
-                <div style="font-size: 14px; color: #ffffff99; font-weight: 500; margin-top: 4px;">Ready to add to Update247</div>
+                <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: #000000;">Payment Confirmed</div>
+                <div style="font-size: 14px; color: #86868b; font-weight: 500; margin-top: 4px;">Ready to process</div>
             </div>
             
             <div style="padding: 32px 30px;">
                 <h1 style="font-size: 20px; font-weight: 700; color: #1d1d1f; margin-bottom: 16px;">Booking Paid & Confirmed</h1>
                 
-                <p style="font-size: 15px; color: #86868b; margin-bottom: 24px;">The customer has completed payment. This booking is ready to be added to Update247.</p>
+                <p style="font-size: 15px; color: #86868b; margin-bottom: 24px;">The customer has completed payment. This booking is ready to be added to your CRM.</p>
                 
                 <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
                     <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
@@ -799,9 +828,9 @@ class EmailService:
                     </table>
                 </div>
                 
-                <div style="background: #dbeafe; border: 1px solid #3b82f6; border-radius: 8px; padding: 16px; margin: 24px 0;">
-                    <p style="margin: 0; font-size: 14px; color: #1e40af;">
-                        <strong>✅ Next Step:</strong> Add this booking to Update247 CRM
+                <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 8px; padding: 16px; margin: 24px 0;">
+                    <p style="margin: 0; font-size: 14px; color: #1d1d1f;">
+                        <strong>✅ Next Step:</strong> Add this booking to your PMS/CRM
                     </p>
                 </div>
                 
@@ -826,275 +855,54 @@ class EmailService:
         
         return success
 
-    # ==================== COAL CREEK MOTEL TEMPLATES ====================
-    
-    def _coalcreek_template(
+    async def send_payment_link(
         self,
-        title: str,
-        content: str,
-        details: list = None,
-        button_text: str = None,
-        button_url: str = None,
-        action_buttons_html: str = ""
-    ) -> str:
-        """
-        Generate Coal Creek Motel branded email HTML.
-        Colors: Rustic green (#2C5F2D primary, #97BC62 accent)
-        """
-        details_html = ""
-        if details:
-            details_html = f'''
-            <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
-                <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
-                    {"".join([f'<tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;">{detail}</td></tr>' for detail in details])}
-                </table>
-            </div>
-            '''
-        
-        button_html = ""
-        if button_text and button_url:
-            button_html = f'''
-            <div style="text-align: center; margin: 30px 0;">
-                <a href="{button_url}" style="display: inline-block; padding: 14px 28px; background-color: #2C5F2D; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">{button_text}</a>
-            </div>
-            '''
-        
-        return f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
-    <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
-        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
-            <div style="padding: 40px 30px 30px; text-align: center; background: #2C5F2D;">
-                <img src="[LOGO_URL_PLACEHOLDER]" alt="Coal Creek Motel" style="max-width: 150px; margin-bottom: 10px;" onerror="this.style.display='none'">
-                <div style="font-size: 28px; font-weight: 700; color: #ffffff;">Coal Creek Motel</div>
-                <div style="font-size: 14px; color: #ffffff99; font-weight: 500;">South Gippsland, Victoria</div>
-            </div>
-            
-            <div style="padding: 32px 30px;">
-                <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">{title}</h1>
-                
-                <p style="font-size: 16px; color: #1d1d1f; margin-bottom: 20px;">{content}</p>
-                
-                {details_html}
-                
-                {button_html}
-                
-                {action_buttons_html}
-            </div>
-            
-            <div style="padding: 30px; text-align: center; background: #f9f9fa; border-top: 1px solid #f0f0f0;">
-                <p style="font-size: 12px; color: #86868b; margin-bottom: 4px;">
-                    8444 South Gippsland Highway, Korumburra VIC 3950
-                </p>
-                <p style="font-size: 12px; color: #86868b;">
-                    📞 0492 897 718 | Powered by Ovela AI
-                </p>
-            </div>
-        </div>
-    </div>
-</body>
-</html>'''
-
-    async def send_coalcreek_booking_approval_request(
-        self,
-        staff_email: str,
+        to_email: str,
         guest_name: str,
-        guest_phone: str,
-        check_in: str,
-        check_out: str,
-        room_type: str,
-        total_amount: float,
-        booking_reference: str,
-        num_nights: int = 1,
-        notification_id: str = None,
-        guest_email: str = None
-    ):
-        """Send Coal Creek branded booking approval request to staff."""
-        if not staff_email:
-            staff_email = "staff@placeholder.com"  # Placeholder
-        
-        subject = f"📋 NEW BOOKING: {guest_name} - {room_type.title()} Room"
-        
-        # Format dates
-        try:
-            ci = datetime.strptime(check_in, "%Y-%m-%d")
-            co = datetime.strptime(check_out, "%Y-%m-%d")
-            check_in_fmt = ci.strftime("%a, %d %b")
-            check_out_fmt = co.strftime("%a, %d %b")
-        except:
-            check_in_fmt = check_in
-            check_out_fmt = check_out
-        
-        # Build action buttons if notification ID provided
-        action_buttons_html = ""
-        if notification_id:
-            from services.magic_links import generate_action_url
-            
-            approve_url = generate_action_url(notification_id, "approve")
-            reject_url = generate_action_url(notification_id, "reject")
-            
-            action_buttons_html = f'''
-            <div style="margin: 32px 0; padding: 24px; background: #f9f9fa; border-radius: 12px; border: 1px solid #e5e5e7;">
-                <div style="font-size: 14px; font-weight: 700; color: #1d1d1f; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px;">Quick Actions</div>
-                
-                <div style="margin-bottom: 12px;">
-                    <a href="{approve_url}" style="display: inline-block; padding: 12px 24px; background: #22c55e; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">✅ Approve Booking</a>
-                </div>
-                
-                <div style="margin-bottom: 12px;">
-                    <a href="{reject_url}" style="display: inline-block; padding: 12px 24px; background: #ef4444; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">❌ Reject - Call Guest</a>
-                </div>
-                
-                <p style="margin-top: 16px; font-size: 12px; color: #86868b;">Links expire in 48 hours.</p>
-            </div>
-            
-            <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-top: 16px;">
-                <span style="font-size: 14px; color: #856404;">⚠️ <strong>Reminder:</strong> Add to Update247 after approving!</span>
-            </div>
-            '''
-        
-        details = [
-            f"<strong>Guest:</strong> {guest_name}",
-            f"<strong>Phone:</strong> <a href='tel:{guest_phone}' style='color: #2C5F2D;'>{guest_phone}</a>",
-            f"<strong>Email:</strong> {guest_email or 'Not provided'}",
-            f"<strong>Room:</strong> {room_type.title()} Room",
-            f"<strong>Check-in:</strong> {check_in_fmt}",
-            f"<strong>Check-out:</strong> {check_out_fmt}",
-            f"<strong>Nights:</strong> {num_nights}",
-            f"<strong style='font-size: 18px;'>Total: ${total_amount}</strong>",
-            f"<span style='color: #86868b;'>Ref: {booking_reference}</span>"
-        ]
-        
-        html = self._coalcreek_template(
-            title=f"New booking from {guest_name}",
-            content="A guest has requested a room. Please review and approve or reject.",
-            details=details,
-            button_text=f"📞 Call {guest_name}",
-            button_url=f"tel:{guest_phone}",
-            action_buttons_html=action_buttons_html
-        )
-        
-        sender = settings.MAIL_BOOKINGS
-        return await self.send_email(staff_email, subject, html, from_email=sender)
-
-    async def send_coalcreek_guest_confirmation(
-        self,
-        guest_email: str,
-        guest_name: str,
-        booking_reference: str,
+        booking_ref: str,
+        payment_link: str,
         room_type: str,
         check_in: str,
         check_out: str,
-        num_nights: int,
-        total_amount: float
+        amount: float,
+        business_name: str = "Motel",
+        business_phone: str = "",
+        business_location: str = "",
+        tenant_id: str = "coalcreek"
     ):
-        """Send Coal Creek branded booking confirmation to guest."""
-        if not guest_email:
-            logger.info("No guest email - skipping Coal Creek confirmation")
+        """Send payment or card setup link to guest using CLIENT'S custom template."""
+        if not to_email:
             return False
         
-        subject = f"✅ Booking Confirmed - Coal Creek Motel ({booking_reference})"
+        is_setup = (amount == 0)
+        subject_prefix = "Payment Required"
+        subject = f"{subject_prefix} - {business_name} ({booking_ref})"
         
-        # Format dates
         try:
             ci = datetime.strptime(check_in, "%Y-%m-%d")
             co = datetime.strptime(check_out, "%Y-%m-%d")
             check_in_fmt = ci.strftime("%A, %d %B %Y")
             check_out_fmt = co.strftime("%A, %d %B %Y")
         except:
-            check_in_fmt = check_in
-            check_out_fmt = check_out
+            check_in_fmt, check_out_fmt = check_in, check_out
+            
+        action_text = "To confirm your reservation, please securely save your card details via the button below. (No charge is made today)." if is_setup else "To secure your room, please complete payment using the secure link below."
+        content = f"Good news! Your booking request has been approved. {action_text}"
         
-        details = [
-            f"<strong>Booking Reference:</strong> <span style='font-size: 18px; font-weight: 700;'>{booking_reference}</span>",
-            f"<strong>Room:</strong> {room_type.title()} Room",
-            f"<strong>Check-in:</strong> {check_in_fmt} (from 2:00 PM)",
-            f"<strong>Check-out:</strong> {check_out_fmt} (by 10:00 AM)",
-            f"<strong>Nights:</strong> {num_nights}",
-            f"<strong style='font-size: 18px;'>Total: ${total_amount}</strong>"
-        ]
-        
-        html = self._coalcreek_template(
-            title=f"Your booking is confirmed, {guest_name}!",
-            content="Thank you for choosing Coal Creek Motel. We look forward to welcoming you to South Gippsland!",
-            details=details,
-            button_text="📞 Call Us: 0492 897 718",
-            button_url="tel:0492897718"
-        )
+        html = self._client_template(tenant_id, {
+            "guest_name": guest_name,
+            "content": content,
+            "booking_ref": booking_ref,
+            "room_type": room_type,
+            "check_in": check_in_fmt,
+            "check_out": check_out_fmt,
+            "amount": amount,
+            "payment_link": payment_link,
+            "business_name": business_name
+        })
         
         sender = settings.MAIL_BOOKINGS
-        success = await self.send_email(guest_email, subject, html, from_email=sender)
-        
-        if success:
-            logger.info(f"Coal Creek guest confirmation sent to {guest_email} ({booking_reference})")
-        
-        return success
-
-    async def send_coalcreek_payment_notification(
-        self,
-        staff_email: str,
-        booking_reference: str,
-        customer_name: str,
-        customer_email: str,
-        room_type: str,
-        check_in: str,
-        check_out: str,
-        num_nights: int,
-        amount_paid: float
-    ):
-        """Notify Coal Creek staff when payment is received."""
-        if not staff_email:
-            staff_email = "staff@placeholder.com"
-        
-        subject = f"💰 Payment Received - Booking {booking_reference}"
-        
-        # Format dates
-        try:
-            ci = datetime.strptime(check_in, "%Y-%m-%d")
-            co = datetime.strptime(check_out, "%Y-%m-%d")
-            check_in_fmt = ci.strftime("%A, %d %B %Y")
-            check_out_fmt = co.strftime("%A, %d %B %Y")
-        except:
-            check_in_fmt = check_in
-            check_out_fmt = check_out
-        
-        details = [
-            f"<strong>Booking Reference:</strong> <span style='font-size: 18px; font-weight: 700;'>{booking_reference}</span>",
-            f"<strong>Customer:</strong> {customer_name}",
-            f"<strong>Email:</strong> {customer_email}",
-            f"<strong>Room:</strong> {room_type.title()} Room",
-            f"<strong>Check-in:</strong> {check_in_fmt}",
-            f"<strong>Check-out:</strong> {check_out_fmt}",
-            f"<strong>Nights:</strong> {num_nights}",
-            f"<strong style='font-size: 22px; color: #22c55e;'>Amount Paid: ${amount_paid}</strong>"
-        ]
-        
-        action_html = '''
-        <div style="background: #dbeafe; border: 1px solid #3b82f6; border-radius: 8px; padding: 16px; margin: 24px 0;">
-            <p style="margin: 0; font-size: 14px; color: #1e40af;">
-                <strong>✅ Next Step:</strong> Add this booking to Update247 CRM
-            </p>
-        </div>
-        '''
-        
-        html = self._coalcreek_template(
-            title="Booking Paid & Confirmed",
-            content="The customer has completed payment. This booking is ready to be added to Update247.",
-            details=details,
-            action_buttons_html=action_html
-        )
-        
-        sender = settings.MAIL_BOOKINGS
-        success = await self.send_email(staff_email, subject, html, from_email=sender)
-        
-        if success:
-            logger.info(f"Coal Creek payment notification sent to {staff_email} ({booking_reference})")
-        
-        return success
+        return await self.send_email(to_email, subject, html, from_email=sender)
 
 
 email_service = EmailService()
