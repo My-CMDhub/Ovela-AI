@@ -57,6 +57,7 @@ class TurnTiming:
             "tool_call": self.has_function_call,
             "vad_to_stt_ms": self._delta(self.user_vad, self.stt_complete),
             "stt_to_first_token_ms": self._delta(self.stt_complete, self.llm_first_token),
+            "stt_to_first_audio_ms": self._delta(self.stt_complete, self.first_audio_out),
             "first_token_to_audio_ms": self._delta(self.llm_first_token, self.first_audio_out),
             "total_user_to_audio_ms": self._delta(self.user_vad, self.first_audio_out),
             "total_user_to_first_token_ms": self._delta(self.user_vad, self.llm_first_token),
@@ -74,7 +75,7 @@ class TurnTiming:
         parts = [f"T{s['turn']}"]
         if s["tool_call"]:
             parts.append("TOOL")
-        for key in ("vad_to_stt_ms", "stt_to_first_token_ms",
+        for key in ("vad_to_stt_ms", "stt_to_first_token_ms", "stt_to_first_audio_ms",
                      "first_token_to_audio_ms", "total_user_to_audio_ms"):
             v = s.get(key, -1)
             if v >= 0:
@@ -232,10 +233,12 @@ class LatencyTracker:
         if normal:
             avg_e2e = _avg(normal, "user_vad", "first_audio_out")
             avg_ttft = _avg(normal, "stt_complete", "llm_first_token")
-            parts.append(f"normal(n={len(normal)}, avg_e2e={avg_e2e}ms, avg_ttft={avg_ttft}ms)")
+            avg_stt_audio = _avg(normal, "stt_complete", "first_audio_out")
+            parts.append(f"normal(n={len(normal)}, avg_e2e={avg_e2e}ms, avg_ttft={avg_ttft}ms, avg_stt_audio={avg_stt_audio}ms)")
         if tool:
             avg_e2e = _avg(tool, "user_vad", "first_audio_out")
             avg_exec = _avg(tool, "func_request", "func_exec_done")
-            parts.append(f"tool(n={len(tool)}, avg_e2e={avg_e2e}ms, avg_exec={avg_exec}ms)")
+            avg_stt_audio = _avg(tool, "stt_complete", "first_audio_out")
+            parts.append(f"tool(n={len(tool)}, avg_e2e={avg_e2e}ms, avg_exec={avg_exec}ms, avg_stt_audio={avg_stt_audio}ms)")
 
         logger.info(f"⏱️ CALL LATENCY SUMMARY: {' | '.join(parts)}")
