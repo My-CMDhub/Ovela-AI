@@ -5,7 +5,7 @@ import { motion, useScroll, useTransform, useMotionValueEvent, type MotionValue 
 import { Search } from "lucide-react"
 import Image from "next/image"
 
-const FULL_TEXT = "Handle every booking call — even when they overlap"
+const FULL_TEXT = "Handle every booking call even when they overlap"
 
 // Studio images for the reveal
 const studioImages = [
@@ -199,7 +199,7 @@ export function StudioImagery() {
         <div className="hidden md:block absolute inset-0 z-20 pointer-events-none">
 
           {/* Centered Content */}
-          <div className="absolute top-[42%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-xl px-4 pointer-events-auto">
+          <div className="absolute top-[42%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-2xl px-4 pointer-events-auto">
             <SearchSection
               isAutopilot={isAutopilot}
               searchBarOpacity={searchBarOpacity}

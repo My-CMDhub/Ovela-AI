@@ -5,23 +5,23 @@ import { motion, useMotionValue, useSpring, AnimatePresence } from "framer-motio
 import { useState, useEffect } from "react"
 import { EcosystemLoop } from "@/components/ecosystem-loop"
 import { VoiceDemoForm } from "@/components/VoiceDemoForm"
-import { ArrowRight, X, Check, ShieldCheck } from "lucide-react"
+import { ArrowRight, X, Check, ShieldCheck, Activity } from "lucide-react"
 import Link from "next/link"
 import Image from "next/image"
 
-// Recent calls handled by AI (industry-agnostic)
-const recentCalls = [
-  { id: 1, caller: "David M.", type: "Booking Request", time: "10:02 AM", status: "synced", avatar: "D" },
-  { id: 2, caller: "Sarah K.", type: "Availability Check", time: "10:15 AM", status: "responded", avatar: "S" },
-  { id: 3, caller: "James L.", type: "Quote Request", time: "10:28 AM", status: "forwarded", avatar: "J" },
-  { id: 4, caller: "Emma R.", type: "Appointment", time: "10:45 AM", status: "synced", avatar: "E" },
-  { id: 5, caller: "Michael T.", type: "Callback Request", time: "11:02 AM", status: "pending", avatar: "M" },
+// Action Logs for the AI Receptionist mockup
+const actionLogs = [
+  { id: 1, action: "Booking Created", time: "10:02 AM", summary: "Booked Initial Consult for David M.", duration: "2m 15s" },
+  { id: 2, action: "FAQ Answered", time: "10:15 AM", summary: "Answered parking policy question.", duration: "45s" },
+  { id: 3, action: "Call Transferred", time: "10:28 AM", summary: "Escalated urgent issue to Manager.", duration: "1m 30s" },
+  { id: 4, action: "Workflow Executed", time: "10:45 AM", summary: "Rescheduled Sarah's 2PM to 4PM.", duration: "1m 10s" },
+  { id: 5, action: "Availability Check", time: "11:02 AM", summary: "Checked Dec 12th availability.", duration: "3m 45s" },
 ]
 
 const stats = [
   { label: "Calls Handled", value: "47", change: "+12" },
-  { label: "Bookings Made", value: "23", change: "+8" },
-  { label: "Hours Saved", value: "6.5h", change: "+2h" },
+  { label: "Successful Outcomes", value: "41", change: "+8" },
+  { label: "Time Saved", value: "6.5h", change: "+2h" },
 ]
 
 function FloatingParticles() {
@@ -318,7 +318,7 @@ export function Hero() {
 
   useEffect(() => {
     const callTimer = setInterval(() => {
-      setActiveBooking((prev) => (prev + 1) % recentCalls.length)
+      setActiveBooking((prev) => (prev + 1) % actionLogs.length)
     }, 2500)
     return () => clearInterval(callTimer)
   }, [])
@@ -654,53 +654,43 @@ export function Hero() {
                       ))}
                   </div>
 
-                  {/* Recent Call Activity */}
+                  {/* Live Action Log */}
                   <div className="bg-card rounded-xl border border-border/50 overflow-hidden shadow-sm">
                     <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between">
-                      <h3 className="font-medium text-sm">Recent Calls</h3>
+                      <h3 className="font-medium text-sm">Live Action Log</h3>
                       <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-                        5 handled
+                        Live Sync
                       </span>
                     </div>
                     <div className="divide-y divide-border/30">
-                      {
-                        recentCalls.slice(0, 5).map((call, i) => (
-                          <motion.div key={call.id} className="relative">
-                            <motion.div
-                              animate={{
-                                backgroundColor: activeBooking === i ? "rgba(200, 180, 168, 0.15)" : "transparent",
-                              }}
-                              transition={{ duration: 0.3 }}
-                              className="absolute inset-0"
-                            />
-                            <div className="relative px-4 py-2.5 flex items-center justify-between">
-                              <div className="flex items-center gap-3">
-                                <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-xs font-medium">
-                                  {call.avatar}
-                                </div>
-                                <div>
-                                  <p className="text-xs font-medium">{call.caller}</p>
-                                  <p className="text-[10px] text-muted-foreground">{call.type}</p>
-                                </div>
+                      {actionLogs.slice(0, 5).map((log, i) => (
+                        <motion.div key={log.id} className="relative">
+                          <motion.div
+                            animate={{
+                              backgroundColor: activeBooking === i ? "rgba(200, 180, 168, 0.15)" : "transparent",
+                            }}
+                            transition={{ duration: 0.3 }}
+                            className="absolute inset-0"
+                          />
+                          <div className="relative px-4 py-2 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="w-6 h-6 rounded bg-accent/10 flex items-center justify-center text-accent">
+                                <Activity className="w-3.5 h-3.5" />
                               </div>
-                              <div className="text-right">
-                                <p className="text-xs">{call.time}</p>
-                                <span
-                                  className={`text-[9px] px-1.5 py-0.5 rounded-full ${call.status === "synced"
-                                    ? "bg-green-100 text-green-700"
-                                    : call.status === "responded"
-                                      ? "bg-blue-100 text-blue-700"
-                                      : call.status === "forwarded"
-                                        ? "bg-purple-100 text-purple-700"
-                                        : "bg-amber-100 text-amber-700"
-                                    }`}
-                                >
-                                  {call.status}
-                                </span>
+                              <div>
+                                <p className="text-xs font-medium">{log.action}</p>
+                                <p className="text-[10px] text-muted-foreground">{log.summary}</p>
                               </div>
                             </div>
-                          </motion.div>
-                        ))}
+                            <div className="text-right flex flex-col items-end">
+                              <p className="text-xs text-muted-foreground">{log.time}</p>
+                              <span className="text-[9px] px-1 py-0.5 mt-0.5 rounded bg-muted text-muted-foreground">
+                                {log.duration}
+                              </span>
+                            </div>
+                          </div>
+                        </motion.div>
+                      ))}
                     </div>
                   </div>
                 </div>

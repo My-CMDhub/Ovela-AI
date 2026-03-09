@@ -334,10 +334,10 @@ export function ProblemSolution() {
                 viewport={{ once: true }}
                 transition={{ duration: 0.6, delay: index * 0.15 }}
                 onMouseEnter={() => setActivePain(index)}
-                className="group relative"
+                className="group relative h-full flex flex-col"
               >
                 <div
-                  className={`relative bg-background border rounded-2xl p-8 transition-all duration-500 overflow-hidden ${activePain === index ? "border-accent shadow-lg shadow-accent/10" : "border-border/50"
+                  className={`relative bg-background border rounded-2xl p-8 transition-all duration-500 overflow-hidden flex-1 flex flex-col ${activePain === index ? "border-accent shadow-lg shadow-accent/10" : "border-border/50"
                     }`}
                 >
                   <motion.div
@@ -350,9 +350,9 @@ export function ProblemSolution() {
                   </motion.div>
 
                   <h3 className="font-serif text-2xl mb-2">{pain.title}</h3>
-                  <p className="text-muted-foreground mb-6">{pain.description}</p>
+                  <p className="text-muted-foreground mb-6 flex-1">{pain.description}</p>
 
-                  <div className="pt-6 border-t border-border/30">
+                  <div className="pt-6 border-t border-border/30 mt-auto">
                     <div className="flex items-end gap-2">
                       <motion.span
                         animate={{ opacity: activePain === index ? 1 : 0.5 }}
