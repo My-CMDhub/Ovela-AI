@@ -169,7 +169,6 @@ export function Contact() {
           </div>
           <h2 className="font-serif text-4xl md:text-5xl tracking-tight mb-4 text-black dark:text-white transition-colors">Join the Exclusive Waitlist</h2>
           <p className="text-zinc-600 dark:text-zinc-400 text-lg transition-colors text-balance">
-            Ovela removes the call-capacity ceiling by handling overlapping inbound calls automatically. <br className="hidden sm:block" />
             Secure your spot for the next intake. Priority access for early applicants.
           </p>
         </motion.div>
