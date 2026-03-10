@@ -478,10 +478,10 @@ export function ProblemSolution() {
                   <p className="text-sm text-muted-foreground">{item.description}</p>
                 </div>
 
-                <div className={`rounded-xl border transition-all duration-500 ${activeStep === index
+                <div className={`rounded-xl border transition-all duration-500 flex flex-col justify-center min-h-[320px] overflow-hidden ${activeStep === index
                   ? "bg-accent/5 border-accent/20 shadow-lg shadow-accent/5"
                   : "bg-muted/20 border-white/5 opacity-70"
-                  } p-6 mb-4`}>
+                  } p-4 sm:p-6 mb-4`}>
                   {item.mockup(activeStep === index)}
                 </div>
               </div>

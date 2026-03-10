@@ -491,19 +491,17 @@ export function LivePreview() {
                 animate={{ opacity: 1, x: 0, y: 0 }}
                 exit={{ opacity: 0, scale: 0.9 }}
                 transition={{ duration: 0.8, delay: 1.5 }}
-                className="absolute hidden lg:flex flex-col items-end z-2 pointer-events-none"
-                style={{
-                  top: "80%",
-                  right: "calc(50% + 125px)" // Position outside the left edge of the phone
-                }}
+                className="absolute flex flex-col items-start lg:items-end z-50 lg:z-1 pointer-events-none
+                           top-[86%] left-[1%] sm:left-[8%]
+                           lg:top-[80%] lg:left-auto lg:right-[calc(50%+125px)]"
               >
-                <div className="bg-accent/10 backdrop-blur-md text-foreground/90 px-4 py-2 rounded-2xl border border-border shadow-xl text-sm font-medium -rotate-[4deg] relative top-20 right-20">
+                <div className="bg-accent/90 lg:bg-accent/10 backdrop-blur-md text-white lg:text-foreground/90 px-3 py-1.5 lg:px-4 lg:py-2 rounded-2xl border border-white/20 lg:border-border shadow-2xl lg:shadow-xl text-xs lg:text-sm font-medium -rotate-[2deg] relative top-20 left-1 lg:top-20 lg:left-auto lg:right-20">
                   Slide to hear demo 📞
                 </div>
                 <img
                   src="/images/icons8-curly-arrow.gif"
                   alt="Point arrow"
-                  className="w-20 h-20 dark:invert opacity-70 -scale-x-100 rotate-[4deg]"
+                  className="w-16 h-16 lg:w-20 lg:h-20 dark:invert opacity-90 lg:opacity-70 -scale-x-100 rotate-[1deg] lg:rotate-[4deg]"
                 />
               </motion.div>
             )}

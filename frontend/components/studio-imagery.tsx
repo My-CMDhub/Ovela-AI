@@ -80,9 +80,12 @@ export function StudioImagery() {
     if (latest > 0.99 && !isAutopilot) {
       setIsAutopilot(true)
 
-      const viewportHeight = window.innerHeight
-      const scrollAdjustment = viewportHeight * 3.0
-      window.scrollBy(0, -scrollAdjustment)
+      // Only apply scroll adjustment on desktop. Mobile browsers jump unpredictably.
+      if (window.innerWidth >= 768) {
+        const viewportHeight = window.innerHeight
+        const scrollAdjustment = viewportHeight * 3.0
+        window.scrollBy(0, -scrollAdjustment)
+      }
     }
   })
 
@@ -120,7 +123,7 @@ export function StudioImagery() {
   return (
     <motion.section
       ref={containerRef}
-      className={`relative ${isAutopilot ? 'h-[100vh]' : 'h-[400vh]'}`}
+      className={`relative ${isAutopilot ? 'md:h-[100vh] h-[400vh]' : 'h-[400vh]'}`}
       aria-label="Trusted by Modern Service Businesses"
     >
       <div className="sticky top-0 h-screen w-full overflow-hidden bg-gradient-to-b from-background via-background to-muted/20">
@@ -391,7 +394,7 @@ function SearchSection({
         className="mt-10 md:mt-0 mb-4 sm:mb-6 md:mb-8 text-center"
       >
         <h2 className="text-balance text-2xl sm:text-3xl font-semibold tracking-tight text-foreground md:text-4xl lg:text-5xl">
-          Grow bookings<br className="hidden sm:block" />
+          Grow bookings <br className="hidden sm:block" />
           without increasing reception workload.
         </h2>
         <p className="mt-2 sm:mt-3 md:mt-3 text-sm md:text-base text-muted-foreground max-w-lg mx-auto">

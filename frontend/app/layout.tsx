@@ -156,7 +156,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body className={`font-sans antialiased ${dmSans.variable} ${playfair.variable}`}>
+      <body className={`font-sans antialiased ${dmSans.variable} ${playfair.variable} overflow-x-hidden`}>
         {children}
         <Analytics />
         <SpeedInsights />
