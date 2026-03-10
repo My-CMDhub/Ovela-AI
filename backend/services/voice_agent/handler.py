@@ -473,7 +473,7 @@ class VoiceAgentHandler:
                 "type": "personal_assistant",
                 "voice_settings": {
                     "model": "nova-3",
-                    "voice_id": "3e1ed423-17e5-4773-b87c-25b031106e41", 
+                    "voice_id": "a7b8d8fa-f6e5-4908-900e-0c11d1d82519", 
                     "speed": 1.0
                 }
             }

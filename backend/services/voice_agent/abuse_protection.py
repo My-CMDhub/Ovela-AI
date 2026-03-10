@@ -148,8 +148,12 @@ class AbuseProtection:
         if not self.call_start_time:
             return {"action": None}
         
-        soft_seconds = ABUSE_CONFIG["soft_warning_minutes"] * 60
-        hard_seconds = ABUSE_CONFIG["hard_cap_minutes"] * 60
+        if self.tenant_id == "dhruv_personal":
+            soft_seconds = 1.5 * 60
+            hard_seconds = 2.0 * 60
+        else:
+            soft_seconds = ABUSE_CONFIG["soft_warning_minutes"] * 60
+            hard_seconds = ABUSE_CONFIG["hard_cap_minutes"] * 60
         
         elapsed = time.time() - self.call_start_time
         
@@ -158,7 +162,9 @@ class AbuseProtection:
             minutes = int(elapsed / 60)
             logger.info(f"🚫 Hard time cap reached at {minutes} minutes")
             
-            if ABUSE_CONFIG.get("human_escalation"):
+            if self.tenant_id == "dhruv_personal":
+                farewell = "I've hit my time limit, but I've noted down your message. Dhruv will get back to you soon. Goodbye!"
+            elif ABUSE_CONFIG.get("human_escalation"):
                 farewell = (
                     "I've really enjoyed helping you, but due to our call time guidelines, "
                     "I need to wrap up now. Don't worry - I'm logging this conversation and "
@@ -185,12 +191,16 @@ class AbuseProtection:
             minutes = int(elapsed / 60)
             logger.info(f"⏱️ Soft time warning at {minutes} minutes")
             
-            return {
-                "action": "soft_warning",
-                "message": (
+            if self.tenant_id == "dhruv_personal":
+                message = "Just to let you know, we've hit the two-minute mark. If you have any last details to add, let me know quickly."
+            else:
+                message = (
                     "Just to let you know, we've been chatting for a while. "
                     "Is there anything else about motel or booking I can help wrap up quickly?"
                 )
+            return {
+                "action": "soft_warning",
+                "message": message
             }
         
         return {"action": None}
