@@ -28,7 +28,14 @@ export const metadata: Metadata = {
   },
   description: "Ovela answers your calls, checks live availability, and books directly into your software — 24/7. No missed bookings, no interruptions. Australian AI receptionist. Free 21-day trial.",
   keywords: [
-    "AI receptionist Australia",
+    "AI receptionist for hotels",
+    "hotel ai receptionist",
+    "missed hotel calls",
+    "hotel phone answering service",
+    "24/7 hotel reception service",
+    "hotel call center solution",
+    "hotel answering service australia",
+    "hotel answering service melbourne",
     "automated phone answering service Australia",
     "virtual receptionist Australia",
     "AI receptionist for small business",
@@ -39,7 +46,8 @@ export const metadata: Metadata = {
     "Cliniko phone answering automation",
     "phone answering service hospitality Australia",
     "AI phone answering 24 7",
-    "automated booking service Australia"
+    "automated booking service Australia",
+
   ],
   authors: [{ name: "Ovela AI" }],
   creator: "Ovela AI",
