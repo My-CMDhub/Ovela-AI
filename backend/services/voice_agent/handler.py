@@ -254,35 +254,57 @@ class VoiceAgentHandler:
     
     def _get_llm_config(self) -> dict:
         """
-        Get LLM configuration.
-        Defaults to GPT-4.1-mini (User Request).
-        Optional: Claude 3 Haiku via USE_CLAUDE env var.
+        Get LLM configuration for Deepgram Voice Agent think block.
+
+        Priority (highest → lowest):
+          1. voice_settings.llm_model  in tenant DB config  ← preferred
+          2. LLM_MODEL env var                              ← Heroku fallback
+          3. gpt-4.1-mini default
+
+        All OpenAI, Anthropic, and Google models are managed natively by
+        Deepgram — NO separate API key is needed for any of them.
+
+        Supported model IDs (as of March 2026):
+          OpenAI   : gpt-4.1-mini (default), gpt-4.1-nano, gpt-4o-mini
+          Anthropic: claude-3-5-haiku-latest  (Standard — lowest latency)
+                     claude-4-5-haiku-latest  (Standard — newer haiku)
+                     claude-sonnet-4-5        (Advanced — best tool calling)
+          Google   : gemini-2.5-flash, gemini-2.0-flash
+
+        Provider type is inferred automatically from the model name prefix.
+
+        DB example (add to voice_settings JSON in Appwrite):
+          "llm_model": "claude-3-5-haiku-latest"
         """
-        use_claude = os.getenv("USE_CLAUDE", "false").lower() == "true"
-        
-        # Claude 3 Haiku (Optional - High Speed)
-        if use_claude:
-            anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
-            if anthropic_key:
-                logger.info("🧠 Using Anthropic Claude 3 Haiku")
-                return {
-                    "provider": {
-                        "type": "anthropic",
-                        "model": "claude-3-haiku-20240307",
-                    },
-                    "prompt": self._get_active_prompt(),
-                    "functions": self._get_active_functions()
-                }
-            else:
-                logger.error("❌ ANTHROPIC_API_KEY not set - falling back to GPT-4.1-mini")
-        
-        # Fallback/Default to OpenAI gpt-4.1-mini (Primary)
-        model = "gpt-4o-mini" if self.tenant_id == "dhruv_personal" else "gpt-4.1-mini"
-        logger.info(f"🧠 Using OpenAI {model} (Primary)")
-        
+        voice_settings = self.tenant_config.get("voice_settings", {})
+
+        # 1. Tenant DB config (per-tenant, hot-swappable without redeploy)
+        llm_model = voice_settings.get("llm_model", "").strip()
+
+        # 2. Global env var fallback (Heroku config var)
+        if not llm_model:
+            llm_model = os.getenv("LLM_MODEL", "").strip()
+
+        # Infer provider type from model name prefix
+        if llm_model.startswith("claude-"):
+            provider_type = "anthropic"
+            model = llm_model
+        elif llm_model.startswith("gemini-"):
+            provider_type = "google"
+            model = llm_model
+        elif llm_model.startswith("gpt-"):
+            provider_type = "open_ai"
+            model = llm_model
+        else:
+            # 3. Hard default
+            provider_type = "open_ai"
+            model = "gpt-4o-mini" if self.tenant_id == "dhruv_personal" else "gpt-4.1-mini"
+
+        logger.info(f"🧠 LLM: {provider_type} / {model}")
+
         return {
             "provider": {
-                "type": "open_ai",
+                "type": provider_type,
                 "model": model,
                 "temperature": 0.45
             },
