@@ -741,10 +741,15 @@ class VoiceAgentHandler:
         content = event.get("content", "")
         
         if role == "user":
-            # Log with latency info
+            # Log with latency info.
+            # NOTE: "turn_ms" = VAD start → transcript ready.  For real-time STT
+            # this INCLUDES speech duration — the actual transcription overhead
+            # is roughly utterance_end_ms (~300ms) + transit, which is NOT
+            # separately observable via the Deepgram Voice Agent API.
+            # Long utterances showing e.g. 4000ms are expected: most are speaking time.
             if self.user_speech_start_time:
-                latency_ms = int((time.time() - self.user_speech_start_time) * 1000)
-                logger.info(f"[User]: {content} (STT latency: {latency_ms}ms)")
+                turn_ms = int((time.time() - self.user_speech_start_time) * 1000)
+                logger.info(f"[User]: {content} (turn_ms incl. speech: {turn_ms}ms)")
             else:
                 logger.info(f"[User]: {content}")
             
@@ -842,12 +847,33 @@ class VoiceAgentHandler:
             if self.ai_response_start_time:
                 latency_ms = int((time.time() - self.ai_response_start_time) * 1000)
                 
-                # TRUE TTFT: Log only for FIRST sentence after user spoke
+                # TRUE TTFT: Log only for FIRST sentence after user spoke.
+                # Split out a leading ack word (e.g. "Sure,", "Okay,") as [Ovela Ack]
+                # so you can see whether the first syllable is fast independently.
                 if hasattr(self, '_stt_complete_time') and not getattr(self, '_first_ai_response_logged', False):
                     ttft_ms = int((time.time() - self._stt_complete_time) * 1000)
-                    logger.info(f"[Ovela]: {clean_content} (TTFT: {ttft_ms}ms)")
                     self._first_ai_response_logged = True
                     self.latency.mark_llm_first_token()
+                    # Try to isolate a leading ack phrase (up to first comma or first 2 words)
+                    ack_prefixes = (
+                        "right,","sure,","yep,","yeah,","okay,","ok,","got it,","ah,",
+                        "alright,","no worries,","of course,","absolutely,",
+                    )
+                    lower_content = clean_content.lower()
+                    ack_part = None
+                    rest_part = clean_content
+                    for prefix in ack_prefixes:
+                        if lower_content.startswith(prefix):
+                            split_at = len(prefix)
+                            ack_part = clean_content[:split_at].strip()
+                            rest_part = clean_content[split_at:].strip()
+                            break
+                    if ack_part:
+                        logger.info(f"[Ovela Ack]: {ack_part} (TTFT: {ttft_ms}ms)")
+                        if rest_part:
+                            logger.info(f"[Ovela]: {rest_part}")
+                    else:
+                        logger.info(f"[Ovela]: {clean_content} (TTFT: {ttft_ms}ms)")
                 else:
                     logger.info(f"[Ovela]: {clean_content} (inter-sentence: {latency_ms}ms)")
                 
@@ -1084,7 +1110,6 @@ class VoiceAgentHandler:
             "create_booking",
             "request_human_callback",
             "lookup_booking",
-            "check_availability",
             "create_booking_request",
             "submit_order",
             "get_menu_info"
