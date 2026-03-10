@@ -10,8 +10,9 @@ Function definitions are here, implementations are in handlers.py.
 from .handlers import FunctionDispatcher
 from .coalcreek_handlers import CoalCreekFunctionDispatcher
 from .coalcreek_definitions import get_coalcreek_functions
+from .dhruv_personal import get_personal_assistant_functions
 
-__all__ = ['get_booking_functions', 'FunctionDispatcher', 'CoalCreekFunctionDispatcher', 'get_coalcreek_functions']
+__all__ = ['get_booking_functions', 'FunctionDispatcher', 'CoalCreekFunctionDispatcher', 'get_coalcreek_functions', 'get_personal_assistant_functions']
 
 
 

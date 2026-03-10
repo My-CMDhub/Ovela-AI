@@ -54,8 +54,8 @@ class Settings(BaseSettings):
     TWILIO_WHATSAPP_NUMBER: str = "+14155238886"  
     
 
-    
-
+    # Personal Assistant Target Number
+    MY_NUMBER: Optional[str] = None
 
     # Deepgram
     DEEPGRAM_API_KEY: str
@@ -72,7 +72,9 @@ class Settings(BaseSettings):
     
     # Phone to Tenant Mapping (Ingress)
     # Maps Twilio 'To' number -> Tenant ID (Can be set via env var as JSON)
-    PHONE_TO_TENANT_MAP: dict = {}
+    PHONE_TO_TENANT_MAP: dict = {
+        "+61468088990": "dhruv_personal"
+    }
 
     class Config:
         case_sensitive = True

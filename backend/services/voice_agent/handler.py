@@ -273,12 +273,14 @@ class VoiceAgentHandler:
             else:
                 logger.error("❌ ANTHROPIC_API_KEY not set - falling back to GPT-4.1-mini")
         
-        # Fallback/Default to OpenAI gpt-4o-mini (Primary)
-        logger.info("🧠 Using OpenAI gpt-4.1-mini (Primary)")
+        # Fallback/Default to OpenAI gpt-4.1-mini (Primary)
+        model = "gpt-4o-mini" if self.tenant_id == "dhruv_personal" else "gpt-4.1-mini"
+        logger.info(f"🧠 Using OpenAI {model} (Primary)")
+        
         return {
             "provider": {
                 "type": "open_ai",
-                "model": "gpt-4.1-mini",
+                "model": model,
                 "temperature": 0.45
             },
             "prompt": self._get_active_prompt(),
@@ -335,6 +337,10 @@ class VoiceAgentHandler:
     
     def _get_active_functions(self) -> list:
         """Get the correct function definitions based on tenant."""
+        if self.tenant_id == "dhruv_personal":
+            from services.voice_agent.functions import get_personal_assistant_functions
+            return get_personal_assistant_functions()
+            
         if self.tenant_id == "coalcreek":
             return get_coalcreek_functions()
         return get_booking_functions()
@@ -461,14 +467,25 @@ class VoiceAgentHandler:
         # =====================================================================
         # CONFIG-DRIVEN ARCHITECTURE: Load settings from DB (ASYNC)
         # =====================================================================
-        try:
-            logger.info(f"📥 Loading config for tenant: {self.tenant_id}")
-            self.tenant_config = await db_service.get_tenant_config(self.tenant_id)
-            if not self.tenant_config:
-                logger.warning(f"⚠️ No config found for {self.tenant_id}, using defaults")
-        except Exception as e:
-            logger.error(f"❌ Failed to load tenant config: {e}")
-            self.tenant_config = {}
+        if self.tenant_id == "dhruv_personal":
+            # Bypass DB for personal assistant, use Paul AU (3e1ed423-17e5-4773-b87c-25b031106e41) or similar voice
+            self.tenant_config = {
+                "type": "personal_assistant",
+                "voice_settings": {
+                    "model": "nova-3",
+                    "voice_id": "3e1ed423-17e5-4773-b87c-25b031106e41", 
+                    "speed": 1.0
+                }
+            }
+        else:
+            try:
+                logger.info(f"📥 Loading config for tenant: {self.tenant_id}")
+                self.tenant_config = await db_service.get_tenant_config(self.tenant_id)
+                if not self.tenant_config:
+                    logger.warning(f"⚠️ No config found for {self.tenant_id}, using defaults")
+            except Exception as e:
+                logger.error(f"❌ Failed to load tenant config: {e}")
+                self.tenant_config = {}
             
         # Set context for knowledge base
         set_tenant_context(self.tenant_id)
