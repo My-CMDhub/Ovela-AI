@@ -242,8 +242,8 @@ class VoiceAgentHandler:
                     "provider": {
                         "type": "deepgram",
                         "model": voice_settings.get("model", "nova-2"),
-                        "utterance_end_ms": voice_settings.get("utterance_end_ms", 300),
-                        "smart_format": False
+                        "endpointing": voice_settings.get("endpointing",
+                                        voice_settings.get("utterance_end_ms", 300)),
                     }
                 },
                 "think": self._get_llm_config(),
