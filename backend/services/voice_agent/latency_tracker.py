@@ -30,6 +30,7 @@ class TurnTiming:
     """Timing data for a single conversation turn."""
     turn_id: int = 0
     has_function_call: bool = False
+    turn_type: str = "unknown"  # short_answer | long_answer | tool_call | goodbye | unknown
 
     # Absolute timestamps (time.monotonic)
     user_vad: float = 0.0
@@ -55,6 +56,7 @@ class TurnTiming:
         d = {
             "turn": self.turn_id,
             "tool_call": self.has_function_call,
+            "turn_type": self.turn_type,
             "vad_to_stt_ms": self._delta(self.user_vad, self.stt_complete),
             "stt_to_first_token_ms": self._delta(self.stt_complete, self.llm_first_token),
             "first_token_to_audio_ms": self._delta(self.llm_first_token, self.first_audio_out),
@@ -72,6 +74,8 @@ class TurnTiming:
         """One-line summary for logging."""
         s = self.summary()
         parts = [f"T{s['turn']}"]
+        if self.turn_type != "unknown":
+            parts.append(self.turn_type.upper())
         if s["tool_call"]:
             parts.append("TOOL")
         for key in ("vad_to_stt_ms", "stt_to_first_token_ms",
@@ -187,6 +191,13 @@ class LatencyTracker:
     def mark_func_response(self):
         if self._current:
             self._current.func_response = time.monotonic()
+
+    def set_turn_type(self, t: str):
+        """Tag the current turn type (short_answer|long_answer|tool_call|goodbye|unknown)."""
+        if self._current:
+            self._current.turn_type = t
+            if t == "tool_call":
+                self._current.has_function_call = True
 
     def audio_lead_ms(self) -> int:
         """How many ms audio bytes arrived BEFORE the ConversationText event.

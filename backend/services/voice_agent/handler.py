@@ -48,6 +48,7 @@ from .silence_detection import SilenceMonitor
 from .functions import get_booking_functions, get_coalcreek_functions
 from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
 from .text_utils import prepare_for_tts, clean_tts_output
+from .latency_tracker import LatencyTracker
 from services.motel_knowledge_base import set_tenant_context
 
 CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
@@ -141,6 +142,8 @@ class VoiceAgentHandler:
         # Latency tracking (for debugging/analytics)
         self.user_speech_start_time = None
         self.ai_response_start_time = None
+        self.latency = LatencyTracker()
+        self.latency.mark_call_start()
         
         # Modular components
         self.silence_monitor = SilenceMonitor()
@@ -238,9 +241,9 @@ class VoiceAgentHandler:
                 "listen": {
                     "provider": {
                         "type": "deepgram",
-                        "model": voice_settings.get("model", "nova-3"),
-                        "endpointing": voice_settings.get("endpointing", 300),  
-                        "smart_format": True
+                        "model": voice_settings.get("model", "nova-2"),
+                        "utterance_end_ms": voice_settings.get("utterance_end_ms", 300),
+                        "smart_format": False
                     }
                 },
                 "think": self._get_llm_config(),
@@ -366,7 +369,7 @@ class VoiceAgentHandler:
             logger.warning(f"⚠️ Invalid Voice ID format: {voice_id} - falling back to default")
             voice_id = CARTESIA_VOICE_ID
             
-        # Get dynamic speed (multiplier: 1.0 is default, 0.8 is slower)
+        # Get dynamic speed (multiplier: 1.0 is default, 0.8 is slower) - isn't supported natively by deepgram currently
         speed = voice_settings.get("speed", 1.0)
         
         logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id}) | Speed: {speed}")
@@ -472,7 +475,7 @@ class VoiceAgentHandler:
             self.tenant_config = {
                 "type": "personal_assistant",
                 "voice_settings": {
-                    "model": "nova-3",
+                    "model": "nova-2",
                     "voice_id": "a7b8d8fa-f6e5-4908-900e-0c11d1d82519", 
                     "speed": 1.0
                 }
@@ -542,11 +545,13 @@ class VoiceAgentHandler:
             )
             
             logger.info("🟢 Connected to Deepgram Voice Agent API")
+            self.latency.mark_deepgram_connected()
             
             # Send Settings message
             settings_msg = self._get_settings_message()
             await self.deepgram_ws.send(json.dumps(settings_msg))
             logger.info("📤 Sent Settings to Deepgram Agent")
+            self.latency.mark_settings_sent()
             
             # Log TTS provider clearly
             tts_provider = settings_msg["agent"]["speak"]["provider"]["type"]
@@ -666,6 +671,7 @@ class VoiceAgentHandler:
             
             await self.twilio_ws.send_json(media_message)
             self._twilio_audio_frames_sent += 1
+            self.latency.mark_first_audio_out()  # no-op after first frame per turn
             
         except Exception as e:
             logger.warning(f"Error sending audio to Twilio: {e}")
@@ -697,6 +703,7 @@ class VoiceAgentHandler:
             
         elif event_type == "SettingsApplied":
             logger.info("⚙️ Deepgram Agent settings applied")
+            self.latency.log_setup_latency()
             
         elif event_type == "ConversationText":
             await self._handle_conversation_text(event)
@@ -789,6 +796,16 @@ class VoiceAgentHandler:
             self.ai_response_start_time = time.time()
             self._stt_complete_time = time.time()  # For TRUE TTFT measurement
             self._first_ai_response_logged = False  # Reset for new utterance
+            self.latency.mark_stt_complete()
+            # Tag turn type from content for grouped latency stats
+            _words = content.split()
+            _farewell_hints = {"bye", "goodbye", "thanks", "cheers", "cya"}
+            if any(w.lower().rstrip(".,!?") in _farewell_hints for w in _words):
+                self.latency.set_turn_type("goodbye")
+            elif len(_words) <= 7:
+                self.latency.set_turn_type("short_answer")
+            else:
+                self.latency.set_turn_type("long_answer")
             
             # Check for spam/abuse
             spam_result = self.abuse_protection.check_spam_behavior(content)
@@ -830,6 +847,7 @@ class VoiceAgentHandler:
                     ttft_ms = int((time.time() - self._stt_complete_time) * 1000)
                     logger.info(f"[Ovela]: {clean_content} (TTFT: {ttft_ms}ms)")
                     self._first_ai_response_logged = True
+                    self.latency.mark_llm_first_token()
                 else:
                     logger.info(f"[Ovela]: {clean_content} (inter-sentence: {latency_ms}ms)")
                 
@@ -878,6 +896,7 @@ class VoiceAgentHandler:
         
         # Track timing
         self.user_speech_start_time = time.time()
+        self.latency.mark_user_vad()
         
         # Mark that user has spoken (for smart greeting logic)
         self.has_user_spoken = True
@@ -934,6 +953,8 @@ class VoiceAgentHandler:
         We now switch to "awaiting user utterance" state.
         """
         logger.info("🔇 Agent audio done (transfer_pending=%s)", self._transfer_pending)
+        self.latency.mark_agent_done()
+        self.latency.log_turn()
         
         # Mark AI as not speaking - transition to awaiting user
         self._ai_is_speaking = False
@@ -1013,6 +1034,8 @@ class VoiceAgentHandler:
             return
         
         logger.info(f"🔧 Function call: {function_name}({function_args})")
+        self.latency.mark_func_request()
+        self.latency.set_turn_type("tool_call")
         
         # Mark as processing BEFORE any async work to block duplicates immediately
         self._is_processing_function = True
@@ -1046,17 +1069,23 @@ class VoiceAgentHandler:
             self.memory["pickup_time"] = function_args["pickup_time"]
         
         # ─────────────────────────────────────────────────────────────────
-        # LLM-NATIVE FILLER: The LLM speaks preset phrases itself (via
-        # function_call_instructions in Settings). We just need a brief
-        # pause to let the LLM's TTS audio flush through to Twilio before
-        # Go Deaf blocks further audio frames.
+        # FAST-START PATH: For check_availability we always need a filler
+        # and the LLM is instructed not to speak one.  Inject the deterministic
+        # preset phrase immediately (no grace-period wait) and start the
+        # function execution without delay — the user hears "One moment…"
+        # while the PMS call runs concurrently.
+        #
+        # OTHER SLOW TOOLS: keep a reduced 0.3s grace period so the LLM's
+        # own brief filler can flush before the system fallback fires.
         # ─────────────────────────────────────────────────────────────────
+        FAST_TOOLS = {"check_availability"}
         SLOW_TOOLS = [
-            "report_missing_booking", 
-            "create_booking", 
+            "report_missing_booking",
+            "create_booking",
             "request_human_callback",
             "lookup_booking",
             "check_availability",
+            "create_booking_request",
             "submit_order",
             "get_menu_info"
         ]
@@ -1065,18 +1094,30 @@ class VoiceAgentHandler:
             long_wait_task = None
             fn_done_event = None
 
-            if function_name in SLOW_TOOLS:
+            if function_name in FAST_TOOLS:
+                # Block interruptions and fire deterministic filler immediately.
+                # Use asyncio.create_task so function execution starts right away.
+                self._blocking_interruptions = True
+                preset = get_preset_phrase("availability_checking", self.tenant_id)
+                if preset:
+                    asyncio.create_task(
+                        self._speak_system_message(preset, clip_key="filler_short")
+                    )
+                asyncio.create_task(self._unlock_interruptions(2.5))
+                fn_done_event = asyncio.Event()
+                long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event))
+
+            elif function_name in SLOW_TOOLS:
                 # Block interruptions so filler isn't cut off by user noise/"mhm"
                 self._blocking_interruptions = True
-                # Let the LLM's filler TTS audio flush to Twilio
-                await asyncio.sleep(0.5)
+                # Let the LLM's filler TTS audio flush to Twilio (reduced from 0.5s)
+                await asyncio.sleep(0.3)
                 # Safety net: inject filler if LLM didn't speak one
                 if not getattr(self, '_ai_is_speaking', False):
                     filler = get_random_filler_prompt()
                     await self._speak_system_message(filler, clip_key="filler_short")
                 # Unlock interruptions after filler TTS plays (~2.5s)
                 asyncio.create_task(self._unlock_interruptions(2.5))
-                
                 # Schedule progressive "still checking" for very long waits
                 fn_done_event = asyncio.Event()
                 long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event))
@@ -1084,6 +1125,7 @@ class VoiceAgentHandler:
             # Execute via dispatcher
             ctx = {"pending_order": self.pending_order}
             result = await self.function_dispatcher.execute(function_name, function_args, context=ctx)
+            self.latency.mark_func_exec_done()
             
             # Cancel the long-wait filler if function completed
             if fn_done_event:
@@ -1222,6 +1264,7 @@ class VoiceAgentHandler:
                 "content": json.dumps(result)
             }
             await self.deepgram_ws.send(json.dumps(response))
+            self.latency.mark_func_response()
             logger.info(f"📤 Sent function response for {function_name}")
         except Exception as e:
             logger.error(f"Failed to send function response: {e}")
@@ -1890,6 +1933,7 @@ class VoiceAgentHandler:
         """Clean up connections and save transcript."""
         logger.info("🧹 Cleaning up VoiceAgentHandler")
         self.is_running = False
+        self.latency.log_call_summary()
         
 
         # Close Deepgram connection
