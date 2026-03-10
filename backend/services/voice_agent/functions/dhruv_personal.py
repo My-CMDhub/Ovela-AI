@@ -32,22 +32,13 @@ def get_personal_assistant_functions() -> list:
     ]
 
 async def handle_send_message_to_dhruv(args: dict, user_phone: str) -> dict:
-    """Handles the execution of sending the message via SMS."""
+    """Handles the execution of sending the message via SMS.
+    Note: We actually don't send the SMS mid-call anymore. The VoiceAgentHandler
+    summarizes the entire call transcript and sends it upon disconnection if duration > 6s.
+    This function just acts as a conversational placemarker so the AI knows it succeeded.
+    """
     caller_name = args.get("caller_name", "Unknown caller")
     reason = args.get("reason", "No reason provided")
     
-    # Text to send to Dhruv
-    message = f"New Call from {caller_name} ({user_phone}):\nReason: {reason}"
-    
-    # Send to MY_NUMBER
-    my_number = os.getenv("MY_NUMBER") or settings.MY_NUMBER
-    if not my_number:
-        logger.error("MY_NUMBER not set! Cannot send SMS to personal number.")
-        return {"success": False, "message": "The assistant system is not configured correctly to send messages."}
-        
-    success = await sms_service.send_sms(to_number=my_number, message=message, tenant_id="dhruv_personal")
-    
-    if success:
-        return {"success": True, "message": "Message successfully passed on to Dhruv."}
-    else:
-        return {"success": False, "message": "Failed to pass the message."}
+    logger.info(f"📝 Noted message from {caller_name}: {reason} (Will be sent at call-end)")
+    return {"success": True, "message": "Message successfully noted and will be passed to Dhruv when the call ends."}

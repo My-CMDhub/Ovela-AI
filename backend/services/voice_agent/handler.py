@@ -1915,6 +1915,39 @@ class VoiceAgentHandler:
                         tenant_id=self.tenant_id,
                         call_sid=self.call_sid
                     )
+                elif self.tenant_id == "dhruv_personal":
+                    # Personal Assistant: Do not store in DB. Summarize and SMS if > 6s.
+                    if duration > 6:
+                        from openai import AsyncOpenAI
+                        from services.sms import sms_service
+                        import os
+                        
+                        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+                        transcript_text = "\n".join([f"{m['role'].upper()}: {m['text']}" for m in self.transcript])
+                        
+                        try:
+                            response = await client.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[
+                                    {"role": "system", "content": "You are a helpful assistant that summarizes missed calls. The AI was an assistant named Nona taking a message. Provide a concise, 1-2 sentence summary of who called and why. If they didn't leave a name, mention that."},
+                                    {"role": "user", "content": f"Summarize this call transcript:\n\n{transcript_text}"}
+                                ],
+                                max_tokens=100,
+                                temperature=0.3
+                            )
+                            summary = response.choices[0].message.content.strip()
+                            
+                            target_number = os.getenv("MY_NUMBER") or settings.MY_NUMBER
+                            if target_number:
+                                message_body = f"Missed Call from {self.user_phone}\nDuration: {duration}s\n\nSummary:\n{summary}"
+                                await sms_service.send_sms(to_number=target_number, message=message_body, tenant_id="dhruv_personal")
+                                logger.info(f"📝 Sent SMS summary for dhruv_personal instead of DB storage.")
+                            else:
+                                logger.error("MY_NUMBER not set! Cannot send SMS summary.")
+                        except Exception as e:
+                            logger.error(f"Failed to generate/send summary for dhruv_personal: {e}")
+                    else:
+                        logger.info(f"⏭️ Skipped SMS summary for dhruv_personal (duration {duration}s <= 6s)")
                 else:
                     # Tenant-Specific Storage
                     await db_service.save_call_transcript(
@@ -1933,7 +1966,7 @@ class VoiceAgentHandler:
                             "order_id": self.order_id
                         }
                     )
-                logger.info(f"📝 Saved transcript: {len(self.transcript)} entries, {duration}s")
+                    logger.info(f"📝 Saved transcript: {len(self.transcript)} entries, {duration}s")
         except Exception as e:
             logger.error(f"Error saving transcript: {e}")
         
