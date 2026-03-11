@@ -302,7 +302,7 @@ class VoiceAgentHandler:
 
         logger.info(f"🧠 LLM: {provider_type} / {model}")
 
-        return {
+        config = {
             "provider": {
                 "type": provider_type,
                 "model": model,
@@ -311,6 +311,32 @@ class VoiceAgentHandler:
             "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()
         }
+
+        # ─────────────────────────────────────────────────────────────────
+        # BYO ENDPOINT: Deepgram managed Anthropic/Google models are gated
+        # by account plan tier. Use a direct API key endpoint to bypass this:
+        #
+        #   Anthropic → set ANTHROPIC_API_KEY in Heroku config vars
+        #   Google    → set GOOGLE_AI_API_KEY in Heroku config vars
+        #
+        # When a key is present we attach the endpoint block and Deepgram
+        # routes directly to the provider — no managed plan needed.
+        # ─────────────────────────────────────────────────────────────────
+        if provider_type == "anthropic":
+            anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+            if anthropic_key:
+                config["endpoint"] = {
+                    "url": "https://api.anthropic.com/v1/messages",
+                    "headers": {
+                        "x-api-key": anthropic_key,
+                        "anthropic-version": "2023-06-01"
+                    }
+                }
+                logger.info("🔑 Anthropic: BYO endpoint (direct API key)")
+            else:
+                logger.warning("⚠️ Anthropic: ANTHROPIC_API_KEY not set — managed plan required (may fail)")
+
+        return config
     
     
     def _get_function_call_instructions(self) -> str:
