@@ -966,7 +966,9 @@ class VoiceAgentHandler:
         # CRITICAL: Force AI speaking state to False immediately
         # Deepgram might skip AgentAudioDone if interrupted, causing state lock
         self._ai_is_speaking = False
-        self.silence_monitor.on_ai_finished_speaking() # Reset silence monitor state too
+        # NOTE: do NOT call on_ai_finished_speaking() here — it sets silence_check_start_time
+        # to the moment user speaks, which races with the 300ms grace in _handle_agent_audio_done
+        # and causes abandon-silence to fire even when user has spoken.
     
     async def _handle_agent_started_speaking(self):
         """
@@ -1019,6 +1021,14 @@ class VoiceAgentHandler:
         # Check if AI started speaking again (new ConversationText came in)
         if getattr(self, '_ai_is_speaking', False):
             logger.debug("⏱️ Skipping silence check - AI speaking again")
+            return
+
+        # Guard: if user started speaking during the 300ms grace window, their speech
+        # will trigger AI response → AgentAudioDone → a fresh silence check after that.
+        # Skip now to avoid setting silence_check_start_time AFTER last_user_speech_time
+        # (which would make has_user_spoken_since return False and fire abandon incorrectly).
+        if self.user_speech_start_time and time.time() - self.user_speech_start_time < 0.5:
+            logger.debug("⏱️ Skipping silence check - user spoke during grace period")
             return
         
         # Start silence monitoring - no TTS buffer, trust event timing

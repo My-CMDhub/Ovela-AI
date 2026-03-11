@@ -47,6 +47,7 @@ class SilenceMonitor:
         self.silence_followup_sent = False
         self.silence_followup_count = 0
         self.silence_pause_end_time = None  # User speaking cancels any active wait/pause
+        self.silence_check_id += 1  # Immediately invalidate any mid-sleep silence check
         
     def on_ai_started_speaking(self, preserve_check_id: bool = False):
         """
