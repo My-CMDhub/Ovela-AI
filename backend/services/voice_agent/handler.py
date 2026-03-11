@@ -254,64 +254,48 @@ class VoiceAgentHandler:
     
     def _get_llm_config(self) -> dict:
         """
-        Get LLM configuration for Deepgram Voice Agent think block.
+        Build the Deepgram Voice Agent think block.
 
-        Priority (highest → lowest):
-          1. voice_settings.llm_model  in tenant DB config  ← preferred
-          2. LLM_MODEL env var                              ← Heroku fallback
-          3. gpt-4.1-mini default
+        Model priority (highest → lowest):
+          1. voice_settings.llm_model in tenant DB  ← change per-tenant without redeploy
+          2. LLM_MODEL env var (Heroku)             ← global override
+          3. gpt-4.1-mini hard default
 
-        All OpenAI, Anthropic, and Google models are managed natively by
-        Deepgram — NO separate API key is needed for any of them.
+        Provider is inferred from model prefix: claude- → anthropic, gemini- → google, gpt- → open_ai
 
-        Supported model IDs (as of March 2026):
-          OpenAI   : gpt-4.1-mini (default), gpt-4.1-nano, gpt-4o-mini
-          Anthropic: claude-3-5-haiku-latest  (Standard — lowest latency)
-                     claude-4-5-haiku-latest  (Standard — newer haiku)
-                     claude-sonnet-4-5        (Advanced — best tool calling)
-          Google   : gemini-2.5-flash, gemini-2.0-flash
+        Anthropic (BYO — requires ANTHROPIC_API_KEY in Heroku config vars):
+          Verified working on this account (2026-03-11):
+            claude-3-haiku-20240307   fastest / cheapest
+            claude-sonnet-4-5         best quality
 
-        Provider type is inferred automatically from the model name prefix.
-
-        DB example (add to voice_settings JSON in Appwrite):
-          "llm_model": "claude-3-5-haiku-latest"
+        OpenAI (no extra key needed — Deepgram manages it):
+            gpt-4.1-mini (default), gpt-4.1-nano, gpt-4o-mini
         """
         voice_settings = self.tenant_config.get("voice_settings", {})
 
-        # 1. Tenant DB config (per-tenant, hot-swappable without redeploy)
-        db_llm_model = voice_settings.get("llm_model", "").strip()
-        env_llm_model = os.getenv("LLM_MODEL", "").strip()
+        db_model  = voice_settings.get("llm_model", "").strip()
+        env_model = os.getenv("LLM_MODEL", "").strip()
 
-        # Log raw DB value so we can confirm what was actually read
-        logger.info(f"🧠 LLM config — DB: '{db_llm_model or '(not set)'}' | ENV: '{env_llm_model or '(not set)'}'")
-
-        if db_llm_model:
-            llm_model = db_llm_model
-            llm_source = "DB"
-        elif env_llm_model:
-            llm_model = env_llm_model
-            llm_source = "ENV"
+        if db_model:
+            llm_model, source = db_model, "DB"
+        elif env_model:
+            llm_model, source = env_model, "ENV"
         else:
-            llm_model = ""
-            llm_source = "default"
+            llm_model, source = "", "default"
 
-        # Infer provider type from model name prefix
+        # Infer provider from model prefix
         if llm_model.startswith("claude-"):
-            provider_type = "anthropic"
-            model = llm_model
+            provider_type, model = "anthropic", llm_model
         elif llm_model.startswith("gemini-"):
-            provider_type = "google"
-            model = llm_model
+            provider_type, model = "google", llm_model
         elif llm_model.startswith("gpt-"):
-            provider_type = "open_ai"
-            model = llm_model
+            provider_type, model = "open_ai", llm_model
         else:
-            # 3. Hard default
             provider_type = "open_ai"
             model = "gpt-4o-mini" if self.tenant_id == "dhruv_personal" else "gpt-4.1-mini"
-            llm_source = "default"
+            source = "default"
 
-        logger.info(f"🧠 LLM [{llm_source}]: {provider_type} / {model}")
+        logger.info(f"🧠 LLM [{source}]: {provider_type} / {model}")
 
         config = {
             "provider": {
@@ -323,41 +307,18 @@ class VoiceAgentHandler:
             "functions": self._get_active_functions()
         }
 
-        # ─────────────────────────────────────────────────────────────────
-        # BYO ENDPOINT: Deepgram managed Anthropic/Google models are gated
-        # by account plan tier. Use a direct API key endpoint to bypass this:
-        #
-        #   Anthropic → set ANTHROPIC_API_KEY in Heroku config vars
-        #
-        # IMPORTANT: When calling Anthropic's API directly (BYO), the model
-        # must use an exact dated version ID — NOT the `-latest` alias.
-        # The `-latest` alias is only resolved by Deepgram's managed layer.
-        # ─────────────────────────────────────────────────────────────────
-        # Alias → exact Anthropic API model ID map
-        ANTHROPIC_ALIAS_MAP = {
-            "claude-3-5-haiku-latest":  "claude-3-5-haiku-20241022",
-            "claude-4-5-haiku-latest":  "claude-haiku-4-5-20250514",
-            "claude-sonnet-4-5":        "claude-sonnet-4-5-20250514",
-            "claude-sonnet-4-20250514": "claude-sonnet-4-20250514",
-        }
-
+        # Anthropic requires BYO: attach your API key so Deepgram routes
+        # directly to Anthropic's API (bypasses Deepgram's gated managed tier).
         if provider_type == "anthropic":
             anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
             if anthropic_key:
-                # Resolve alias to exact model ID for direct Anthropic API
-                exact_model = ANTHROPIC_ALIAS_MAP.get(model, model)
-                config["provider"]["model"] = exact_model
-                # Move temperature out of provider into top-level for BYO
-                temperature = config["provider"].pop("temperature", 0.45)
                 config["endpoint"] = {
                     "url": "https://api.anthropic.com/v1/messages",
-                    "headers": {
-                        "x-api-key": anthropic_key
-                    }
+                    "headers": {"x-api-key": anthropic_key}
                 }
-                logger.info(f"🔑 Anthropic BYO: {model} → {exact_model} (direct API key)")
+                logger.info(f"🔑 Anthropic BYO endpoint active")
             else:
-                logger.warning("⚠️ Anthropic: ANTHROPIC_API_KEY not set — managed plan required (may fail)")
+                logger.warning("⚠️ ANTHROPIC_API_KEY not set — call will fail for Claude models")
 
         return config
     
