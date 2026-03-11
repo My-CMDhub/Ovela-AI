@@ -339,8 +339,7 @@ class VoiceAgentHandler:
                 config["endpoint"] = {
                     "url": "https://api.anthropic.com/v1/messages",
                     "headers": {
-                        "x-api-key": anthropic_key,
-                        "anthropic-version": "2023-06-01"
+                        "x-api-key": anthropic_key
                     }
                 }
                 logger.info("🔑 Anthropic: BYO endpoint (direct API key)")
