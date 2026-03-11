@@ -817,6 +817,7 @@ class VoiceAgentHandler:
             self.ai_response_start_time = time.time()
             self._stt_complete_time = time.time()  # For TRUE TTFT measurement
             self._first_ai_response_logged = False  # Reset for new utterance
+            self._filler_played_this_turn = False   # Reset so first tool call this turn gets a filler
             self.latency.mark_stt_complete()
             # Tag turn type from content for grouped latency stats
             _words = content.split()
@@ -1153,10 +1154,13 @@ class VoiceAgentHandler:
                 self._blocking_interruptions = True
                 # Let the LLM's filler TTS audio flush to Twilio (reduced from 0.5s)
                 await asyncio.sleep(0.3)
-                # Safety net: inject filler if LLM didn't speak one
-                if not getattr(self, '_ai_is_speaking', False):
+                # Safety net: inject filler ONLY if LLM didn't speak one AND we haven't
+                # already played one this user turn (prevents double-filler on multi-step
+                # LLM tool calls within the same user utterance, e.g. lookup by ref then by email)
+                if not getattr(self, '_ai_is_speaking', False) and not getattr(self, '_filler_played_this_turn', False):
                     filler = get_random_filler_prompt()
                     await self._speak_system_message(filler, clip_key="filler_short")
+                    self._filler_played_this_turn = True
                 # Unlock interruptions after filler TTS plays (~2.5s)
                 asyncio.create_task(self._unlock_interruptions(2.5))
                 # Schedule progressive "still checking" for very long waits

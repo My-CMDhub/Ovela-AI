@@ -79,11 +79,11 @@ from core.config import settings
 # Use global settings.ENVIRONMENT to respect the user's configuration
 ENVIRONMENT = settings.ENVIRONMENT.lower()
 
-# Demo settings (stricter for testing - public demos)
+# Demo settings (used for test/dev calls)
 DEMO_CONFIG = {
     "context_pairs": 6,           # Conversation pairs to remember
-    "soft_warning_minutes": 2,    # Gentle "wrapping up" prompt (2 min for demo)
-    "hard_cap_minutes": 3,        # Maximum call duration (3 min for demo)
+    "soft_warning_minutes": 5,    # Gentle "wrapping up" prompt (5 min for demo)
+    "hard_cap_minutes": 8,        # Maximum call duration (8 min for demo)
     "transfer_on_cap": False,     # Demo: Just hang up, don't transfer
     "off_topic_limit": 5,         # flag_off_topic calls before auto-hangup
     "human_escalation": False,    # No human escalation in demo
