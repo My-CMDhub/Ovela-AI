@@ -1263,13 +1263,8 @@ class VoiceAgentHandler:
                 reason = result.get("reason", "")
                 logger.info(f"⏳ wait_on_request function called. Pausing silence detection for {wait_seconds}s. Reason: {reason}")
                 
-                # Tell user we are waiting
-                message = result.get("message", "No problem, take your time.")
-                await self._speak_system_message(message, clip_key="wait_ack")
-                
-                # Pause silence detection
                 self.silence_monitor.pause_silence(wait_seconds)
-                # DO NOT RETURN. Let it send the function response back to Deepgram so the LLM knows it waited.
+
 
 
             # Check for hangup signal from flag_off_topic

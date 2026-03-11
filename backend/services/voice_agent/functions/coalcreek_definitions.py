@@ -244,17 +244,17 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         },
         {
             "name": "wait_on_request",
-            "description": "Caller asked to wait/hold. Starts passive wait mode. First wait ~90s, repeat wait ~60s.",
+            "description": "CRITICAL: Call this function IMMEDIATELY if the user says 'give me a sec', 'hold on', 'one moment', 'wait a minute', 'wait a while', 'let me check', or asks you to wait or hold for any reason. Starts passive wait mode.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "reason": {
                         "type": "string",
-                        "description": "Short reason for waiting, if caller provided one."
+                        "description": "Short reason for waiting, if caller provided one (e.g., 'checking dates', 'grabbing card')."
                     },
                     "wait_seconds": {
                         "type": "integer",
-                        "description": "Optional desired wait length in seconds."
+                        "description": "Optional desired wait length in seconds. Default to 120 for 'wait a while', 90 for 'give me a sec'."
                     }
                 }
             }
