@@ -37,15 +37,17 @@ class SilenceMonitor:
         self.silence_followup_count = 0
         self.silence_check_start_time = None
         self.silence_check_id = 0  # Counter to invalidate old checks
+        self.silence_pause_end_time = None
         self.last_ai_message = ""
         self.ai_asked_question = False
-    
+
     def on_user_speech(self):
         """Called when user starts speaking - resets silence tracking."""
         self.last_user_speech_time = time.time()
         self.silence_followup_sent = False
         self.silence_followup_count = 0
-    
+        self.silence_pause_end_time = None  # User speaking cancels any active wait/pause
+        
     def on_ai_started_speaking(self, preserve_check_id: bool = False):
         """
         Called when AI starts speaking - invalidate pending silence checks.
@@ -102,6 +104,12 @@ class SilenceMonitor:
         if not self.silence_check_start_time:
             return 0
         return time.time() - self.silence_check_start_time
+        
+    def pause_silence(self, seconds: float):
+        """
+        Pause silence detection for a specific duration.
+        """
+        self.silence_pause_end_time = time.time() + seconds
     
     def has_user_spoken_since(self, check_start: float) -> bool:
         """Check if user has spoken since a specific time."""
@@ -124,6 +132,17 @@ class SilenceMonitor:
         
         if not self.silence_check_start_time:
             return {"action": "none"}
+            
+        # Check if we are currently in an active pause
+        if self.silence_pause_end_time and time.time() < self.silence_pause_end_time:
+            # We are inside the explicit wait duration requested by the user.
+            # However, if duration keeps extending, we should still update check start time 
+            # so when the pause ends, it starts counting from 0 again.
+            self.silence_check_start_time = time.time()
+            return {"action": "none", "reason": "paused_on_request"}
+        else:
+            # Pause expired or cleared
+            self.silence_pause_end_time = None
         
         # Check if user has spoken
         if self.has_user_spoken_since(self.silence_check_start_time):

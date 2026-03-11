@@ -1257,6 +1257,21 @@ class VoiceAgentHandler:
                 asyncio.create_task(self._scheduled_hangup(delay))
                 return
 
+            # Check for wait_on_request signal
+            if result.get("action") == "wait_on_request":
+                wait_seconds = result.get("duration_seconds", 90)
+                reason = result.get("reason", "")
+                logger.info(f"⏳ wait_on_request function called. Pausing silence detection for {wait_seconds}s. Reason: {reason}")
+                
+                # Tell user we are waiting
+                message = result.get("message", "No problem, take your time.")
+                await self._speak_system_message(message, clip_key="wait_ack")
+                
+                # Pause silence detection
+                self.silence_monitor.pause_silence(wait_seconds)
+                # DO NOT RETURN. Let it send the function response back to Deepgram so the LLM knows it waited.
+
+
             # Check for hangup signal from flag_off_topic
             if result.get("should_hangup"):
                 logger.info(f"🚫 Flag off-topic limit reached - hanging up")
@@ -1347,6 +1362,12 @@ class VoiceAgentHandler:
         
         logger.info(f"⏱️ Silence check #{check_id} result: action={action}, reason={reason}")
         
+        if action == "none" and reason == "paused_on_request":
+            # Reschedule this check for 10 seconds later while we are waiting
+            logger.debug(f"⏱️ Silence check #{check_id} paused. Re-checking...")
+            asyncio.create_task(self._check_silence(check_id))
+            return
+            
         if action == "soft_prompt":
             logger.info(f"⏱️ Soft silence - gentle check-in")
             self._in_silence_escalation = True  # Prevent new silence cycles during escalation
