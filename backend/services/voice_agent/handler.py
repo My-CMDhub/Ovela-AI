@@ -328,21 +328,34 @@ class VoiceAgentHandler:
         # by account plan tier. Use a direct API key endpoint to bypass this:
         #
         #   Anthropic → set ANTHROPIC_API_KEY in Heroku config vars
-        #   Google    → set GOOGLE_AI_API_KEY in Heroku config vars
         #
-        # When a key is present we attach the endpoint block and Deepgram
-        # routes directly to the provider — no managed plan needed.
+        # IMPORTANT: When calling Anthropic's API directly (BYO), the model
+        # must use an exact dated version ID — NOT the `-latest` alias.
+        # The `-latest` alias is only resolved by Deepgram's managed layer.
         # ─────────────────────────────────────────────────────────────────
+        # Alias → exact Anthropic API model ID map
+        ANTHROPIC_ALIAS_MAP = {
+            "claude-3-5-haiku-latest":  "claude-3-5-haiku-20241022",
+            "claude-4-5-haiku-latest":  "claude-haiku-4-5-20250514",
+            "claude-sonnet-4-5":        "claude-sonnet-4-5-20250514",
+            "claude-sonnet-4-20250514": "claude-sonnet-4-20250514",
+        }
+
         if provider_type == "anthropic":
             anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
             if anthropic_key:
+                # Resolve alias to exact model ID for direct Anthropic API
+                exact_model = ANTHROPIC_ALIAS_MAP.get(model, model)
+                config["provider"]["model"] = exact_model
+                # Move temperature out of provider into top-level for BYO
+                temperature = config["provider"].pop("temperature", 0.45)
                 config["endpoint"] = {
                     "url": "https://api.anthropic.com/v1/messages",
                     "headers": {
                         "x-api-key": anthropic_key
                     }
                 }
-                logger.info("🔑 Anthropic: BYO endpoint (direct API key)")
+                logger.info(f"🔑 Anthropic BYO: {model} → {exact_model} (direct API key)")
             else:
                 logger.warning("⚠️ Anthropic: ANTHROPIC_API_KEY not set — managed plan required (may fail)")
 
