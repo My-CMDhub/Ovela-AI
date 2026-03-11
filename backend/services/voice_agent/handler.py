@@ -279,11 +279,21 @@ class VoiceAgentHandler:
         voice_settings = self.tenant_config.get("voice_settings", {})
 
         # 1. Tenant DB config (per-tenant, hot-swappable without redeploy)
-        llm_model = voice_settings.get("llm_model", "").strip()
+        db_llm_model = voice_settings.get("llm_model", "").strip()
+        env_llm_model = os.getenv("LLM_MODEL", "").strip()
 
-        # 2. Global env var fallback (Heroku config var)
-        if not llm_model:
-            llm_model = os.getenv("LLM_MODEL", "").strip()
+        # Log raw DB value so we can confirm what was actually read
+        logger.info(f"🧠 LLM config — DB: '{db_llm_model or '(not set)'}' | ENV: '{env_llm_model or '(not set)'}'")
+
+        if db_llm_model:
+            llm_model = db_llm_model
+            llm_source = "DB"
+        elif env_llm_model:
+            llm_model = env_llm_model
+            llm_source = "ENV"
+        else:
+            llm_model = ""
+            llm_source = "default"
 
         # Infer provider type from model name prefix
         if llm_model.startswith("claude-"):
@@ -299,8 +309,9 @@ class VoiceAgentHandler:
             # 3. Hard default
             provider_type = "open_ai"
             model = "gpt-4o-mini" if self.tenant_id == "dhruv_personal" else "gpt-4.1-mini"
+            llm_source = "default"
 
-        logger.info(f"🧠 LLM: {provider_type} / {model}")
+        logger.info(f"🧠 LLM [{llm_source}]: {provider_type} / {model}")
 
         config = {
             "provider": {
