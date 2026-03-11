@@ -1546,7 +1546,9 @@ class VoiceAgentHandler:
                     # GO DEAF: Stop processing user audio to prevent InjectionRefused
                     self._is_hanging_up = True
                     farewell = duration_result.get("farewell", "Thanks for calling!")
-                    await self._speak_system_message(farewell, clip_key="farewell", wait_for_playback=True)
+                    # No clip_key: Cartesia synthesises the *actual* per-call transparent
+                    # message rather than the generic pre-recorded farewell clip.
+                    await self._speak_system_message(farewell, wait_for_playback=True)
                     await self._hangup_call()
                 
                 break

@@ -192,16 +192,16 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         # =================================================================
         {
             "name": "lookup_booking",
-            "description": "Look up an existing booking. ALWAYS collect both guest_name AND phone before calling — ask for both if not already given. Only add email or reference if the first lookup (name+phone) returns need_more_info=true, meaning no match was found.",
+            "description": "Look up an existing booking. Call this as soon as the guest mentions their name or booking reference — DON'T ask for phone number first, the system auto-uses the caller's Twilio number. If found_by=caller_phone is returned, CONFIRM with the guest ('I found a booking under [name] for [dates] — is that yours?') rather than asking for more info. Only pass email or reference if a previous call returned found=false.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "guest_name": {"type": "string", "description": "Full name of the guest — required"},
-                    "phone": {"type": "string", "description": "Guest phone number — required"},
-                    "email": {"type": "string", "description": "Guest email — only provide if name+phone lookup returned need_more_info=true"},
-                    "reference": {"type": "string", "description": "Booking reference code — only provide if name+phone lookup returned need_more_info=true"}
+                    "guest_name": {"type": "string", "description": "Guest name as spoken — pass whatever the user said, system does fuzzy matching"},
+                    "phone": {"type": "string", "description": "Only provide if guest explicitly gives a DIFFERENT phone number. Leave empty to auto-use caller's number."},
+                    "email": {"type": "string", "description": "Only provide if previous lookup returned found=false"},
+                    "reference": {"type": "string", "description": "Booking reference as spoken (e.g. 'CC 7 6 8 1 8') — system normalizes format automatically"}
                 },
-                "required": ["guest_name", "phone"]
+                "required": []
             }
         },
         {

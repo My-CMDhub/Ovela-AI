@@ -535,23 +535,44 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
 # LOOKUP BOOKING HANDLER
 # =============================================================================
 
+def _normalize_reference(raw: str) -> str:
+    """
+    Normalize STT-garbled booking references.
+    'CC76818' → 'CC-76818', 'cc 7 6 8 1 8' → 'CC-76818', 'cc-76818' → 'CC-76818'
+    """
+    r = re.sub(r'\s+', '', raw).upper().replace('-', '')
+    m = re.match(r'^([A-Z]+)(\d+)$', r)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}"
+    return r
+
+
 async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict:
     """
-    Two-step booking lookup:
-      Step 1 (primary): name + phone must BOTH match.
-      Step 2 (fallback): if step 1 finds nothing and email/reference is also
-                         provided, try those as secondary identifiers.
-    Returns need_more_info=True when step 1 fails and no fallback provided,
-    so the AI knows to ask for email or booking reference.
+    Phone-first booking lookup — like a receptionist who can see caller's record
+    the moment they call.
+
+    Strategy:
+      Step 0: Always silently try caller's own Twilio phone number first.
+              If found → return booking info with found_by="caller_phone".
+              AI should then CONFIRM ("I found a booking under X for Y. Is that yours?")
+              rather than interrogate.
+      Step 1: If reference provided → normalize + lookup (handles STT garbling
+              like 'CC 7 6 8 1 8' or 'CC76818' → 'CC-76818').
+      Step 2: If guest_name + explicit phone provided (different caller) → lookup.
+      Step 3: Name-only search.
+      Step 4: Email (last resort, STT-fragile).
     """
     from services.voice_agent.text_utils import normalize_phone_number
 
     guest_name = (args.get("guest_name") or "").strip()
-    reference  = (args.get("reference")  or "").strip().upper()
-    raw_phone  = (args.get("phone")       or "").strip()
-    email      = (args.get("email")       or "").strip().lower()
+    raw_ref    = (args.get("reference")  or "").strip()
+    raw_phone  = (args.get("phone")      or "").strip()
+    email      = (args.get("email")      or "").strip().lower()
 
-    # Normalise phone
+    reference = _normalize_reference(raw_ref) if raw_ref else ""
+
+    # Normalize any explicitly provided phone
     phone = None
     if raw_phone:
         try:
@@ -559,16 +580,16 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         except Exception:
             phone = raw_phone
 
-    # Also try the inbound caller number if nothing else was given
-    if not phone:
-        try:
-            phone = normalize_phone_number(user_phone) if user_phone else None
-        except Exception:
-            phone = user_phone
+    # Always have caller_phone from Twilio (most reliable key)
+    caller_phone = None
+    try:
+        caller_phone = normalize_phone_number(user_phone) if user_phone else None
+    except Exception:
+        caller_phone = user_phone
 
-    def _format_doc(doc, total_docs):
-        return {
-            "found": True,
+    def _format_doc(doc, total_docs, found_by: str = ""):
+        result = {
+            "found":             True,
             "booking_reference": doc.get("booking_reference", ""),
             "guest_name":        doc.get("guest_name", ""),
             "room_type":         doc.get("room_type", ""),
@@ -579,65 +600,73 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "total_amount":      doc.get("total_amount", ""),
             "other_bookings":    total_docs - 1,
         }
+        if found_by:
+            result["found_by"] = found_by
+        return result
+
+    def _name_matches(doc, name: str) -> bool:
+        n = name.lower()
+        db_name = doc.get("guest_name", "").lower()
+        return n in db_name or db_name in n
 
     try:
-        # ── Step 1: reference lookup (most precise, skip other steps) ──────
+        # ── Step 0: Caller's own phone (Twilio) — always try first ──────────
+        if caller_phone:
+            docs = await db_service.lookup_motel_reservation(
+                phone=caller_phone,
+                tenant_id="coalcreek"
+            )
+            if docs:
+                if guest_name:
+                    matched = [d for d in docs if _name_matches(d, guest_name)]
+                    if matched:
+                        return _format_doc(matched[0], len(matched), found_by="caller_phone")
+                    # Phone matched but name differs — still return; flag for AI to clarify
+                    result = _format_doc(docs[0], len(docs), found_by="caller_phone")
+                    result["name_mismatch"] = True
+                    return result
+                # No name given — return booking, let AI confirm with user
+                return _format_doc(docs[0], len(docs), found_by="caller_phone")
+
+        # ── Step 1: Reference lookup (normalized) ───────────────────────────
         if reference:
             docs = await db_service.lookup_motel_reservation(
                 booking_reference=reference,
                 tenant_id="coalcreek"
             )
             if docs:
-                # Verify name loosely if we also have a name
                 if guest_name:
-                    match = next(
-                        (d for d in docs if guest_name.lower() in d.get("guest_name", "").lower()),
-                        None
-                    )
+                    match = next((d for d in docs if _name_matches(d, guest_name)), None)
                     if match:
-                        return _format_doc(match, 1)
-                    # Reference found but name mismatch — still return, flag it
-                    doc = docs[0]
-                    result = _format_doc(doc, len(docs))
+                        return _format_doc(match, 1, found_by="reference")
+                    result = _format_doc(docs[0], len(docs), found_by="reference")
                     result["name_mismatch"] = True
                     return result
-                return _format_doc(docs[0], len(docs))
+                return _format_doc(docs[0], len(docs), found_by="reference")
 
-        # ── Step 2 (primary): name + phone must BOTH match ─────────────────
-        if guest_name and phone:
-            # Fetch by phone first (indexed), then filter by name in Python
+        # ── Step 2: Explicit (different) phone + name ───────────────────────
+        if phone and phone != caller_phone:
             docs = await db_service.lookup_motel_reservation(
                 phone=phone,
                 tenant_id="coalcreek"
             )
             if docs:
-                name_lower = guest_name.lower()
-                matched = [
-                    d for d in docs
-                    if name_lower in d.get("guest_name", "").lower()
-                    or d.get("guest_name", "").lower() in name_lower
-                ]
-                if matched:
-                    return _format_doc(matched[0], len(matched))
+                if guest_name:
+                    matched = [d for d in docs if _name_matches(d, guest_name)]
+                    if matched:
+                        return _format_doc(matched[0], len(matched), found_by="phone")
+                return _format_doc(docs[0], len(docs), found_by="phone")
 
-            # Phone matched nothing, or name didn't match — try name-only search
-            name_docs = await db_service.lookup_motel_reservation(
+        # ── Step 3: Name-only search ─────────────────────────────────────────
+        if guest_name:
+            docs = await db_service.lookup_motel_reservation(
                 guest_name=guest_name,
                 tenant_id="coalcreek"
             )
-            if name_docs:
-                # Name found but phone didn't match — proceed to step 3
-                pass
-            else:
-                # Truly nothing found by name or phone
-                if not email:
-                    return {
-                        "found": False,
-                        "need_more_info": True,
-                        "message": "I couldn't find a booking under that name and number. Could you give me your email address or booking reference so I can search further?"
-                    }
+            if docs:
+                return _format_doc(docs[0], len(docs), found_by="name")
 
-        # ── Step 3 (fallback): email ───────────────────────────────────────
+        # ── Step 4: Email (last resort) ───────────────────────────────────────
         if email:
             docs = await db_service.lookup_motel_reservation(
                 email=email,
@@ -645,28 +674,27 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             )
             if docs:
                 if guest_name:
-                    matched = [
-                        d for d in docs
-                        if guest_name.lower() in d.get("guest_name", "").lower()
-                    ]
+                    matched = [d for d in docs if _name_matches(d, guest_name)]
                     if matched:
-                        return _format_doc(matched[0], len(matched))
-                return _format_doc(docs[0], len(docs))
+                        return _format_doc(matched[0], len(matched), found_by="email")
+                return _format_doc(docs[0], len(docs), found_by="email")
 
-        # ── Nothing found across all strategies ───────────────────────────
+        # ── Nothing found ────────────────────────────────────────────────────
         return {
             "found": False,
-            "need_more_info": False,
-            "message": "I've searched by name, number, and email but couldn't find a matching booking. Would you like me to connect you to reception?"
+            "message": "I couldn't find a booking linked to your number or the details provided. Would you like me to connect you to reception?"
         }
 
     except Exception as e:
         logger.error(f"lookup_booking error: {e}")
         return {
             "found": False,
-            "error": "db_error",
-            "message": "I had trouble reaching the bookings system. Let me transfer you to reception."
+            "error": True,
+            "message": "I'm having trouble accessing the booking system right now. Let me connect you to reception.",
+            "should_transfer": True
         }
+
+
 
 
 # =============================================================================
