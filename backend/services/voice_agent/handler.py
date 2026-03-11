@@ -261,15 +261,14 @@ class VoiceAgentHandler:
           2. LLM_MODEL env var (Heroku)             ← global override
           3. gpt-4.1-mini hard default
 
-        Provider is inferred from model prefix: claude- → anthropic, gemini- → google, gpt- → open_ai
+        All models below are Deepgram-managed — only your DEEPGRAM_API_KEY needed.
+        Verified available on this account (2026-03-11):
 
-        Anthropic (BYO — requires ANTHROPIC_API_KEY in Heroku config vars):
-          Verified working on this account (2026-03-11):
-            claude-3-haiku-20240307   fastest / cheapest
-            claude-sonnet-4-5         best quality
-
-        OpenAI (no extra key needed — Deepgram manages it):
-            gpt-4.1-mini (default), gpt-4.1-nano, gpt-4o-mini
+          OpenAI   : gpt-4.1-mini*, gpt-4.1-nano, gpt-4.1, gpt-4o-mini
+          Anthropic: claude-haiku-4-5, claude-sonnet-4-5, claude-sonnet-4-6
+          Google   : gemini-2.0-flash, gemini-2.5-flash, gemini-2.5-flash-lite
+          Groq     : openai/gpt-oss-20b
+          (* = current default)
         """
         voice_settings = self.tenant_config.get("voice_settings", {})
 
@@ -288,7 +287,7 @@ class VoiceAgentHandler:
             provider_type, model = "anthropic", llm_model
         elif llm_model.startswith("gemini-"):
             provider_type, model = "google", llm_model
-        elif llm_model.startswith("gpt-"):
+        elif llm_model.startswith("gpt-") or llm_model.startswith("openai/"):
             provider_type, model = "open_ai", llm_model
         else:
             provider_type = "open_ai"
@@ -297,7 +296,7 @@ class VoiceAgentHandler:
 
         logger.info(f"🧠 LLM [{source}]: {provider_type} / {model}")
 
-        config = {
+        return {
             "provider": {
                 "type": provider_type,
                 "model": model,
@@ -306,21 +305,6 @@ class VoiceAgentHandler:
             "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()
         }
-
-        # Anthropic requires BYO: attach your API key so Deepgram routes
-        # directly to Anthropic's API (bypasses Deepgram's gated managed tier).
-        if provider_type == "anthropic":
-            anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
-            if anthropic_key:
-                config["endpoint"] = {
-                    "url": "https://api.anthropic.com/v1/messages",
-                    "headers": {"x-api-key": anthropic_key}
-                }
-                logger.info(f"🔑 Anthropic BYO endpoint active")
-            else:
-                logger.warning("⚠️ ANTHROPIC_API_KEY not set — call will fail for Claude models")
-
-        return config
     
     
     def _get_function_call_instructions(self) -> str:
