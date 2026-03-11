@@ -45,9 +45,9 @@ class BookingsMixin:
             
             queries = []
             if tenant_id:
-                queries.append(f'equal("tenant_id", "{tenant_id}")')
+                queries.append(self.Query.equal("tenant_id", tenant_id))
             if status:
-                queries.append(f'equal("status", "{status}")')
+                queries.append(self.Query.equal("status", status))
                 
             params = {"queries": queries} if queries else {}
             
@@ -77,9 +77,9 @@ class BookingsMixin:
         try:
             path = f"/databases/{self.db_id}/collections/booking_requests/documents"
             
-            queries = [f'equal("customer_phone", "{customer_phone}")']
+            queries = [self.Query.equal("customer_phone", customer_phone)]
             if tenant_id:
-                queries.append(f'equal("tenant_id", "{tenant_id}")')
+                queries.append(self.Query.equal("tenant_id", tenant_id))
                 
             params = {"queries": queries}
             result = await self._make_request("GET", path, params=params)
@@ -137,11 +137,11 @@ class BookingsMixin:
             
             queries = []
             if tenant_id:
-                queries.append(f'equal("tenant_id", "{tenant_id}")')
+                queries.append(self.Query.equal("tenant_id", tenant_id))
             if date:
-                queries.append(f'equal("booking_date", "{date}")')
+                queries.append(self.Query.equal("booking_date", date))
             if status:
-                queries.append(f'equal("status", "{status}")')
+                queries.append(self.Query.equal("status", status))
                 
             params = {"queries": queries} if queries else {}
             
@@ -156,11 +156,11 @@ class BookingsMixin:
         try:
             path = f"/databases/{self.db_id}/collections/bookings/documents"
             queries = [
-                f'greaterThanEqual("booking_date", "{start_date}")',
-                f'lessThanEqual("booking_date", "{end_date}")'
+                self.Query.greater_than_equal("booking_date", start_date),
+                self.Query.less_than_equal("booking_date", end_date)
             ]
             if tenant_id:
-                queries.append(f'equal("tenant_id", "{tenant_id}")')
+                queries.append(self.Query.equal("tenant_id", tenant_id))
                 
             params = {"queries": queries}
             
@@ -277,12 +277,12 @@ class BookingsMixin:
         ENFORCED: Server-side isolation.
         """
         try:
-            queries = [f'equal("tenant_id", "{tenant_id}")']
+            queries = [self.Query.equal("tenant_id", tenant_id)]
             if payment_status:
-                queries.append(f'equal("payment_status", "{payment_status}")')
+                queries.append(self.Query.equal("payment_status", payment_status))
             
-            queries.append('orderDesc("created_at")')
-            queries.append(f'limit({limit})')
+            queries.append(self.Query.order_desc("created_at"))
+            queries.append(self.Query.limit(limit))
             
             params = {"queries": queries}
             
@@ -309,8 +309,8 @@ class BookingsMixin:
         """
         try:
             queries = [
-                f'equal("booking_reference", "{booking_reference}")',
-                f'equal("tenant_id", "{tenant_id}")'
+                self.Query.equal("booking_reference", booking_reference),
+                self.Query.equal("tenant_id", tenant_id)
             ]
             params = {"queries": queries}
             
@@ -342,12 +342,12 @@ class BookingsMixin:
         ENFORCED: tenant_id isolation.
         """
         try:
-            base_tenant = f'equal("tenant_id", "{tenant_id}")'
+            base_tenant = self.Query.equal("tenant_id", tenant_id)
 
             # 1. Reference is most precise — try first
             if booking_reference:
                 ref_clean = booking_reference.strip().upper()
-                queries = [base_tenant, f'equal("booking_reference", "{ref_clean}")']
+                queries = [base_tenant, self.Query.equal("booking_reference", ref_clean)]
                 result = await self._motel_request(
                     "GET",
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
@@ -359,7 +359,7 @@ class BookingsMixin:
 
             # 2. Phone match
             if phone:
-                queries = [base_tenant, f'equal("guest_phone", "{phone}")', 'orderDesc("created_at")', 'limit(5)']
+                queries = [base_tenant, self.Query.equal("guest_phone", phone), self.Query.order_desc("created_at"), self.Query.limit(5)]
                 result = await self._motel_request(
                     "GET",
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
@@ -372,7 +372,7 @@ class BookingsMixin:
             # 3. Guest name — exact match (title-cased)
             if guest_name:
                 name_clean = guest_name.strip().title()
-                queries = [base_tenant, f'equal("guest_name", "{name_clean}")', 'orderDesc("created_at")', 'limit(5)']
+                queries = [base_tenant, self.Query.equal("guest_name", name_clean), self.Query.order_desc("created_at"), self.Query.limit(5)]
                 result = await self._motel_request(
                     "GET",
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
@@ -383,7 +383,7 @@ class BookingsMixin:
                     return docs
 
                 # 3b. Fallback: search (full-text index, if available)
-                queries = [base_tenant, f'search("guest_name", "{name_clean}")', 'limit(5)']
+                queries = [base_tenant, self.Query.search("guest_name", name_clean), self.Query.limit(5)]
                 result = await self._motel_request(
                     "GET",
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
@@ -396,7 +396,7 @@ class BookingsMixin:
             # 4. Email match
             if email:
                 email_clean = email.strip().lower()
-                queries = [base_tenant, f'equal("guest_email", "{email_clean}")', 'orderDesc("created_at")', 'limit(5)']
+                queries = [base_tenant, self.Query.equal("guest_email", email_clean), self.Query.order_desc("created_at"), self.Query.limit(5)]
                 result = await self._motel_request(
                     "GET",
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
