@@ -18,7 +18,7 @@ const playfair = Playfair_Display({
   subsets: ["latin"],
   variable: "--font-serif",
   display: "swap",
-  preload: false, // Decorative font, load after critical content
+  preload: true,
 })
 
 export const metadata: Metadata = {

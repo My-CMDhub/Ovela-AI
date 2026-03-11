@@ -113,76 +113,68 @@ export default function Home() {
         {isLoading && <Preloader onComplete={() => setIsLoading(false)} />}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {!isLoading && (
+      <div className={isLoading ? "h-screen overflow-hidden" : ""}>
+        <Header />
+
+        <div className="overflow-x-clip">
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 0.6, ease: "easeOut" }}
+            initial="hidden"
+            animate="visible"
+            variants={{
+              hidden: { opacity: 0, y: 20 },
+              visible: {
+                opacity: 1,
+                y: 0,
+                transition: {
+                  duration: 0.8,
+                  ease: [0.22, 1, 0.36, 1],
+                  delay: 0.2
+                }
+              }
+            }}
           >
-            <Header />
-
-            <div className="overflow-x-clip">
-              <motion.div
-                initial="hidden"
-                animate="visible"
-                variants={{
-                  hidden: { opacity: 0, y: 20 },
-                  visible: {
-                    opacity: 1,
-                    y: 0,
-                    transition: {
-                      duration: 0.8,
-                      ease: [0.22, 1, 0.36, 1],
-                      delay: 0.2
-                    }
-                  }
-                }}
-              >
-                <Hero />
-              </motion.div>
-            </div>
-
-            {/* Logo Loop - Social Proof */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 1, duration: 1 }}
-              className="py-16 border-b border-white/5 bg-background/50 backdrop-blur-sm"
-            >
-              <div className="container mx-auto px-6 mb-10 text-center">
-                <p className="text-sm font-medium text-muted-foreground">Reads and writes directly to the software you already use</p>
-              </div>
-              <LogoLoop
-                logos={partnerLogos}
-                speed={30}
-                direction="left"
-                logoHeight={50}
-                gap={80}
-                pauseOnHover={true}
-                scaleOnHover={true}
-                fadeOut={true}
-                fadeOutColor="var(--background)"
-                className="opacity-80 hover:opacity-100 transition-opacity duration-300"
-              />
-            </motion.div>
-
-            <StudioImagery />
-
-            {/* Other sections fade in normally as you scroll */}
-            <div className="overflow-x-clip">
-              <ProblemSolution />
-              <Features />
-              <LivePreview />
-              <Testimonials />
-              <FAQ />
-              <Pricing />
-              <Contact />
-              <Footer />
-            </div>
+            <Hero />
           </motion.div>
-        )}
-      </AnimatePresence>
+        </div>
+
+        {/* Logo Loop - Social Proof */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 1, duration: 1 }}
+          className="py-16 border-b border-white/5 bg-background/50 backdrop-blur-sm"
+        >
+          <div className="container mx-auto px-6 mb-10 text-center">
+            <p className="text-sm font-medium text-muted-foreground">Reads and writes directly to the software you already use</p>
+          </div>
+          <LogoLoop
+            logos={partnerLogos}
+            speed={30}
+            direction="left"
+            logoHeight={50}
+            gap={80}
+            pauseOnHover={true}
+            scaleOnHover={true}
+            fadeOut={true}
+            fadeOutColor="var(--background)"
+            className="opacity-80 hover:opacity-100 transition-opacity duration-300"
+          />
+        </motion.div>
+
+        <StudioImagery />
+
+        {/* Other sections fade in normally as you scroll */}
+        <div className="overflow-x-clip">
+          <ProblemSolution />
+          <Features />
+          <LivePreview />
+          <Testimonials />
+          <FAQ />
+          <Pricing />
+          <Contact />
+          <Footer />
+        </div>
+      </div>
       <ExitPopup />
     </main>
   )
