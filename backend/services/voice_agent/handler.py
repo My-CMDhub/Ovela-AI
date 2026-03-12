@@ -259,6 +259,16 @@ class VoiceAgentHandler:
         )
         return self._contains_any_phrase(normalized, help_offer_markers)
 
+    def _is_end_call_narration_message(self, text: str) -> bool:
+        normalized = self._normalize_phrase(text)
+        return normalized in {
+            "i ll end the call now",
+            "i will end the call now",
+            "i ll hang up now",
+            "i will hang up now",
+            "ending the call now",
+        }
+
     def _should_offer_one_more_help_before_hangup(self, user_utterance: str) -> bool:
         if self.call_outcome == "abuse_timeout":
             return False
@@ -939,6 +949,9 @@ class VoiceAgentHandler:
             if self._normalize_phrase(clean_content).strip(".!") in {"end call", "end_call"}:
                 logger.info("🤐 Suppressing literal tool phrase from assistant output")
                 return
+            if self._is_end_call_narration_message(clean_content):
+                logger.info("🤐 Suppressing end-call narration from assistant output")
+                return
             
             # STATE MACHINE: AI is now speaking
             # This replaces AgentStartedSpeaking which Deepgram doesn't send
@@ -1341,7 +1354,9 @@ class VoiceAgentHandler:
                     if not message:
                         message = get_random_farewell(self.tenant_id)
                         logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
-                    await self._speak_system_message(message, clip_key="farewell")
+                    # Use the actual selected farewell text for normal conversational endings.
+                    # A fixed farewell clip can mismatch the chosen message and sound wrong.
+                    await self._speak_system_message(message)
                     delay = max(4.0, (len(message) * 0.1) + 2.0)
                     logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
                     asyncio.create_task(self._scheduled_hangup(delay))
@@ -1907,7 +1922,6 @@ class VoiceAgentHandler:
         try:
             await self._speak_system_message(
                 farewell_message,
-                clip_key="farewell",
                 wait_for_playback=True,
             )
             elapsed = time.monotonic() - start

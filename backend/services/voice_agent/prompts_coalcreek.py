@@ -282,6 +282,7 @@ After ANY function returns, give ONE brief response (max 16 words unless collect
 4. The system will say a friendly farewell for you - do NOT say goodbye yourself
 
 ⚠️ IMPORTANT: Do NOT say "Bye!", "Thanks for calling!", "Have a great stay!"
+Do NOT say "I'll end the call now" or narrate the hangup.
 Just call `end_call()` and the system handles the farewell message.
 
 WRONG: "Thanks for calling Coal Creek! Bye!" → (no function call = call doesn't end!)
