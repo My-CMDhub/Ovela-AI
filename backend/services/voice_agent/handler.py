@@ -52,13 +52,15 @@ from .text_utils import prepare_for_tts, clean_tts_output
 from .latency_tracker import LatencyTracker
 from services.motel_knowledge_base import set_tenant_context
 
-CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
+CARTESIA_VOICE_ID = "f9836c6e-a0bd-460e-9d3c-f7299fa60f94"
 # CARTESIA_VOICE_ID = "3e1ed423-17e5-4773-b87c-25b031106e41" - Paul AU
 # CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab" - Blake US
 # CARTESIA_VOICE_ID = "47c38ca4-5f35-497b-b1a3-415245fb35e1" - Daniel US
 # CARTESIA_VOICE_ID = "999df508-4de5-40a7-8bd3-8c12f678c284" - Layla US
 # CARTESIA_VOICE_ID = "41f3c367-e0a8-4a85-89e0-c27bae9c9b6d" - Liam AU
 # CARTESIA_VOICE_ID = "c63361f8-d142-4c62-8da7-8f8149d973d6" - Krishna IN
+# CARTESIA_VOICE_ID = "f9836c6e-a0bd-460e-9d3c-f7299fa60f94" - Caroline US
+# CARTESIA_VOICE_ID = "e8e5fffb-252c-436d-b842-8879b84445b6" - Cathy US - soft and slow
 
 SYSTEM_AUDIO_DIR = Path(__file__).resolve().parent / "audio"
 REQUIRED_SYSTEM_CLIP_KEYS = [
@@ -604,7 +606,7 @@ class VoiceAgentHandler:
         # CONFIG-DRIVEN ARCHITECTURE: Load settings from DB (ASYNC)
         # =====================================================================
         if self.tenant_id == "dhruv_personal":
-            # Bypass DB for personal assistant, use Paul AU (3e1ed423-17e5-4773-b87c-25b031106e41) or similar voice
+            # Bypass DB for personal assistant, use Katie US(3e1ed423-17e5-4773-b87c-25b031106e41) or similar voice
             self.tenant_config = {
                 "type": "personal_assistant",
                 "voice_settings": {
