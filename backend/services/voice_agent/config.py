@@ -67,7 +67,7 @@ PRESET_PHRASES = {
 # SILENCE DETECTION THRESHOLDS (seconds)
 # =============================================================================
 SOFT_SILENCE_THRESHOLD = 10   # First gentle check-in prompt
-HARD_SILENCE_THRESHOLD = 20   # More urgent check
+HARD_SILENCE_THRESHOLD = 15   # More urgent check
 ABANDON_THRESHOLD = 25        # End call
 
 # =============================================================================

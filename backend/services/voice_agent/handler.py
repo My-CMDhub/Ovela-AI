@@ -275,6 +275,25 @@ class VoiceAgentHandler:
         if self._final_help_offer_active:
             return False
         return self._is_soft_close_only(user_utterance)
+
+    def _should_end_call_deterministically(self, user_utterance: str) -> bool:
+        normalized = self._normalize_phrase(user_utterance)
+        if not normalized or getattr(self, '_is_hanging_up', False):
+            return False
+        strongest_terminal_markers = (
+            "bye",
+            "goodbye",
+            "bye bye",
+            "see you",
+            "see ya",
+            "that's all",
+            "that is all",
+            "that's it",
+            "that is it",
+            "that'll be all",
+            "that will be all",
+        )
+        return self._contains_any_phrase(normalized, strongest_terminal_markers)
     
     # =========================================================================
     # DEEPGRAM SETTINGS
@@ -934,6 +953,12 @@ class VoiceAgentHandler:
                     return
                 elif spam_result.get("warning"):
                     await self._speak_system_message(spam_result["warning"], clip_key="abuse_warning")
+
+            if self._should_end_call_deterministically(content):
+                farewell = get_random_farewell(self.tenant_id)
+                logger.info("👋 Deterministic end-call for explicit close: '%s'", content)
+                await self._hangup_with_farewell(farewell)
+                return
 
         elif role == "assistant":
             # GATING: If we are in the process of hanging up (e.g. end_call triggered),

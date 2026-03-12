@@ -27,7 +27,7 @@ class SilenceMonitor:
     
     Thresholds:
     - SOFT_SILENCE_THRESHOLD (10s): First gentle check-in
-    - HARD_SILENCE_THRESHOLD (20s): More urgent check
+    - HARD_SILENCE_THRESHOLD (15s): More urgent check
     - ABANDON_THRESHOLD (25s): End call politely
     """
     
@@ -150,6 +150,7 @@ class SilenceMonitor:
             return {"action": "none", "reason": "user_spoke"}
         
         duration = self.get_silence_duration()
+        hard_threshold = self.get_hard_threshold()
         
         # Abandon threshold (25s+)
         if duration >= ABANDON_THRESHOLD and self.silence_followup_count >= 2:
@@ -164,8 +165,8 @@ class SilenceMonitor:
                 ])
             }
         
-        # Hard threshold (20s)
-        if duration >= HARD_SILENCE_THRESHOLD and self.silence_followup_count == 1:
+        # Hard threshold (15s by default, or 5s after any extended soft threshold)
+        if duration >= hard_threshold and self.silence_followup_count == 1:
             logger.info(f"⏱️ Hard silence ({int(duration)}s) - urgent check-in")
             self.silence_followup_count = 2
             return {
@@ -198,7 +199,7 @@ class SilenceMonitor:
     
     def get_hard_threshold(self) -> float:
         """Get hard silence threshold."""
-        return HARD_SILENCE_THRESHOLD
+        return max(HARD_SILENCE_THRESHOLD, self.get_soft_threshold() + 5)
     
     def get_abandon_threshold(self) -> float:
         """Get abandon threshold."""
