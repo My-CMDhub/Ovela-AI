@@ -587,7 +587,34 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
     except Exception:
         caller_phone = user_phone
 
-    def _format_doc(doc, total_docs, found_by: str = ""):
+    def _booking_detail_tail(doc: dict) -> str:
+        details = []
+        if doc.get("check_in_date"):
+            details.append(f"checking in on {doc['check_in_date']}")
+        if doc.get("room_type"):
+            details.append(f"for the {doc['room_type']}")
+        return " ".join(details)
+
+    def _build_confirmation_prompt(result: dict, found_by: str, name_mismatch: bool = False) -> str:
+        guest = result.get("guest_name") or "that guest"
+        details = _booking_detail_tail(result)
+        if found_by == "caller_phone":
+            opener = f"I found a booking on this number under {guest}"
+        elif found_by == "phone":
+            opener = f"I found a booking on that number under {guest}"
+        elif found_by == "reference" and result.get("booking_reference"):
+            opener = f"I found booking {result['booking_reference']} under {guest}"
+        else:
+            opener = f"I found a booking under {guest}"
+
+        if details:
+            opener = f"{opener} {details}"
+
+        if name_mismatch:
+            return f"{opener} - is that the one?"
+        return f"{opener} - is that yours?"
+
+    def _format_doc(doc, total_docs, found_by: str = "", name_mismatch: bool = False):
         result = {
             "found":             True,
             "booking_reference": doc.get("booking_reference", ""),
@@ -602,6 +629,11 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         }
         if found_by:
             result["found_by"] = found_by
+        if name_mismatch:
+            result["name_mismatch"] = True
+        result["lookup_confidence"] = "high" if found_by in {"caller_phone", "reference"} and not name_mismatch else "medium"
+        result["confirmation_prompt"] = _build_confirmation_prompt(result, found_by, name_mismatch=name_mismatch)
+        result["message"] = result["confirmation_prompt"]
         return result
 
     def _name_matches(doc, name: str) -> bool:
@@ -622,9 +654,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                     if matched:
                         return _format_doc(matched[0], len(matched), found_by="caller_phone")
                     # Phone matched but name differs — still return; flag for AI to clarify
-                    result = _format_doc(docs[0], len(docs), found_by="caller_phone")
-                    result["name_mismatch"] = True
-                    return result
+                    return _format_doc(docs[0], len(docs), found_by="caller_phone", name_mismatch=True)
                 # No name given — return booking, let AI confirm with user
                 return _format_doc(docs[0], len(docs), found_by="caller_phone")
 
@@ -639,9 +669,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                     match = next((d for d in docs if _name_matches(d, guest_name)), None)
                     if match:
                         return _format_doc(match, 1, found_by="reference")
-                    result = _format_doc(docs[0], len(docs), found_by="reference")
-                    result["name_mismatch"] = True
-                    return result
+                    return _format_doc(docs[0], len(docs), found_by="reference", name_mismatch=True)
                 return _format_doc(docs[0], len(docs), found_by="reference")
 
         # ── Step 2: Explicit (different) phone + name ───────────────────────
@@ -682,7 +710,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         # ── Nothing found ────────────────────────────────────────────────────
         return {
             "found": False,
-            "message": "I couldn't find a booking linked to your number or the details provided. Would you like me to connect you to reception?"
+            "message": "I couldn't find a booking linked to your number or the details I have here - want me to put you through to reception?"
         }
 
     except Exception as e:
@@ -906,7 +934,12 @@ class CoalCreekFunctionDispatcher:
              
         # Common controls
         elif function_name == "end_call":
-             return {"action": "end_call", "success": True, "message": args.get("message", "")}
+             return {
+                "action": "end_call",
+                "success": True,
+                "message": args.get("message", ""),
+                "user_utterance": args.get("_user_utterance", ""),
+            }
              
         elif function_name == "transfer_to_staff":
              from core.config import settings

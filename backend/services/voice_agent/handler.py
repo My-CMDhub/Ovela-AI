@@ -178,6 +178,93 @@ class VoiceAgentHandler:
         
         # Tenant Configuration (Database Driven)
         self.tenant_config = {}
+        self._final_help_offer_active = False
+
+    def _normalize_phrase(self, text: str) -> str:
+        normalized = (text or "").lower()
+        for char in ".,!?:;()-":
+            normalized = normalized.replace(char, " ")
+        return " ".join(normalized.split())
+
+    def _contains_any_phrase(self, text: str, phrases: tuple[str, ...]) -> bool:
+        padded = f" {text} "
+        return any(f" {phrase} " in padded for phrase in phrases)
+
+    def _is_explicit_terminal_goodbye(self, text: str) -> bool:
+        normalized = self._normalize_phrase(text)
+        if not normalized:
+            return False
+        explicit_goodbyes = (
+            "bye",
+            "goodbye",
+            "bye bye",
+            "see you",
+            "see ya",
+            "catch you later",
+            "talk to you later",
+            "farewell",
+            "that's all",
+            "that is all",
+            "that's it",
+            "that is it",
+            "nothing else",
+            "no more help",
+            "i'm done",
+            "im done",
+            "all done",
+            "i'm all set",
+            "im all set",
+            "that'll be all",
+            "that will be all",
+            "thanks bye",
+            "thank you bye",
+        )
+        return self._contains_any_phrase(normalized, explicit_goodbyes)
+
+    def _is_soft_close_only(self, text: str) -> bool:
+        normalized = self._normalize_phrase(text)
+        if not normalized or self._is_explicit_terminal_goodbye(normalized):
+            return False
+        soft_close_markers = (
+            "thanks",
+            "thank you",
+            "cheers",
+            "no worries",
+            "appreciate it",
+            "appreciated",
+            "no thank you",
+            "no thanks",
+            "all good",
+            "alright",
+            "all right",
+            "okay",
+            "ok",
+            "righto",
+            "fair enough",
+        )
+        return self._contains_any_phrase(normalized, soft_close_markers)
+
+    def _is_final_help_offer_message(self, text: str) -> bool:
+        normalized = self._normalize_phrase(text)
+        if not normalized:
+            return False
+        help_offer_markers = (
+            "anything else i can help with",
+            "anything else i can do for you",
+            "anything else you need",
+            "if you need anything else",
+            "let me know if you need anything else",
+            "still need anything else",
+            "what else can i help with",
+        )
+        return self._contains_any_phrase(normalized, help_offer_markers)
+
+    def _should_offer_one_more_help_before_hangup(self, user_utterance: str) -> bool:
+        if self.call_outcome == "abuse_timeout":
+            return False
+        if self._final_help_offer_active:
+            return False
+        return self._is_soft_close_only(user_utterance)
     
     # =========================================================================
     # DEEPGRAM SETTINGS
@@ -821,8 +908,7 @@ class VoiceAgentHandler:
             self.latency.mark_stt_complete()
             # Tag turn type from content for grouped latency stats
             _words = content.split()
-            _farewell_hints = {"bye", "goodbye", "thanks", "cheers", "cya"}
-            if any(w.lower().rstrip(".,!?") in _farewell_hints for w in _words):
+            if self._is_explicit_terminal_goodbye(content) or self._is_soft_close_only(content):
                 self.latency.set_turn_type("goodbye")
             elif len(_words) <= 7:
                 self.latency.set_turn_type("short_answer")
@@ -849,6 +935,10 @@ class VoiceAgentHandler:
 
             # Extract control signals and clean content for logging/transcript
             clean_content, signals = prepare_for_tts(content)
+
+            if self._normalize_phrase(clean_content).strip(".!") in {"end call", "end_call"}:
+                logger.info("🤐 Suppressing literal tool phrase from assistant output")
+                return
             
             # STATE MACHINE: AI is now speaking
             # This replaces AgentStartedSpeaking which Deepgram doesn't send
@@ -864,33 +954,12 @@ class VoiceAgentHandler:
             if self.ai_response_start_time:
                 latency_ms = int((time.time() - self.ai_response_start_time) * 1000)
                 
-                # TRUE TTFT: Log only for FIRST sentence after user spoke.
-                # Split out a leading ack word (e.g. "Sure,", "Okay,") as [Ovela Ack]
-                # so you can see whether the first syllable is fast independently.
+                # TRUE TTFT: Log only for the first assistant sentence after user speech.
                 if hasattr(self, '_stt_complete_time') and not getattr(self, '_first_ai_response_logged', False):
                     ttft_ms = int((time.time() - self._stt_complete_time) * 1000)
                     self._first_ai_response_logged = True
                     self.latency.mark_llm_first_token()
-                    # Try to isolate a leading ack phrase (up to first comma or first 2 words)
-                    ack_prefixes = (
-                        "right,","sure,","yep,","yeah,","okay,","ok,","got it,","ah,",
-                        "alright,","no worries,","of course,","absolutely,",
-                    )
-                    lower_content = clean_content.lower()
-                    ack_part = None
-                    rest_part = clean_content
-                    for prefix in ack_prefixes:
-                        if lower_content.startswith(prefix):
-                            split_at = len(prefix)
-                            ack_part = clean_content[:split_at].strip()
-                            rest_part = clean_content[split_at:].strip()
-                            break
-                    if ack_part:
-                        logger.info(f"[Ovela Ack]: {ack_part} (TTFT: {ttft_ms}ms)")
-                        if rest_part:
-                            logger.info(f"[Ovela]: {rest_part}")
-                    else:
-                        logger.info(f"[Ovela]: {clean_content} (TTFT: {ttft_ms}ms)")
+                    logger.info(f"[Ovela]: {clean_content} (TTFT: {ttft_ms}ms)")
                 else:
                     logger.info(f"[Ovela]: {clean_content} (inter-sentence: {latency_ms}ms)")
                 
@@ -901,6 +970,7 @@ class VoiceAgentHandler:
             
             # Save clean content to transcript (not raw with signals)
             self.last_ai_message = clean_content
+            self._final_help_offer_active = self._is_final_help_offer_message(clean_content)
             self.transcript.append({
                 "role": "ai",
                 "text": clean_content,
@@ -1255,17 +1325,27 @@ class VoiceAgentHandler:
 
             # Check for end_call signal (LLM explicitly requested call termination)
             if result.get("action") == "end_call":
-                logger.info("👋 end_call function called - injecting farewell + scheduling hangup")
-                self._is_hanging_up = True
-                message = result.get("message")
-                if not message:
-                    message = get_random_farewell(self.tenant_id)
-                    logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
-                await self._speak_system_message(message, clip_key="farewell")
-                delay = max(4.0, (len(message) * 0.1) + 2.0)
-                logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
-                asyncio.create_task(self._scheduled_hangup(delay))
-                return
+                user_utterance = result.get("user_utterance", "")
+                if self._should_offer_one_more_help_before_hangup(user_utterance):
+                    logger.info("↩️ Suppressing premature end_call for soft close: '%s'", user_utterance)
+                    self._final_help_offer_active = True
+                    result = {
+                        "success": True,
+                        "soft_close_redirected": True,
+                        "message": "No problem, if you need anything else just let me know.",
+                    }
+                else:
+                    logger.info("👋 end_call function called - injecting farewell + scheduling hangup")
+                    self._is_hanging_up = True
+                    message = result.get("message")
+                    if not message:
+                        message = get_random_farewell(self.tenant_id)
+                        logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
+                    await self._speak_system_message(message, clip_key="farewell")
+                    delay = max(4.0, (len(message) * 0.1) + 2.0)
+                    logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
+                    asyncio.create_task(self._scheduled_hangup(delay))
+                    return
 
             # Check for wait_on_request signal
             if result.get("action") == "wait_on_request":

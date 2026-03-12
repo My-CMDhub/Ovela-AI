@@ -192,7 +192,7 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         # =================================================================
         {
             "name": "lookup_booking",
-            "description": "Look up an existing booking. Call this as soon as the guest mentions their name or booking reference — DON'T ask for phone number first, the system auto-uses the caller's Twilio number. If found_by=caller_phone is returned, CONFIRM with the guest ('I found a booking under [name] for [dates] — is that yours?') rather than asking for more info. Only pass email or reference if a previous call returned found=false.",
+            "description": "Look up an existing booking. Call this as soon as the guest mentions their name or booking reference — DON'T ask for phone number first, the system auto-uses the caller's Twilio number. If the result returns found=true, use the surfaced booking details to confirm naturally like a receptionist. If found_by=caller_phone is returned, confirm the likely booking instead of asking for brittle identifiers. Only pass email or reference if a previous call returned found=false.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -269,7 +269,7 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         },
         {
             "name": "end_call",
-            "description": "End the call by saying goodbye. ONLY use when the caller explicitly wants to hang up — e.g. 'bye', 'goodbye', 'thanks, that's all', 'no more help needed'. NEVER use this when they want to speak to staff or be transferred.",
+            "description": "End the call by saying goodbye. ONLY use when the caller explicitly wants to finish the conversation, such as 'bye', 'goodbye', 'see you', 'that's all', or when they clearly confirm they are done after your final help-offer. If they only say thanks, appreciation, or a polite wrap-up, do ONE final natural help-offer first instead of ending immediately. NEVER use this when they want to speak to staff or be transferred.",
             "parameters": {
                 "type": "object",
                 "properties": {
