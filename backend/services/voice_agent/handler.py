@@ -499,7 +499,7 @@ class VoiceAgentHandler:
         # MAP SLUGS TO UUIDS
         # put readable names in DB config
         if voice_id == "cartesia-sonic-3-thalia":
-            voice_id = "a167e0f3-df7e-4d52-a9c3-f949145efdab"
+            voice_id = "f9836c6e-a0bd-460e-9d3c-f7299fa60f94"
         elif len(voice_id) < 30: # Simple check for non-UUID
             logger.warning(f"⚠️ Invalid Voice ID format: {voice_id} - falling back to default")
             voice_id = CARTESIA_VOICE_ID
