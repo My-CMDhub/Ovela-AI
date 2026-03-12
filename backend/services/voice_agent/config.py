@@ -26,11 +26,11 @@ FAREWELL_STYLES = [
 
 # Coal Creek Motel-specific farewells (motel hospitality style)
 COALCREEK_FAREWELLS = [
-    "Thanks for calling Coal Creek. Have a great stay.",
-    "Perfect — we'll see you soon. Take care.",
-    "All sorted. Safe travels.",
-    "You're all set. Thanks for calling.",
-    "Cheers — we'll have your room ready.",
+    "Thanks for calling Coal Creek. Take care.",
+    "No worries. Thanks for calling.",
+    "All sorted. Feel free to call back anytime.",
+    "Take care. We're here if you need anything else.",
+    "Thanks for calling Coal Creek. Goodbye.",
 ]
 
 SILENCE_PROMPTS = [
@@ -38,6 +38,12 @@ SILENCE_PROMPTS = [
     "Hello?",
     "You there?",
     "Still with me?",
+]
+
+SILENCE_FAREWELLS = [
+    "I can't seem to hear you anymore. Feel free to call back if you need help. Take care!",
+    "It seems like we've lost connection. Please call us back anytime. Goodbye!",
+    "I haven't heard from you in a while. Please call back if you need assistance. Have a great day!",
 ]
 
 FILLER_PROMPTS = [
@@ -166,6 +172,11 @@ def get_random_farewell(tenant_id: str = None) -> str:
 def get_random_silence_prompt() -> str:
     """Returns a random silence check-in prompt."""
     return random.choice(SILENCE_PROMPTS)
+
+
+def get_random_silence_farewell() -> str:
+    """Returns a random final farewell for silence-abandon endings."""
+    return random.choice(SILENCE_FAREWELLS)
 
 
 def get_random_soft_warning(tenant_id: str = "coalcreek") -> str:

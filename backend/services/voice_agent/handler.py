@@ -38,6 +38,7 @@ from .config import (
     ABUSE_CONFIG,
     get_random_greeting,
     get_random_farewell,
+    get_random_silence_farewell,
     get_random_silence_prompt,
     get_random_filler_prompt,
     get_preset_phrase,
@@ -1500,19 +1501,13 @@ class VoiceAgentHandler:
                 result.get("prompt", get_random_silence_prompt()),
                 clip_key="silence_soft",
             )
-            # CRITICAL: get fresh check_id AFTER _speak_system_message returns.
-            # on_ai_finished_speaking() inside it increments silence_check_id.
-            # Passing the old stale id would cause check_silence() to return
-            # action='none' (check_invalidated), silently killing the chain.
+            # During escalation we keep the original silence timer/check id,
+            # otherwise the hard stage compares against a fresh clock and never fires.
             asyncio.create_task(self._check_hard_silence(self.silence_monitor.get_check_id()))
             
         elif action == "abandon":
             self.call_outcome = "timeout_silence"
-            await self._hangup_with_farewell(random.choice([
-                "I can't seem to hear you anymore. Feel free to call back if you need help. Take care!",
-                "It seems like we've lost connection. Please call us back anytime. Goodbye!",
-                "I haven't heard from you in a while. Please call back if you need assistance. Have a great day!",
-            ]))
+            await self._hangup_with_farewell(result.get("farewell", get_random_silence_farewell()))
     
     async def _check_hard_silence(self, check_id: int):
         """Check for hard silence threshold (second follow-up)."""
@@ -1539,17 +1534,13 @@ class VoiceAgentHandler:
                 result.get("prompt", "Hello? Still there?"),
                 clip_key="silence_hard",
             )
-            # Same as soft→hard: get fresh check_id after on_ai_finished_speaking incremented it
+            # Same escalation chain: keep using the active check id/window.
             asyncio.create_task(self._check_abandon_silence(self.silence_monitor.get_check_id()))
 
         elif action == "abandon":
             self._in_silence_escalation = False
             self.call_outcome = "timeout_silence"
-            await self._hangup_with_farewell(random.choice([
-                "I can't seem to hear you anymore. Feel free to call back if you need help. Take care!",
-                "It seems like we've lost connection. Please call us back anytime. Goodbye!",
-                "I haven't heard from you in a while. Please call back if you need assistance. Have a great day!",
-            ]))
+            await self._hangup_with_farewell(result.get("farewell", get_random_silence_farewell()))
         else:
             # User spoke or check invalidated - exit escalation
             self._in_silence_escalation = False
@@ -1575,11 +1566,7 @@ class VoiceAgentHandler:
             logger.info(f"⏱️ Extended silence ({int(result.get('duration', 0))}s) - ending call")
             self._in_silence_escalation = False
             self.call_outcome = "timeout_silence"
-            await self._hangup_with_farewell(random.choice([
-                "I can't seem to hear you anymore. Feel free to call back if you need help. Take care!",
-                "It seems like we've lost connection. Please call us back anytime. Goodbye!",
-                "I haven't heard from you in a while. Please call back if you need assistance. Have a great day!",
-            ]))
+            await self._hangup_with_farewell(result.get("farewell", get_random_silence_farewell()))
         else:
             # User spoke or check invalidated
             self._in_silence_escalation = False

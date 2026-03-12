@@ -16,6 +16,7 @@ from .config import (
     ABANDON_THRESHOLD,
     THINKING_PATTERNS,
     get_random_silence_prompt,
+    get_random_silence_farewell,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,20 +69,21 @@ class SilenceMonitor:
 
         Args:
             preserve_escalation: When True (system audio played during escalation),
-                preserve silence_followup_count so the hard→abandon chain stays valid.
-                Only reset it when a genuine new AI turn begins.
+                preserve the original silence timer, check id, and followup count
+                so the hard→abandon chain stays valid against the same silence window.
+                Only reset them when a genuine new AI turn begins.
         """
-        # Start silence timer immediately - event timing is authoritative
-        self.silence_check_start_time = time.time()
-        self.silence_check_id += 1  # New check cycle (always increment for fresh id)
-        self.last_ai_message = message
-        self.ai_asked_question = self._requires_thinking(message) if message else False
-        self.tts_buffer = 0  # No buffer - rely on state machine
-
-        # Only reset followup counter for a real new AI turn, not mid-escalation clips
+        # Start a new silence window only for a genuine new AI turn.
+        # During silence escalation prompts, keep counting from the original
+        # post-AI silence start, otherwise the 15s/25s stages never arrive.
         if not preserve_escalation:
+            self.silence_check_start_time = time.time()
+            self.silence_check_id += 1
+            self.last_ai_message = message
+            self.ai_asked_question = self._requires_thinking(message) if message else False
             self.silence_followup_count = 0
             self.silence_followup_sent = False
+        self.tts_buffer = 0  # No buffer - rely on state machine
     
     def _requires_thinking(self, message: str) -> bool:
         """Check if the AI's message requires user to think (longer threshold)."""
@@ -158,11 +160,7 @@ class SilenceMonitor:
             return {
                 "action": "abandon",
                 "duration": duration,
-                "farewell": random.choice([
-                    "I'll let you go. Feel free to call back anytime you need help with a booking!",
-                    "No worries, I'll end the call here. Give us a ring when you're ready to book!",
-                    "I'll wrap up here. Call us back anytime - we're here to help!"
-                ])
+                "farewell": get_random_silence_farewell(),
             }
         
         # Hard threshold (15s by default, or 5s after any extended soft threshold)
