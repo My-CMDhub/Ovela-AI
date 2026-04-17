@@ -11,6 +11,7 @@ Key Design:
 
 import logging
 import time
+import copy
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import asyncio
@@ -203,7 +204,7 @@ def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utteranc
 # BOOKING HANDLERS (Read-Only + Soft Hold)
 # =============================================================================
 
-async def handle_check_availability(args: dict, db_service) -> dict:
+async def handle_check_availability(args: dict, db_service, context: dict | None = None) -> dict:
     """
     Check room availability using real-time scraping.
     
@@ -272,6 +273,12 @@ async def handle_check_availability(args: dict, db_service) -> dict:
     
     search_key = room_type_arg.lower()
     target_room = room_map.get(search_key)
+
+    availability_cache = (context or {}).get("availability_cache") if context else None
+    cache_key = f"{check_in}|{check_out}|{target_room or 'any'}"
+    if isinstance(availability_cache, dict) and cache_key in availability_cache:
+        logger.info("♻️ Session availability cache hit: %s", cache_key)
+        return copy.deepcopy(availability_cache[cache_key])
     
     # 3. Call multi-night scraper with RETRY LOGIC
     # FORCE room_type=None to scrape ALL rooms (more efficient, same API cost)
@@ -313,12 +320,32 @@ async def handle_check_availability(args: dict, db_service) -> dict:
         if not result or not result.get("success"):
             # Scraping failed after retries - TRANSPARENT FALLBACK
             logger.error(f"❌ All scraping attempts failed. Triggering fallback.")
-            return {
+            payload = {
                 "available": "unknown",
                 "verified": False,
                 "message": "Technical issue accessing live calendar",
-                "ai_should_say": "Sorry, I can't access the live calendar right now. I'll transfer you to reception."
+                "ai_should_say": "Sorry, I couldn't complete the live calendar check just now. If you want, I can put you through to reception."
             }
+            if isinstance(availability_cache, dict):
+                availability_cache[cache_key] = copy.deepcopy(payload)
+            return payload
+
+        if result.get("partial_scan"):
+            checked = result.get("checked_nights", [])
+            skipped = result.get("skipped_nights", [])
+            checked_range = f"{checked[0]} to {checked[-1]}" if checked else check_in
+            payload = {
+                "available": "unknown",
+                "verified": False,
+                "message": "Live calendar check was rate-limited",
+                "scan_limited": True,
+                "checked_nights": checked,
+                "skipped_nights": skipped,
+                "ai_should_say": f"I can run up to ten nights per live check right now, and I verified {checked_range}. If you want, I can put you through to reception for the full span.",
+            }
+            if isinstance(availability_cache, dict):
+                availability_cache[cache_key] = copy.deepcopy(payload)
+            return payload
         
         # 4. Parse result efficiently
         available_all_nights = result.get("available_all_nights", False)
@@ -339,7 +366,7 @@ async def handle_check_availability(args: dict, db_service) -> dict:
                         price = room.get("price_per_night")
                         break
             
-            return {
+            payload = {
                 "available": True,
                 "verified": True,
                 "room_type": target_room,
@@ -350,6 +377,9 @@ async def handle_check_availability(args: dict, db_service) -> dict:
                 "total": price * nights if price else None,
                 "ai_should_say": f"Great news! The {target_room} is available for {check_in if nights == 1 else f'{nights} nights from {check_in}'}. The rate is ${price} per night{f', total ${price * nights}' if nights > 1 else ''}. Would you like me to place a hold?"
             }
+            if isinstance(availability_cache, dict):
+                availability_cache[cache_key] = copy.deepcopy(payload)
+            return payload
             
         elif available_all_nights and not target_room:
             # Guest asked for "any" room - show what's available
@@ -365,7 +395,7 @@ async def handle_check_availability(args: dict, db_service) -> dict:
             
             room_list = ", ".join([f"{r} (${prices.get(r)}/night)" for r in available_rooms if r in prices])
             
-            return {
+            payload = {
                 "available": True,
                 "verified": True,
                 "available_rooms": available_rooms,
@@ -375,13 +405,16 @@ async def handle_check_availability(args: dict, db_service) -> dict:
                 "rooms_with_pricing": prices,
                 "ai_should_say": f"I have {len(available_rooms)} room types available for those dates: {room_list}. Which would you prefer?"
             }
+            if isinstance(availability_cache, dict):
+                availability_cache[cache_key] = copy.deepcopy(payload)
+            return payload
             
         else:
             # NOT available - explain why
             if target_room:
                 # Specific room requested but blocked
                 blocked_str = ", ".join(blocked_dates)
-                return {
+                payload = {
                     "available": False,
                     "verified": True,
                     "room_type": target_room,
@@ -391,10 +424,13 @@ async def handle_check_availability(args: dict, db_service) -> dict:
                     "nights": nights,
                     "ai_should_say": f"I'm sorry, the {target_room} isn't available for all {nights} night{'s' if nights > 1 else ''} - it's sold out on {blocked_str}. However, I have other room types available. Would you like to hear those options?"
                 }
+                if isinstance(availability_cache, dict):
+                    availability_cache[cache_key] = copy.deepcopy(payload)
+                return payload
             else:
                 # All rooms sold out
                 blocked_str = ", ".join(blocked_dates)
-                return {
+                payload = {
                     "available": False,
                     "verified": True,
                     "blocked_dates": blocked_dates,
@@ -403,15 +439,21 @@ async def handle_check_availability(args: dict, db_service) -> dict:
                     "nights": nights,
                     "ai_should_say": f"I'm sorry, we're fully booked on {blocked_str}. Would you like to check different dates, or can I have someone call you if we get a cancellation?"
                 }
+                if isinstance(availability_cache, dict):
+                    availability_cache[cache_key] = copy.deepcopy(payload)
+                return payload
         
     except Exception as e:
         logger.error(f"Availability check error: {e}", exc_info=True)
-        return {
+        payload = {
             "available": "unknown",
             "verified": False,
             "error": str(e),
-            "ai_should_say": "Sorry, I can't check availability right now. I'll transfer you to reception."
+            "ai_should_say": "Sorry, I couldn't complete the live calendar check. If you'd like, I can put you through to reception."
         }
+        if isinstance(availability_cache, dict):
+            availability_cache[cache_key] = copy.deepcopy(payload)
+        return payload
 
 
 async def handle_create_booking_request(args: dict, user_phone: str, save_reservation_fn) -> dict:
@@ -867,14 +909,14 @@ class CoalCreekFunctionDispatcher:
              return result
         except asyncio.TimeoutError:
              logger.error(f"Function {function_name} timed out after {TIMEOUT}s")
-             # For availability checks, return "unknown" so handler transfers
-             # to reception instead of letting the AI hallucinate a response.
+             # For availability checks, return "unknown" and let AI transparently
+             # explain the issue, then ask if user wants transfer.
              if function_name == "check_availability":
                  return {
                      "available": "unknown",
                      "verified": False,
                      "message": "Live calendar timed out",
-                     "ai_should_say": "Sorry, I can't access the live calendar right now. I'll transfer you to reception."
+                     "ai_should_say": "Sorry, the live calendar took too long to respond. I can try a shorter date range now, or if you prefer I can put you through to reception."
                  }
              return {"success": False, "message": "I'm having a connection issue. One moment."}
         except Exception as e:
@@ -886,7 +928,7 @@ class CoalCreekFunctionDispatcher:
         
         # Booking / Availability
         if function_name == "check_availability":
-            return await handle_check_availability(args, self.db_service)
+            return await handle_check_availability(args, self.db_service, context=context)
         
         elif function_name == "create_booking_request":
             return await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn)

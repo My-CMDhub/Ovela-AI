@@ -178,6 +178,7 @@ class VoiceAgentHandler:
         # Order Tracking
         self.order_id = None
         self.pending_order = None # [NEW] Batch/Draft order buffer
+        self._availability_cache = {}
         
         # Tenant Configuration (Database Driven)
         self.tenant_config = {}
@@ -1268,7 +1269,7 @@ class VoiceAgentHandler:
                     )
                 asyncio.create_task(self._unlock_interruptions(2.5))
                 fn_done_event = asyncio.Event()
-                long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event))
+                long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event, function_name))
 
             elif function_name in SLOW_TOOLS:
                 # Block interruptions so filler isn't cut off by user noise/"mhm"
@@ -1286,10 +1287,13 @@ class VoiceAgentHandler:
                 asyncio.create_task(self._unlock_interruptions(2.5))
                 # Schedule progressive "still checking" for very long waits
                 fn_done_event = asyncio.Event()
-                long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event))
+                long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event, function_name))
             
             # Execute via dispatcher
-            ctx = {"pending_order": self.pending_order}
+            ctx = {
+                "pending_order": self.pending_order,
+                "availability_cache": self._availability_cache,
+            }
             result = await self.function_dispatcher.execute(function_name, function_args, context=ctx)
             self.latency.mark_func_exec_done()
             
@@ -1340,16 +1344,11 @@ class VoiceAgentHandler:
         # ─────────────────────────────────────────────────────────────────
         
         try:
-            # Availability fallback: if live calendar is unavailable, apologize and transfer
+            # Availability fallback: if live calendar is unavailable, do not force
+            # auto-transfer here. Let the AI transparently explain what happened
+            # and ask permission before transfer.
             if function_name == "check_availability" and result.get("available") == "unknown":
-                message = result.get("hint") or get_preset_phrase(self.tenant_id, "availability_fail")
-                await self._say_and_wait(message)
-                await self._execute_twilio_transfer(
-                    settings.STAFF_PHONE_NUMBER,
-                    play_transfer_message=False,
-                    backup_tts_message="Transferring you to reception now. One moment please.",
-                )
-                return
+                logger.info("ℹ️ Availability unknown - returning transparent fallback to AI (no forced transfer)")
 
             # Check for transfer signal
             if result.get("action") == "transfer":
@@ -1692,9 +1691,21 @@ class VoiceAgentHandler:
     # MESSAGING & CALL CONTROL
     # =========================================================================
     
-    async def _long_wait_filler(self, fn_done: asyncio.Event):
-        """Inject extra filler if a function call takes > 8s."""
+    async def _long_wait_filler(self, fn_done: asyncio.Event, function_name: str = ""):
+        """Inject long-wait helper audio while a function call is still running."""
         try:
+            if function_name == "check_availability":
+                await asyncio.sleep(10.0)
+                if not fn_done.is_set():
+                    self._blocking_interruptions = True
+                    # clip_key=None forces direct Cartesia synthesis for a fixed progress message.
+                    await self._speak_system_message(
+                        "Still checking live availability now. Thanks for waiting.",
+                        clip_key=None,
+                    )
+                    asyncio.create_task(self._unlock_interruptions(2.5))
+                return
+
             await asyncio.sleep(8.0)
             if not fn_done.is_set():
                 fillers = [

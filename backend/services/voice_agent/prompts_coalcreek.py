@@ -4,13 +4,35 @@ Voice Agent Prompt - Coal Creek Motel.
 This prompt defines the persona, knowledge, and rules for the AI receptionist.
 """
 
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 from services.knowledge_base.coalcreek import COALCREEK_DATA
 from services.tenants.coalcreek.utils import is_after_hours, is_past_cutoff
+
+_MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
+
+
+def _next_weekday(base_date, target_weekday: int) -> object:
+    """Return the nearest future date with target_weekday (Mon=0…Sun=6)."""
+    delta = (target_weekday - base_date.weekday()) % 7
+    if delta == 0:
+        delta = 7
+    return base_date + timedelta(days=delta)
 
 def get_coalcreek_prompt(current_date: str, current_time: str) -> str:
     """
     Returns the system prompt specifically for Coal Creek Motel.
     """
+    # Pre-compute upcoming weekend dates (Python-authoritative — LLM must NOT recalculate)
+    _today = datetime.now(_MELBOURNE_TZ).date()
+    _sat = _next_weekday(_today, 5)
+    _sun = _sat + timedelta(days=1)
+    _upcoming_weekend = (
+        f"Saturday {_sat.strftime('%d %B %Y')} (check-in) → "
+        f"Sunday {_sun.strftime('%d %B %Y')} (check-out)"
+    )
+
     # Build context header with current date/time
     if current_date and current_time:
         context_header = f"""
@@ -20,7 +42,7 @@ def get_coalcreek_prompt(current_date: str, current_time: str) -> str:
 
 **CRITICAL RULES:**
 1. **DATES:** All enquiries are relative to {current_date}. If user says "January", assume NEXT January if we are in late 2025. NEVER assume past dates.
-    - "upcoming weekend" = next Saturday check-in and Sunday check-out after {current_date}.
+    - "upcoming weekend" / "this weekend" / "next weekend" = **{_upcoming_weekend}** — use these EXACT dates, do NOT compute them yourself.
     - NEVER produce invalid calendar dates (e.g., 2026-02-29 is invalid; use 2026-02-28 or 2026-03-01 as appropriate).
 2. **DATE EXTRACTION (CRITICAL):** If user mentions dates in their FIRST message, extract them IMMEDIATELY:
    - "from the 20th to the 22nd" → check_in: 2026-02-20, check_out: 2026-02-22
@@ -185,7 +207,7 @@ We use a "Live Availability + Soft Hold" strategy.
 3. **Availability Result:**
     - If available: "Yes, the live calendar shows availability — want me to place a temporary hold?"
     - If unavailable: "Sorry, the live calendar shows we're fully booked for those dates."
-    - If unavailable due to system issue: Apologize briefly and transfer to staff
+    - If unavailable due to system issue: Briefly explain what happened in plain language, then ask if they want transfer to reception
 4. **Request:** User says yes -> **COLLECT ALL DETAILS**:
    - **Full Name**
    - **Phone Number** (Mobile preferred)
@@ -252,7 +274,7 @@ NEVER say:
 
 === AVAILABILITY RULE (CRITICAL) ===
 NEVER say you need to "check with the team" for availability. The `check_availability` tool is the live source of truth.
-Only transfer if the tool fails to verify (system issue).
+If the tool fails to verify (system issue), be transparent about the issue first, then ask permission before transfer.
 
 === WAIT / HOLD HANDLING (CRITICAL) ===
 If the caller says "give me a sec", "hold on", "let me check", "one moment", "wait a while", "give me a minute", or asks you to wait or hold for ANY reason:

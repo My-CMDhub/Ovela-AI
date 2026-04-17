@@ -7,6 +7,7 @@ Production scraper using ScrapingBee for live availability.
 import os
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 
@@ -17,6 +18,26 @@ logger = logging.getLogger(__name__)
 
 SCRAPPINGBEE_API_KEY = os.getenv("SCRAPPINGBEE_API_KEY", "").strip() or None
 SCRAPPINGBEE_URL = "https://app.scrapingbee.com/api/v1/"
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+# Free-tier safe defaults; can be raised in paid plans without code changes.
+# Keep checks sequential by default to avoid burst-limit failures.
+MAX_REQUESTS_PER_LOOKUP = _env_int("SCRAPPINGBEE_MAX_REQUESTS_PER_LOOKUP", 10)
+CACHE_TTL_SECONDS = _env_int("SCRAPPINGBEE_CACHE_TTL_SECONDS", 300)
+
+# Lightweight in-process cache to avoid duplicate hit bursts for same dates.
+_SCRAPE_CACHE: Dict[tuple[str, str, int], tuple[float, dict]] = {}
 
 PROPERTY_ID = "2626"
 BOOKING_BASE_URL = "https://bookings247.com.au/booking2/booknow.php"
@@ -31,6 +52,12 @@ async def scrape_availability(check_in: str, check_out: str, nights: int = 1) ->
             "success": False,
             "error": "SCRAPPINGBEE_API_KEY not found in environment"
         }
+
+    cache_key = (check_in, check_out, nights)
+    now = time.time()
+    cached = _SCRAPE_CACHE.get(cache_key)
+    if cached and now - cached[0] <= CACHE_TTL_SECONDS:
+        return cached[1]
 
     booking_url = f"{BOOKING_BASE_URL}?property_id={PROPERTY_ID}&checkin={check_in}&checkout={check_out}&nights={nights}"
 
@@ -58,7 +85,7 @@ async def scrape_availability(check_in: str, check_out: str, nights: int = 1) ->
         html_content = response.text
         availability = parse_calendar_availability(html_content)
 
-        return {
+        payload = {
             "success": True,
             "url": booking_url,
             "check_in": check_in,
@@ -70,6 +97,8 @@ async def scrape_availability(check_in: str, check_out: str, nights: int = 1) ->
                 "status_code": response.status_code
             }
         }
+        _SCRAPE_CACHE[cache_key] = (now, payload)
+        return payload
     except httpx.TimeoutException:
         return {
             "success": False,
@@ -157,34 +186,58 @@ async def check_multinight_availability(
     check_out_str: str,
     room_type: Optional[str] = None
 ) -> dict:
-    """
-    Check availability for EACH night in a multi-night stay.
-    Scrapes all nights in PARALLEL via asyncio.gather().
+    """Check availability for each night in a multi-night stay.
+
+    Runs requests sequentially (one-by-one) to stay safe on free-tier limits
+    and avoid concurrent request bursts.
     """
     check_in = datetime.strptime(check_in_str, "%Y-%m-%d")
     check_out = datetime.strptime(check_out_str, "%Y-%m-%d")
     nights = (check_out - check_in).days
 
-    # Build parallel scrape tasks for every night
-    tasks = []
-    night_dates = []
+    # Build per-night pairs for the full stay.
+    night_pairs: list[tuple[str, str]] = []
     for i in range(nights):
         night_date = check_in + timedelta(days=i)
         next_day = night_date + timedelta(days=1)
         night_str = night_date.strftime("%Y-%m-%d")
         next_str = next_day.strftime("%Y-%m-%d")
-        night_dates.append(night_str)
-        tasks.append(scrape_availability(night_str, next_str, nights=1))
+        night_pairs.append((night_str, next_str))
 
-    logger.info(f"🚀 Launching {nights} parallel scrape tasks for {check_in_str} → {check_out_str}")
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    partial_scan = nights > MAX_REQUESTS_PER_LOOKUP
+    pairs_to_check = night_pairs[:MAX_REQUESTS_PER_LOOKUP] if partial_scan else night_pairs
+    checked_nights = [pair[0] for pair in pairs_to_check]
+    skipped_nights = [pair[0] for pair in night_pairs[len(pairs_to_check):]]
+
+    if partial_scan:
+        logger.warning(
+            "⚠️ Capping availability lookup: requested=%s nights, checking=%s nights (max_requests=%s)",
+            nights,
+            len(pairs_to_check),
+            MAX_REQUESTS_PER_LOOKUP,
+        )
+
+    logger.info(
+        "🚀 Running %s sequential scrape checks (requested=%s nights) for %s → %s",
+        len(pairs_to_check),
+        nights,
+        check_in_str,
+        check_out_str,
+    )
+
+    results = []
+    for ci, co in pairs_to_check:
+        try:
+            results.append(await scrape_availability(ci, co, nights=1))
+        except Exception as e:
+            results.append(e)
 
     # Process results
     per_night_results = {}
     blocked_dates = []
     room_availability_tracker = {}
 
-    for idx, (night_str, result) in enumerate(zip(night_dates, results)):
+    for idx, (night_str, result) in enumerate(zip(checked_nights, results)):
         # Handle exceptions from individual tasks
         if isinstance(result, Exception):
             logger.error(f"Night {idx+1} ({night_str}) scrape exception: {result}")
@@ -236,12 +289,16 @@ async def check_multinight_availability(
 
         available_all_nights = len(available_all_nights_rooms) > 0
 
-    logger.info(f"✅ Parallel scrape complete: {nights} nights, blocked={blocked_dates}")
+    logger.info(f"✅ Sequential scrape complete: checked={len(checked_nights)} nights, blocked={blocked_dates}")
     return {
         "success": True,
         "check_in": check_in_str,
         "check_out": check_out_str,
         "total_nights": nights,
+        "checked_nights": checked_nights,
+        "skipped_nights": skipped_nights,
+        "partial_scan": partial_scan,
+        "scan_limit": MAX_REQUESTS_PER_LOOKUP,
         "available_all_nights": available_all_nights,
         "blocked_dates": blocked_dates,
         "available_rooms": available_all_nights_rooms,
