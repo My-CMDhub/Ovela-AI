@@ -172,7 +172,13 @@ class VoiceAgentHandler:
         self.memory = {
             "name": None,
             "order_summary": None,
-            "pickup_time": None
+            "pickup_time": None,
+            # Coal Creek motel booking context (session-only)
+            "check_in": None,
+            "check_out": None,
+            "room_type": None,
+            "num_guests": None,
+            "notes": None,
         }
         
         # Order Tracking
@@ -457,14 +463,30 @@ class VoiceAgentHandler:
         
         # Smart Memory Injection
         memory_context = ""
-        if self.memory["name"] or self.memory["order_summary"]:
+        _cc_booking = (
+            self.tenant_id == "coalcreek" and
+            any(self.memory[k] for k in ("check_in", "check_out", "room_type", "num_guests", "notes"))
+        )
+        if self.memory["name"] or self.memory["order_summary"] or _cc_booking:
             memory_context = f"\n\n=== CURRENT MEMORY (DO NOT FORGET) ===\n"
             if self.memory["name"]:
-                memory_context += f"• Customer Name: {self.memory['name']}\n"
+                memory_context += f"• Guest Name: {self.memory['name']}\n"
             if self.memory["order_summary"]:
                 memory_context += f"• Current Order: {self.memory['order_summary']}\n"
             if self.memory["pickup_time"]:
                 memory_context += f"• Desired Pickup: {self.memory['pickup_time']}\n"
+            # Coal Creek booking details
+            if self.tenant_id == "coalcreek":
+                if self.memory["check_in"]:
+                    memory_context += f"• Preferred Check-in: {self.memory['check_in']}\n"
+                if self.memory["check_out"]:
+                    memory_context += f"• Preferred Check-out: {self.memory['check_out']}\n"
+                if self.memory["room_type"]:
+                    memory_context += f"• Preferred Room Type: {self.memory['room_type']}\n"
+                if self.memory["num_guests"]:
+                    memory_context += f"• Number of Guests: {self.memory['num_guests']}\n"
+                if self.memory["notes"]:
+                    memory_context += f"• Special Requests / Notes: {self.memory['notes']}\n"
             memory_context += "========================================\n"
         
         # Append function-call speaking rules to the prompt.
@@ -1262,6 +1284,26 @@ class VoiceAgentHandler:
 
         if "pickup_time" in function_args:
             self.memory["pickup_time"] = function_args["pickup_time"]
+
+        # COAL CREEK BOOKING MEMORY: Capture preferred dates, room type, guest
+        # count and notes from check_availability and create_booking_request so
+        # the AI never has to ask again mid-conversation.
+        if self.tenant_id == "coalcreek":
+            if function_args.get("check_in_date"):
+                self.memory["check_in"] = function_args["check_in_date"]
+                logger.info(f"🧠 Memory Updated: check_in = {self.memory['check_in']}")
+            if function_args.get("check_out_date"):
+                self.memory["check_out"] = function_args["check_out_date"]
+                logger.info(f"🧠 Memory Updated: check_out = {self.memory['check_out']}")
+            if function_args.get("room_type") and function_args["room_type"] != "any":
+                self.memory["room_type"] = function_args["room_type"]
+                logger.info(f"🧠 Memory Updated: room_type = {self.memory['room_type']}")
+            if function_args.get("num_guests"):
+                self.memory["num_guests"] = function_args["num_guests"]
+                logger.info(f"🧠 Memory Updated: num_guests = {self.memory['num_guests']}")
+            if function_args.get("notes"):
+                self.memory["notes"] = function_args["notes"]
+                logger.info(f"🧠 Memory Updated: notes = {self.memory['notes']}")
         
         # ─────────────────────────────────────────────────────────────────
         # FAST-START PATH: For check_availability we always need a filler
