@@ -737,12 +737,11 @@ class VoiceAgentHandler:
         if getattr(self, '_is_hanging_up', False):
             return  # Silently drop audio - user won't be heard after farewell
         
-        # GO DEAF DURING FUNCTION CALLS: Prevent Deepgram VAD from detecting user
-        # speech while we're injecting TTS messages.  Without this, the user saying
-        # "Hello?" triggers UserStartedSpeaking which sends a Twilio 'clear' event
-        # that wipes the injected TTS audio buffer before it plays.
-        if self._is_processing_function:
-            return
+        # AUDIO PASSTHROUGH DURING FUNCTION CALLS:
+        # Audio continues to flow to Deepgram so meaningful user corrections
+        # ("wait, actually I mean next week") are transcribed and reach the LLM.
+        # The Twilio 'clear' guard lives in _handle_user_started_speaking —
+        # that is what protects injected TTS audio from being wiped.
         
         if not self.deepgram_ws:
             return
@@ -888,6 +887,33 @@ class VoiceAgentHandler:
                 logger.info(f"[User]: {content} (turn_ms incl. speech: {turn_ms}ms)")
             else:
                 logger.info(f"[User]: {content}")
+            
+            # ─────────────────────────────────────────────────────────────────
+            # HEURISTIC FILTER DURING FUNCTION CALLS:
+            # Audio now flows to Deepgram while a tool is executing so that
+            # genuine corrections ("wait, I meant next week") are transcribed
+            # and land in the LLM context before the function result arrives.
+            #
+            # Filter rules:
+            #  ≤ 2 words → filler noise ("okay", "uh huh", "yeah") → discard
+            #  > 2 words → meaningful correction → let Deepgram context carry
+            #              it; the LLM will address it when responding to the
+            #              function result.  Add to local transcript for analytics.
+            # ─────────────────────────────────────────────────────────────────
+            if self._is_processing_function:
+                word_count = len(content.strip().split())
+                if word_count <= 2:
+                    logger.debug(f"🙉 Short noise during function call ({word_count}w) — discarded")
+                    return
+                # Meaningful correction: record locally but skip all state
+                # changes — the LLM sees it via Deepgram's conversation context.
+                logger.info(f"📝 Meaningful correction during function call ({word_count}w) — LLM will handle post-result")
+                self.transcript.append({
+                    "role": "user",
+                    "text": content,
+                    "timestamp": time.strftime("%H:%M:%S")
+                })
+                return
             
             # ─────────────────────────────────────────────────────────────────
             # SMART HANGUP LOGIC:
@@ -1038,8 +1064,12 @@ class VoiceAgentHandler:
         # 'clear' event — it would wipe the injected TTS audio buffer
         # and the caller would hear silence.
         # ─────────────────────────────────────────────────────────────────
+        # CLEAR-EVENT GUARD: While a function is executing we suppress the Twilio
+        # 'clear' event so injected TTS audio (filler phrases) cannot be wiped.
+        # Audio still flows to Deepgram — see _handle_twilio_media.
+        # Meaningful corrections are filtered in _handle_conversation_text.
         if self._is_processing_function:
-            logger.debug("🙉 Go Deaf: ignoring UserStartedSpeaking during function call")
+            logger.debug("🛡️ Suppressing Twilio clear during function call (TTS guard)")
             return
         
         # FILLER PROTECTION: Ignore user noise during injected filler playback
