@@ -39,8 +39,11 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     if not request.consent:
         raise HTTPException(status_code=400, detail="Consent required")
     
-    # Rate Limit Check (whitelisted phones bypass this)
-    if not db_service.check_demo_limit(request.phone):
+    tenant = request.tenant_id or "ovela_demo"
+    # Rate limit (whitelisted numbers bypass)
+    if not is_whitelisted(request.phone) and not await db_service.check_demo_limit(
+        request.phone, tenant
+    ):
         raise HTTPException(
             status_code=429, 
             detail="Thanks for your interest! You've already tried our demo today. Feel free to request another demo tomorrow, or contact us directly."
@@ -49,11 +52,12 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     # Create demo lead in database
     lead_id = None
     try:
-        lead_doc = db_service.create_demo_lead(
-            name=request.name,
-            business_name=request.business_name,
+        lead_doc = await db_service.create_demo_lead(
             phone=request.phone,
-            source="website"
+            name=request.name,
+            tenant_id=tenant,
+            business_name=request.business_name,
+            source="website",
         )
         if lead_doc:
             lead_id = lead_doc.get("$id")
@@ -70,7 +74,7 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
             call = _trigger_demo_call(request.name, request.business_name, request.phone, request.tenant_id)
             
             if lead_id:
-                db_service.update_demo_lead(lead_id=lead_id, data={"status": "called", "call_sid": call.sid})
+                await db_service.update_demo_lead(lead_id=lead_id, data={"status": "called", "call_sid": call.sid})
             
             return {"status": "success", "call_sid": call.sid, "message": "Calling you now..."}
         except Exception as e:
@@ -82,7 +86,7 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     # ============================================================
     if lead_id:
         # Update status to pending_approval
-        db_service.update_demo_lead(lead_id=lead_id, data={"status": "pending_approval"})
+        await db_service.update_demo_lead(lead_id=lead_id, data={"status": "pending_approval"})
         
         # Generate magic links for approve/reject
         extra_data = {"name": request.name, "phone": request.phone, "business": request.business_name}
@@ -155,7 +159,7 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
     
     # Check if already processed
     try:
-        lead = db_service.get_demo_lead(lead_id)
+        lead = await db_service.get_demo_lead(lead_id)
         if lead and lead.get("status") in ["called", "approved", "rejected"]:
             status = lead.get("status")
             return HTMLResponse(
@@ -176,7 +180,7 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
     try:
         # Optimistic locking: Update status FIRST to prevent race conditions
         # If this fails (e.g. 404 or already updated), we catch it and don't trigger call
-        updated_lead = db_service.update_demo_lead(lead_id=lead_id, data={
+        updated_lead = await db_service.update_demo_lead(lead_id=lead_id, data={
             "status": "approved", # Temporary status or check
             "approved_at": datetime.now().isoformat()
         })
@@ -194,7 +198,7 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
         call = _trigger_demo_call(name, business, phone, tenant_id="ovela_demo", demo_type="brand_rep")
         
         # Update with call SID
-        db_service.update_demo_lead(lead_id=lead_id, data={
+        await db_service.update_demo_lead(lead_id=lead_id, data={
             "status": "called",
             "call_sid": call.sid
         })
@@ -260,7 +264,7 @@ async def reject_demo(token: str):
     
     # Update lead status
     try:
-        db_service.update_demo_lead(lead_id=lead_id, data={
+        await db_service.update_demo_lead(lead_id=lead_id, data={
             "status": "rejected",
             "rejected_at": datetime.now().isoformat()
         })

@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import logging
+from typing import Optional, Any, Dict
 from appwrite.id import ID
 from core.utils import mask_phone
 
@@ -11,7 +12,14 @@ class LeadsMixin:
     ENFORCED: Multi-tenant isolation at DB level.
     """
 
-    async def create_demo_lead(self, phone: str, name: str = None, tenant_id: str = "coalcreek"):
+    async def create_demo_lead(
+        self,
+        phone: str,
+        name: str = None,
+        tenant_id: str = "ovela_demo",
+        business_name: str = None,
+        source: str = "website",
+    ):
         """Create a new lead from a demo request."""
         try:
             doc_id = ID.unique()
@@ -20,8 +28,12 @@ class LeadsMixin:
                 "name": name or "Anonymous",
                 "tenant_id": tenant_id,
                 "created_at": datetime.now().isoformat(),
-                "status": "new"
+                "status": "new",
             }
+            if business_name is not None:
+                data["business_name"] = business_name
+            if source:
+                data["source"] = source
             
             result = await self._make_request(
                 "POST",
@@ -38,7 +50,7 @@ class LeadsMixin:
             logger.error(f"Error creating lead: {e}")
             return None
 
-    async def check_demo_limit(self, phone: str, tenant_id: str, limit_per_hour: int = 3) -> bool:
+    async def check_demo_limit(self, phone: str, tenant_id: str = "ovela_demo", limit_per_hour: int = 3) -> bool:
         """
         Check if a phone number has exceeded demo limits.
         ENFORCED: Server-side filtering by phone and tenant.
@@ -101,4 +113,25 @@ class LeadsMixin:
             )
         except Exception as e:
             logger.error(f"Error updating lead status: {e}")
+            return None
+
+    async def get_demo_lead(self, lead_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single demo lead by document id."""
+        return await self._make_request(
+            "GET",
+            f"/databases/{self.db_id}/collections/demo_leads/documents/{lead_id}",
+        )
+
+    async def update_demo_lead(self, lead_id: str, data: dict) -> Optional[Dict[str, Any]]:
+        """Merge-partial update for demo lead attributes (Appwrite data payload)."""
+        if not data:
+            return None
+        try:
+            return await self._make_request(
+                "PATCH",
+                f"/databases/{self.db_id}/collections/demo_leads/documents/{lead_id}",
+                data={"data": data},
+            )
+        except Exception as e:
+            logger.error(f"Error updating demo lead {lead_id}: {e}")
             return None
