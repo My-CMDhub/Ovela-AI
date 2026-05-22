@@ -1319,7 +1319,7 @@ class VoiceAgentHandler:
                 # Block interruptions and fire deterministic filler immediately.
                 # Use asyncio.create_task so function execution starts right away.
                 self._blocking_interruptions = True
-                preset = get_preset_phrase("availability_checking", self.tenant_id)
+                preset = get_preset_phrase(self.tenant_id, "availability_checking")
                 if preset:
                     asyncio.create_task(
                         self._speak_system_message(preset, clip_key="filler_short")
@@ -1409,8 +1409,7 @@ class VoiceAgentHandler:
 
             # Check for transfer signal
             if result.get("action") == "transfer":
-                import logging
-                logging.getLogger(__name__).warning("⚠️ No specific staff phone for tenant %s, using default.", self.tenant_id)
+                logger.warning("⚠️ No specific staff phone for tenant %s, using default.", self.tenant_id)
                 transfer_to = settings.STAFF_PHONE_NUMBER
                 if not transfer_to and self.tenant_config.get("business_phone"):
                      transfer_to = self.tenant_config["business_phone"]
@@ -2242,8 +2241,6 @@ class VoiceAgentHandler:
         Generates a concise 1-sentence summary of the call transcript 
         using a dedicated model after the call ends.
         """
-        return ""  # Disabled for testing — remove this line to re-enable
-
         # Return cached summary if available (avoids re-generation on cleanup)
         if getattr(self, 'cached_summary', None):
             return self.cached_summary

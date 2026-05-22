@@ -19,3 +19,4 @@ newrelic>=11.0.0
 squareup
 stripe
 cartesia>=0.1.0
+google-adk>=2.0.0
