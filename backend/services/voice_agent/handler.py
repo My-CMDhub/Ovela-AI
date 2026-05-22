@@ -79,6 +79,45 @@ REQUIRED_SYSTEM_CLIP_KEYS = [
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Module-level pure function — importable by tests without instantiating handler
+# ─────────────────────────────────────────────────────────────────────────────
+
+def trim_assistant_transcript(text: str, elapsed_seconds: float, wpm: int = 150) -> str:
+    """
+    Trim an assistant transcript entry to reflect only what the caller *actually heard*
+    before a VAD interruption fired.
+
+    Uses a fixed speech-rate estimate (default 150 WPM) to calculate the number
+    of words delivered before the interruption. Trailing words that were generated
+    but not yet spoken are pruned from the history so the LLM context stays
+    coherent with the caller's actual auditory experience.
+
+    This is a pure function with zero side effects — safe to call on the Hot Path.
+
+    Args:
+        text:             The full assistant message text that started playing.
+        elapsed_seconds:  Seconds elapsed since TTS playback began (time.time() delta).
+        wpm:              Estimated TTS delivery rate (default 150 WPM ≈ natural speech).
+
+    Returns:
+        Trimmed string containing only the words the caller heard.
+        Returns "" if elapsed_seconds <= 0 or text is empty/whitespace.
+
+    Example:
+        >>> trim_assistant_transcript("Sure I can help you book a room.", 2.0, wpm=150)
+        'Sure I can help you'  # 2s × 150÷60 = 5 words
+    """
+    if not text or not text.strip():
+        return ""
+    if elapsed_seconds <= 0:
+        return ""
+
+    words = text.split()
+    words_spoken = int(elapsed_seconds * wpm / 60)  # floor via int()
+    return " ".join(words[:words_spoken])
+
+
 class VoiceAgentHandler:
     """
     Bridges Twilio Media Stream to Deepgram Voice Agent API.
@@ -1112,6 +1151,24 @@ class VoiceAgentHandler:
         }
         await self.twilio_ws.send_json(clear_message)
 
+        # INTERRUPTION TRIM: Prune last AI transcript entry to only include
+        # words actually spoken before the interruption, keeping LLM context
+        # coherent with what the caller heard. Pure math — zero I/O.
+        tts_start = getattr(self, '_tts_playback_start', None)
+        if tts_start and self.transcript and self.transcript[-1].get('role') == 'ai':
+            elapsed = time.time() - tts_start
+            original_text = self.transcript[-1].get('text', '')
+            trimmed = trim_assistant_transcript(original_text, elapsed)
+            if trimmed != original_text:
+                self.transcript[-1]['text'] = trimmed
+                logger.info(
+                    "✂️ Interruption trim: %.1fs elapsed → %d→%d words | '%s…'",
+                    elapsed,
+                    len(original_text.split()),
+                    len(trimmed.split()) if trimmed else 0,
+                    trimmed[:40] if trimmed else "(empty)",
+                )
+
         # CRITICAL: Force AI speaking state to False immediately
         # Deepgram might skip AgentAudioDone if interrupted, causing state lock
         self._ai_is_speaking = False
@@ -1129,6 +1186,10 @@ class VoiceAgentHandler:
         - This prevents "silence while AI is speaking" false positives
         """
         logger.info("🔊 Agent started speaking")
+        
+        # Record exact TTS playback start time for interruption trimming.
+        # When the user speaks (VAD fires), elapsed = now - _tts_playback_start.
+        self._tts_playback_start = time.time()
         
         # Set AI speaking state
         self._ai_is_speaking = True
