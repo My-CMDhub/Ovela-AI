@@ -55,7 +55,7 @@ async def startup_event():
     logging.info(f"🧪 LOG SESSION START | Melbourne time: {mel_time}")
     logging.info("=" * 72)
     logging.info("🚀 Starting Coal Creek CRM backend...")
-    # start_scheduler() # Disabled to eliminate background noise/latency (Saranda legacy)
+    # start_scheduler() # Disabled to eliminate background noise/latency
     logging.info("✅ Application startup complete")
 
 @app.on_event("shutdown")

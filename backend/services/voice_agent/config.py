@@ -139,8 +139,6 @@ MIN_SUBSTANTIVE_LENGTH = 3
 # =============================================================================
 def get_random_greeting(tenant_id: str = "coalcreek") -> str:
     """Returns a random Australian-tone greeting for the specified tenant."""
-    if tenant_id == "dhruv_personal":
-        return "Hi, this is Nona, Dhruv's personal assistant. He's currently unavailable. May I ask who is calling?"
 
     # Coal Creek Motel
     if tenant_id == "coalcreek":
@@ -161,11 +159,9 @@ def get_random_greeting(tenant_id: str = "coalcreek") -> str:
 
 def get_random_farewell(tenant_id: str = None) -> str:
     """Returns a random warm farewell for the specified tenant."""
-    if tenant_id == "dhruv_personal":
-        return "I have sent a message to Dhruv, he will call you back as soon as he can. Goodbye."
     if tenant_id == "coalcreek":
         return random.choice(COALCREEK_FAREWELLS)
-    # Add other tenants here as needed (saranda, etc.)
+    # Add other tenants here as needed
     return random.choice(FAREWELL_STYLES)
 
 

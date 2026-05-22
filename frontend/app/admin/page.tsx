@@ -10,7 +10,7 @@ export default function AdminPage() {
     const { user, loading } = useAuth();
     const router = useRouter();
     const [stats] = useState({
-        tenants: 2,
+        tenants: 1,
         activeCalls: 0,
         alerts: 0
     });
@@ -97,18 +97,6 @@ export default function AdminPage() {
                                     <p className="text-sm text-slate-500 mt-1">Korumburra, VIC</p>
                                 </div>
                                 <ArrowRight className="w-5 h-5 text-slate-600 group-hover:text-amber-400 transform group-hover:translate-x-1 transition-all" />
-                            </div>
-                        </Link>
-
-                        {/* Saranda */}
-                        <Link href="/dashboard?tenant=saranda" className="group relative overflow-hidden bg-slate-900 border border-slate-800 hover:border-sky-500/30 p-6 rounded-2xl transition-all hover:shadow-2xl hover:shadow-sky-500/10">
-                            <div className="absolute inset-0 bg-gradient-to-br from-sky-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                            <div className="flex justify-between items-center relative z-10">
-                                <div>
-                                    <h3 className="text-xl font-bold text-white group-hover:text-sky-400 transition-colors">Saranda on Hutton</h3>
-                                    <p className="text-sm text-slate-500 mt-1">The Entrance, NSW</p>
-                                </div>
-                                <ArrowRight className="w-5 h-5 text-slate-600 group-hover:text-sky-400 transform group-hover:translate-x-1 transition-all" />
                             </div>
                         </Link>
                     </div>

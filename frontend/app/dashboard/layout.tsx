@@ -137,11 +137,6 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                 {/* Navigation */}
                 <nav className="p-4 space-y-2">
                     {navigation.map((item) => {
-                        // Niche-Specific Filtering
-                        if (tenant.industry === "food") {
-                            // Food Niche: Hide Motel specific items
-                            if (["Reservations", "Guests", "Notifications"].includes(item.name)) return null;
-                        }
 
                         return (
                             <Link
@@ -161,20 +156,6 @@ function MotelLayoutContent({ children }: { children: React.ReactNode }) {
                             </Link>
                         );
                     })}
-
-                    {/* EXT: Square Dashboard Link (Specific for Food/Saranda) */}
-                    {tenant.industry === "food" && (
-                        <a
-                            href="https://squareup.com/dashboard" // Real link would go here
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200 text-slate-400 hover:bg-white/5 hover:text-white ${collapsed ? "justify-center" : ""}`}
-                            title={collapsed ? "Square Dashboard" : undefined}
-                        >
-                            <LayoutDashboard className="w-5 h-5 flex-shrink-0 text-green-500" />
-                            {!collapsed && <span className="font-medium">Square POS</span>}
-                        </a>
-                    )}
                 </nav>
 
                 {/* Bottom Section */}

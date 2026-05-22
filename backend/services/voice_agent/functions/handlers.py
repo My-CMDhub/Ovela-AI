@@ -719,11 +719,6 @@ class FunctionDispatcher:
             elif function_name == "end_call":
                 return await handle_end_call()
             
-            # Personal Assistant
-            elif function_name == "send_message_to_dhruv":
-                from .dhruv_personal import handle_send_message_to_dhruv
-                return await handle_send_message_to_dhruv(args, self.user_phone)
-            
             # Abuse Protection
             elif function_name == "report_user_behavior":
                 category = args.get("category", "off_topic")

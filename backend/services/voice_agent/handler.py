@@ -417,7 +417,7 @@ class VoiceAgentHandler:
             provider_type, model = "open_ai", llm_model
         else:
             provider_type = "open_ai"
-            model = "gpt-4o-mini" if self.tenant_id == "dhruv_personal" else "gpt-4.1-mini"
+            model = "gpt-4.1-mini"
             source = "default"
 
         logger.info(f"🧠 LLM [{source}]: {provider_type} / {model}")
@@ -498,10 +498,6 @@ class VoiceAgentHandler:
     
     def _get_active_functions(self) -> list:
         """Get the correct function definitions based on tenant."""
-        if self.tenant_id == "dhruv_personal":
-            from services.voice_agent.functions import get_personal_assistant_functions
-            return get_personal_assistant_functions()
-            
         if self.tenant_id == "coalcreek":
             return get_coalcreek_functions()
         return get_booking_functions()
@@ -628,25 +624,14 @@ class VoiceAgentHandler:
         # =====================================================================
         # CONFIG-DRIVEN ARCHITECTURE: Load settings from DB (ASYNC)
         # =====================================================================
-        if self.tenant_id == "dhruv_personal":
-            # Bypass DB for personal assistant, use Katie US(3e1ed423-17e5-4773-b87c-25b031106e41) or similar voice
-            self.tenant_config = {
-                "type": "personal_assistant",
-                "voice_settings": {
-                    "model": "nova-2",
-                    "voice_id": "f786b574-daa5-4673-aa0c-cbe3e8534c02", 
-                    "speed": 1.0
-                }
-            }
-        else:
-            try:
-                logger.info(f"📥 Loading config for tenant: {self.tenant_id}")
-                self.tenant_config = await db_service.get_tenant_config(self.tenant_id)
-                if not self.tenant_config:
-                    logger.warning(f"⚠️ No config found for {self.tenant_id}, using defaults")
-            except Exception as e:
-                logger.error(f"❌ Failed to load tenant config: {e}")
-                self.tenant_config = {}
+        try:
+            logger.info(f"📥 Loading config for tenant: {self.tenant_id}")
+            self.tenant_config = await db_service.get_tenant_config(self.tenant_id)
+            if not self.tenant_config:
+                logger.warning(f"⚠️ No config found for {self.tenant_id}, using defaults")
+        except Exception as e:
+            logger.error(f"❌ Failed to load tenant config: {e}")
+            self.tenant_config = {}
             
         # Set context for knowledge base
         set_tenant_context(self.tenant_id)
@@ -2223,39 +2208,6 @@ class VoiceAgentHandler:
                         tenant_id=self.tenant_id,
                         call_sid=self.call_sid
                     )
-                elif self.tenant_id == "dhruv_personal":
-                    # Personal Assistant: Do not store in DB. Summarize and SMS if > 6s.
-                    if duration > 6:
-                        from openai import AsyncOpenAI
-                        from services.sms import sms_service
-                        import os
-                        
-                        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-                        transcript_text = "\n".join([f"{m['role'].upper()}: {m['text']}" for m in self.transcript])
-                        
-                        try:
-                            response = await client.chat.completions.create(
-                                model="gpt-4o-mini",
-                                messages=[
-                                    {"role": "system", "content": "You are a helpful assistant that summarizes missed calls. The AI was an assistant named Nona taking a message. Provide a concise, 1-2 sentence summary of who called and why. If they didn't leave a name, mention that."},
-                                    {"role": "user", "content": f"Summarize this call transcript:\n\n{transcript_text}"}
-                                ],
-                                max_tokens=100,
-                                temperature=0.3
-                            )
-                            summary = response.choices[0].message.content.strip()
-                            
-                            target_number = os.getenv("MY_NUMBER") or settings.MY_NUMBER
-                            if target_number:
-                                message_body = f"Missed Call from {self.user_phone}\nDuration: {duration}s\n\nSummary:\n{summary}"
-                                await sms_service.send_sms(to_number=target_number, message=message_body, tenant_id="dhruv_personal")
-                                logger.info(f"📝 Sent SMS summary for dhruv_personal instead of DB storage.")
-                            else:
-                                logger.error("MY_NUMBER not set! Cannot send SMS summary.")
-                        except Exception as e:
-                            logger.error(f"Failed to generate/send summary for dhruv_personal: {e}")
-                    else:
-                        logger.info(f"⏭️ Skipped SMS summary for dhruv_personal (duration {duration}s <= 6s)")
                 else:
                     # Tenant-Specific Storage
                     await db_service.save_call_transcript(

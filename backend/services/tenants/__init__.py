@@ -23,7 +23,6 @@ REGISTERED_TENANTS = {
         "active": True
     },
     # Future tenants (add as needed):
-    # "lydoun": {"name": "The Lydoun Motel", "module": "...", "active": False},
 }
 
 
