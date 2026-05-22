@@ -6,8 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
 from api import twilio, voice, notifications, actions, stripe
-# NOTE: WhatsApp chat agent and dashboard were deleted
-# from api import chat, dashboard
+
 
 # Initialize New Relic BEFORE creating FastAPI app
 import newrelic.agent
@@ -86,9 +85,6 @@ app.add_middleware(
 )
 
 # Include Routers
-# NOTE: WhatsApp chat agent and dashboard were deleted (frozen)
-# app.include_router(chat.router, prefix="/webhooks", tags=["chat"])
-# app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(twilio.router, prefix="/twilio", tags=["twilio"])
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
 
