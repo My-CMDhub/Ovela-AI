@@ -54,6 +54,7 @@ __pycache__/
 future-plan/
 memory_bank/
 current-demoes-context/
+archive/
 
 # guide files
 backend/redeploy-guide.md
@@ -61,5 +62,7 @@ backend/redeploy-guide.md
 scripts/*.py
 !scripts/health_check.py
 .agent/
+.agents/
+docs/
 logs
 backend/tests

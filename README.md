@@ -9,15 +9,56 @@ Ovela is an AI-powered receptionist designed specifically for beauty and hair st
 This project is a **Monorepo** containing both the frontend and backend applications.
 
 ```bash
-├── frontend/           # Next.js 14 Dashboard & Landing Page
-│   ├── app/            # App Router pages
-│   ├── components/     # UI components
-│   └── ...
-├── backend/            # FastAPI Python Backend
-│   ├── core/           # AI Logic & Config
-│   ├── services/       # Integrations (Twilio, Meta, Appwrite, Resend)
-│   └── main.py         # API Entry point
-└── ...
+├── frontend/                   # Next.js 14 Dashboard & Landing Page (TypeScript, Tailwind)
+│   ├── app/                    # Next.js App Router (Pages, Layouts, Routing)
+│   │   ├── admin/              # Admin dashboard pages
+│   │   ├── dashboard/          # Client dashboard pages
+│   │   ├── login/              # Login routes & handlers
+│   │   ├── globals.css         # Styling system & design tokens
+│   │   ├── layout.tsx          # Main HTML structure, contexts, providers
+│   │   └── page.tsx            # Landing Page root
+│   ├── components/             # Reusable UI Components (buttons, dialogs, visualizers)
+│   ├── contexts/               # React Contexts (auth, webhooks, voice settings)
+│   ├── hooks/                  # Custom React hooks
+│   ├── lib/                    # Shared utility files (appwrite client configuration)
+│   └── package.json            # Node.js configurations & scripts
+│
+├── backend/                    # Python FastAPI Backend
+│   ├── api/                    # Endpoint Routes (FastAPI APIRouter)
+│   │   ├── actions.py          # Triggered workflow events (booking updates, reminders)
+│   │   ├── voice.py            # Twilio media stream WebSockets & demo approval hooks
+│   │   ├── dashboard.py        # Studio dashboard CRUD backend
+│   │   ├── twilio.py           # Twilio telephony webhooks
+│   │   └── stripe.py           # Payment processing integration
+│   ├── core/                   # Core Configuration & Security
+│   │   ├── ai/                 # AI Orchestrations & Prompts
+│   │   │   ├── orchestrator.py # Orchestrator deciding manager vs worker logic
+│   │   │   ├── prompts.py      # Base instruction sets & context rules
+│   │   │   └── handlers.py     # Callback handlers for LLM outputs
+│   │   ├── config.py           # System env configurations & API keys
+│   │   └── security.py         # Authentication tokens & encryption helper
+│   ├── services/               # Integrations & Business Logic
+│   │   ├── appwrite.py         # Appwrite DB Client & query wrappers
+│   │   ├── voice_agent/        # The Voice Stream processing engine
+│   │   │   ├── handler.py      # Audio frames transceiver & Deepgram adapter
+│   │   │   ├── prompts.py      # System personas for voice assistants
+│   │   │   └── bridges/        # Deepgram and Twilio stream managers
+│   │   ├── email.py            # Email senders (Resend API)
+│   │   ├── memory.py           # Caching & context matching
+│   │   └── scheduled_jobs/     # Outbound SMS/WhatsApp schedulers
+│   ├── main.py                 # FastAPI Main Entrypoint (Routes mount, CORS, startup)
+│   └── requirements.txt        # Python packages & dependencies
+│
+├── memory_bank/                # Living Documentation & Handoffs
+│   ├── ACTIVE_PLAN.md          # Granular current task checklists & upcoming tasks
+│   ├── COMPLETED_STATUS.md     # Factual record of completed items & historical decisions
+│   ├── CURRENT_STATUS.md       # Tech stack, architecture diagrams, and Active Risks
+│   ├── IMPLEMENTATION_ARTIFACT.md # Broad plan (current + future plans) & milestones
+│   └── END_SESSION.md          # Handoff context & restoration targets for next sessions
+└── docs/                       # Design documents & Challenge Resources
+    └── AI Challenge/
+        ├── Additional_Context.md
+        └── ai_agents_challenge_designed_guide.pdf
 ```
 
 ## 🚀 Getting Started
