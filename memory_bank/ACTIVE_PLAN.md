@@ -26,20 +26,14 @@ Instead of feature-by-feature iteration, we approach the voice agent with a seni
 - [x] 9 new TDD tests: `test_memory_bank.py` (5) + `test_adk_graph.py` (4). All passing.
 - [x] Total test suite: **16/16 green**. Commit: `d184754`.
 
-### Task 3: Conversational Hardening — Interruption Trimming
-**Files:**
-- Modify: `backend/services/voice_agent/handler.py`
-- Test: `backend/tests/test_conversational_hardening.py`
+### ✅ Task 3: Conversational Hardening — Interruption Trimming — COMPLETE
+- [x] `trim_assistant_transcript(text, elapsed_seconds, wpm=150)` added as module-level pure function in `handler.py`.
+- [x] `_tts_playback_start = time.time()` tracked in `_handle_agent_started_speaking()`.
+- [x] Trim wired in `_handle_user_started_speaking()` before Twilio clear — prunes last AI transcript entry.
+- [x] 8 TDD tests in `test_conversational_hardening.py` — all passing.
 
-- [ ] Implement `trim_assistant_transcript(text, elapsed_seconds, wpm=150)` in `handler.py`.
-- [ ] Wire into `_handle_user_started_speaking()` VAD handler to trim history on interruption.
-- [ ] Add TDD test asserting word-count calculation at 150 WPM.
-
-### Task 4: Stripe Automated Payments & Branded Emails
-**Files:**
-- Create: `backend/services/voice_agent/functions/stripe_handlers.py`
-- Test: `backend/tests/test_stripe_and_email.py`
-
-- [ ] Implement `create_checkout_session(amount_aud, room_type)` with Stripe SDK.
-- [ ] Wire into CoalCreek function dispatcher as a tool callback.
-- [ ] Add TDD test with mocked Stripe session creation.
+### ✅ Task 4: Stripe Automated Payments — COMPLETE
+- [x] `backend/services/voice_agent/functions/stripe_handlers.py` created.
+- [x] `create_checkout_session(amount_aud, room_type)` → Stripe URL | None. AUD, cents, error-contained.
+- [x] 6 TDD tests in `test_stripe_and_email.py` — all passing.
+- [x] Total test suite: **30/30 green**. Commit: `75dd03b`.
