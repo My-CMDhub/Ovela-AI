@@ -1012,19 +1012,8 @@ async def get_settings(
         }
 
     # 2. Fallbacks for safety (if DB record missing)
-    if tenant_id == "saranda":
-        return {
-            "success": True,
-            "settings": {
-                "business_name": "Saranda on Hutton",
-                "business_hours": "Reception: 8:00 AM - 8:00 PM\nCheck-in: 2:00 PM\nCheck-out: 10:00 AM",
-                "location": "The Entrance, NSW",
-                "business_phone": "0452557167",
-                "owner_email": "sarandacafe@gmail.com"
-            }
-        }
-    
     # Default to Coal Creek
+
     return {
         "success": True,
         "settings": {
