@@ -725,6 +725,7 @@ class VoiceAgentHandler:
                 save_reservation_fn=self._save_motel_reservation,
                 abuse_protection=self.abuse_protection,
                 caller_memory_bank=self.caller_memory_bank,
+                call_sid=self.call_sid or "",
             )
             logger.info("✅ Using Coal Creek/update 247 Dispatcher")
             

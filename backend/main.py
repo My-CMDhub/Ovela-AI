@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from core.config import settings
-from api import twilio, voice, notifications, actions, stripe
+from api import twilio, voice, notifications, actions, stripe, adk as adk_api
 
 
 # Initialize New Relic BEFORE creating FastAPI app
@@ -56,6 +56,20 @@ async def startup_event():
     logging.info("=" * 72)
     logging.info("🚀 Starting Coal Creek CRM backend...")
     # start_scheduler() # Disabled to eliminate background noise/latency
+
+    # =========================================================================
+    # ADK ORCHESTRATOR — Singleton Cold Path Agent Graph
+    # Instantiate once on startup; reused across all Twilio calls.
+    # Each call_sid gets an isolated InMemory session — no cross-contamination.
+    # =========================================================================
+    try:
+        from services.adk.graph import ADKOrchestrator
+        app.state.adk_orchestrator = ADKOrchestrator()
+        logging.info("🤖 ADKOrchestrator ready — Cold Path online")
+    except Exception as adk_err:
+        logging.error(f"❌ ADKOrchestrator failed to initialise: {adk_err}")
+        app.state.adk_orchestrator = None  # Graceful degradation
+
     logging.info("✅ Application startup complete")
 
 @app.on_event("shutdown")
@@ -101,6 +115,7 @@ app.include_router(notifications.router, prefix="/api/motel", tags=["notificatio
 app.include_router(notifications.router, prefix="/api", tags=["notifications_root"])
 app.include_router(actions.router, prefix="/api", tags=["actions"])
 app.include_router(stripe.router, prefix="/api", tags=["stripe"])
+app.include_router(adk_api.router, prefix="/api/adk", tags=["adk"])
 
 
 @app.get("/")

@@ -870,14 +870,70 @@ class CoalCreekFunctionDispatcher:
     Ensures 'coalcreek' context is set for all KB operations.
     """
     
-    def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, caller_memory_bank=None):
+    def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, caller_memory_bank=None, call_sid: str = ""):
         self.db_service = db_service
         self.user_phone = user_phone
         self.save_reservation_fn = save_reservation_fn
         self.abuse_protection = abuse_protection
         self.caller_memory_bank = caller_memory_bank  # CallerMemoryBank for persistent profile saves
+        self.call_sid = call_sid  # Twilio CallSid for ADK session keying
         # Always set context on init
         set_tenant_context("coalcreek")
+
+    def fire_adk_cold_path(self, query: str, session_state: dict | None = None) -> None:
+        """
+        Fire-and-forget: POST a booking intent to the ADK Cold Path graph.
+
+        Schedules as a background asyncio.create_task so it NEVER blocks the
+        voice loop. The ADK graph (OvelaManager → BookingWorker/InfoWorker)
+        processes the query asynchronously and stores the result in the
+        per-call InMemory session.
+
+        Args:
+            query:         User's booking intent text to route through ADK.
+            session_state: Optional caller context (name, dates) to merge into
+                           the ADK session before routing.
+        """
+        import asyncio
+        import httpx
+
+        call_sid = self.call_sid or "unknown"
+
+        async def _post():
+            try:
+                payload = {
+                    "call_sid": call_sid,
+                    "query": query,
+                    "session_state": session_state or {},
+                }
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    resp = await client.post(
+                        "http://localhost:8000/api/adk/query",
+                        json=payload,
+                    )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    logger.info(
+                        "🤖 ADK cold path OK for %s | response_len=%d",
+                        call_sid[:8],
+                        len(data.get("response", "")),
+                    )
+                else:
+                    logger.warning(
+                        "🤖 ADK cold path non-200 for %s: %d",
+                        call_sid[:8],
+                        resp.status_code,
+                    )
+            except Exception as exc:
+                # Silently swallow — cold path must NEVER crash the voice loop
+                logger.error("🤖 ADK cold path error for %s: %s", call_sid[:8], exc)
+
+        try:
+            asyncio.create_task(_post())
+        except RuntimeError:
+            # No running loop (e.g., test context) — silently skip
+            logger.debug("🤖 ADK cold path skipped (no event loop)")
+
     
     async def execute(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Execute a function with basic error handling."""
@@ -926,13 +982,27 @@ class CoalCreekFunctionDispatcher:
 
     async def _dispatch(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Internal dispatch map."""
-        
+
         # Booking / Availability
         if function_name == "check_availability":
             return await handle_check_availability(args, self.db_service, context=context)
-        
+
         elif function_name == "create_booking_request":
-            return await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn)
+            result = await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn)
+            # Cold Path: notify ADK graph of successful booking intent for session memory
+            if result.get("success") and self.call_sid:
+                guest_name = args.get("guest_name", "")
+                room_type = args.get("room_type", "")
+                check_in = args.get("check_in_date", "")
+                adk_query = f"Booking confirmed for {guest_name}: {room_type} room, check-in {check_in}."
+                session_state = {
+                    "guest_name": guest_name,
+                    "room_type": room_type,
+                    "check_in": check_in,
+                    "booking_ref": result.get("booking_reference", ""),
+                }
+                self.fire_adk_cold_path(query=adk_query, session_state=session_state)
+            return result
             
         elif function_name == "lookup_booking":
             return await handle_lookup_booking(args, self.db_service, self.user_phone)
