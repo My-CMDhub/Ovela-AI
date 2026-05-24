@@ -989,19 +989,60 @@ class CoalCreekFunctionDispatcher:
 
         elif function_name == "create_booking_request":
             result = await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn)
-            # Cold Path: notify ADK graph of successful booking intent for session memory
-            if result.get("success") and self.call_sid:
-                guest_name = args.get("guest_name", "")
-                room_type = args.get("room_type", "")
-                check_in = args.get("check_in_date", "")
-                adk_query = f"Booking confirmed for {guest_name}: {room_type} room, check-in {check_in}."
-                session_state = {
-                    "guest_name": guest_name,
-                    "room_type": room_type,
-                    "check_in": check_in,
-                    "booking_ref": result.get("booking_reference", ""),
-                }
-                self.fire_adk_cold_path(query=adk_query, session_state=session_state)
+
+            if result.get("success"):
+                booking_ref = result.get("booking_reference", "")
+                room_type   = result.get("room_type", args.get("room_type", "queen"))
+                total_amt   = result.get("total_amount", 0)
+                guest_phone = args.get("guest_phone", "") or self.user_phone
+                guest_name  = args.get("guest_name", "")
+
+                # ── Task 3: Stripe Checkout (Cold Path, fire-and-forget) ───────
+                async def _send_stripe_link():
+                    try:
+                        from .stripe_handlers import create_checkout_session
+                        stripe_url = create_checkout_session(
+                            amount_aud=int(total_amt),
+                            room_type=room_type,
+                            booking_ref=booking_ref,
+                        )
+                        if stripe_url and guest_phone and guest_phone not in ("unknown", ""):
+                            from services.staff_notifications import staff_notification_service
+                            await staff_notification_service.notify_new_callback_request(
+                                customer_phone=guest_phone,
+                                customer_name=guest_name,
+                                reason=(
+                                    f"PAYMENT LINK for booking {booking_ref}: {stripe_url}"
+                                ),
+                                urgency="high",
+                            )
+                            logger.info(
+                                "💳 Stripe link SMSed to %s for booking %s",
+                                (guest_phone[:4] + "****") if guest_phone else "N/A",
+                                booking_ref,
+                            )
+                        elif not stripe_url:
+                            logger.info("💳 Stripe not configured — skipping SMS link for %s", booking_ref)
+                    except Exception as stripe_err:
+                        # Never propagate — hot path must stay alive
+                        logger.error("💳 Stripe link dispatch error for %s: %s", booking_ref, stripe_err)
+
+                asyncio.create_task(_send_stripe_link())
+
+                # ── Task 2: ADK Cold Path session state update ─────────────────
+                if self.call_sid:
+                    check_in = args.get("check_in_date", "")
+                    adk_query = f"Booking confirmed for {guest_name}: {room_type} room, check-in {check_in}."
+                    self.fire_adk_cold_path(
+                        query=adk_query,
+                        session_state={
+                            "guest_name": guest_name,
+                            "room_type": room_type,
+                            "check_in": check_in,
+                            "booking_ref": booking_ref,
+                        },
+                    )
+
             return result
             
         elif function_name == "lookup_booking":
