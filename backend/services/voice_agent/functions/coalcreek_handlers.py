@@ -870,11 +870,12 @@ class CoalCreekFunctionDispatcher:
     Ensures 'coalcreek' context is set for all KB operations.
     """
     
-    def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection):
+    def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, caller_memory_bank=None):
         self.db_service = db_service
         self.user_phone = user_phone
         self.save_reservation_fn = save_reservation_fn
         self.abuse_protection = abuse_protection
+        self.caller_memory_bank = caller_memory_bank  # CallerMemoryBank for persistent profile saves
         # Always set context on init
         set_tenant_context("coalcreek")
     
@@ -972,7 +973,20 @@ class CoalCreekFunctionDispatcher:
              return await handle_report_missing_booking(args, self.user_phone)
              
         elif function_name == "update_guest_info":
-             return await handle_update_guest_info(args, self.db_service)
+             result = await handle_update_guest_info(args, self.db_service)
+             # Persist profile to CallerMemoryBank on successful guest info capture
+             if result.get("success") and self.caller_memory_bank:
+                 profile_data = {}
+                 if args.get("guest_name"):
+                     profile_data["name"] = args["guest_name"]
+                 if args.get("guest_email"):
+                     profile_data["email"] = args["guest_email"]
+                 if profile_data:
+                     # Fire-and-forget: never await on the hot path
+                     asyncio.create_task(
+                         self.caller_memory_bank.save_profile(self.user_phone, profile_data)
+                     )
+             return result
              
         # Common controls
         elif function_name == "end_call":

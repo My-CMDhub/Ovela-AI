@@ -50,6 +50,7 @@ from .functions import get_booking_functions, get_coalcreek_functions
 from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
 from .text_utils import prepare_for_tts, clean_tts_output
 from .latency_tracker import LatencyTracker
+from .memory import CallerMemoryBank
 from services.motel_knowledge_base import set_tenant_context
 
 CARTESIA_VOICE_ID = "f9836c6e-a0bd-460e-9d3c-f7299fa60f94"
@@ -228,6 +229,9 @@ class VoiceAgentHandler:
         # Tenant Configuration (Database Driven)
         self.tenant_config = {}
         self._final_help_offer_active = False
+
+        # Persistent Caller Memory Bank (error-contained — never crashes the hot path)
+        self.caller_memory_bank = CallerMemoryBank()
 
     def _normalize_phrase(self, text: str) -> str:
         normalized = (text or "").lower()
@@ -636,7 +640,25 @@ class VoiceAgentHandler:
         self.user_name = custom_params.get("user_name", "there")
         self.business_name = custom_params.get("business_name", "your business")
         self.user_phone = custom_params.get("user_phone", "unknown")
-        
+
+        # =====================================================================
+        # CALLER MEMORY BANK: Fetch persistent profile for returning guests.
+        # Fire-and-forget — error-contained, never blocks stream establishment.
+        # Profile is injected into self.memory so _get_active_prompt() enriches
+        # the system prompt before Deepgram Settings are sent.
+        # =====================================================================
+        try:
+            caller_profile = await self.caller_memory_bank.get_profile(self.user_phone)
+            if caller_profile.get("name"):
+                self.memory["name"] = caller_profile["name"]
+                logger.info("🧠 Returning guest recognised: %s", self.user_phone[:4] + "****")
+            if caller_profile.get("room_preference"):
+                self.memory["room_type"] = caller_profile["room_preference"]
+        except Exception as _cmb_err:
+            # Should never reach here (CallerMemoryBank swallows errors internally),
+            # but belt-and-suspenders: never let a DB issue break stream start.
+            logger.error("🧠 CallerMemoryBank unexpected error in handler: %s", _cmb_err)
+
         # Multi-tenant detection
         self.is_demo_call = custom_params.get("is_demo", "false").lower() == "true"
         self.demo_type = custom_params.get("demo_type", "")
@@ -701,7 +723,8 @@ class VoiceAgentHandler:
                 db_service=db_service,
                 user_phone=self.user_phone,
                 save_reservation_fn=self._save_motel_reservation,
-                abuse_protection=self.abuse_protection
+                abuse_protection=self.abuse_protection,
+                caller_memory_bank=self.caller_memory_bank,
             )
             logger.info("✅ Using Coal Creek/update 247 Dispatcher")
             
