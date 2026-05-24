@@ -3,8 +3,8 @@ ADK Multi-Agent Routing Graph — Ovela AI Hospitality Orchestrator.
 
 Architecture (Cold Path):
     Manager (OvelaManager)
-        ├── BookingWorker   — room availability, create_booking, Stripe payment links
-        └── InfoWorker      — motel policy, amenities, FAQ, pricing
+        ├── BookingWorker   — room availability, create_booking, Stripe payment links, email handling etc..
+        └── InfoWorker      — motel policy, amenities, FAQ, pricing, etc...
 
 This graph is triggered asynchronously by Gemini tool calls routed through the
 FastAPI webhook handler. It runs entirely on the Cold Path so it NEVER blocks

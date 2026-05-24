@@ -2,6 +2,10 @@
 
 Tracks the current live architecture, implementation state of modules, design decisions, active risks, and database guardrails for Ovela AI.
 
+> [!IMPORTANT]
+> **COMPLIANCE & WINNING FOCUS:** Refer directly to the [Ovela AI Winning Strategy Blueprint](file:///Applications/Journey%20of%20pro/Nona/docs/plans/winning_strategy.md) to align development with our judging criteria, demo testing checklists, and the 3-minute Devpost presentation script.
+
+
 ---
 
 ## 🛠️ Technology Stack & Architecture
@@ -37,8 +41,8 @@ graph TD
 | **Twilio Live Voice Stream** | `PRODUCTION READY` | Twilio media streams bridged. Dynamic greeting waits & double filler protections active. |
 | **Gemini Enterprise ADK Graph** | `IMPLEMENTED` | `backend/services/adk/graph.py` — OvelaManager → BookingWorker + InfoWorker. google-adk 2.0.0. 4 tests green. |
 | **CallerMemoryBank** | `IMPLEMENTED` | `backend/services/voice_agent/memory.py` — get_profile + save_profile. 5 tests green. Error-contained. |
-| **Conversational Hardening** | `PENDING` | Task 3: Interruption trimming (trim_assistant_transcript) not yet implemented. |
-| **Stripe Payments** | `PENDING` | Task 4: stripe_handlers.py not yet built. |
+| **Conversational Hardening** | `IMPLEMENTED` | `trim_assistant_transcript` added to `handler.py` and VAD start-time tracked. 8 tests passing in `test_conversational_hardening.py`. |
+| **Stripe Payments** | `IMPLEMENTED` | `stripe_handlers.py` built for hosted Stripe Checkout sessions in AUD currency. 6 tests passing in `test_stripe_and_email.py`. |
 
 ---
 
@@ -49,7 +53,7 @@ graph TD
 2. **Twilio Buffer Clears wiping Injected Filler Audio:** Twilio WebSocket `clear` messages can erase pending fallback filler phrases if sent during active playback.
    - *Mitigation:* Strict clear-event guards block Twilio `clear` signals whenever the agent is processing async tools (`_is_processing_function = True`).
 3. **Conversational Amnesia from Interruption Lag:** TTS speech delivery is slower than generation. The LLM believes a sentence was spoken when VAD interrupted after the first word.
-   - *Mitigation:* Task 3 implements `trim_assistant_transcript(text, elapsed_seconds, wpm=150)` to prune the history.
+   - *Mitigation:* Implemented `trim_assistant_transcript(text, elapsed_seconds, wpm=150)` in `handler.py` to prune history dynamically based on exact millisecond VAD triggers.
 4. **`_transfer_tts_done` Event Is Declared But Never Awaited:** Ghost state in handler.py. Low priority — transfer flow works via TwiML update path. Flag for cleanup in Phase 3.
 5. **Silence Monitor Rescheduling Has No Max-Cap:** `paused_on_request` can loop indefinitely if cleanup races. Probability low — guarded by `is_running` check. Flag for Phase 3.
 

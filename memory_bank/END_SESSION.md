@@ -1,88 +1,50 @@
 # Ovela AI - End Session
 
-**Session Date:** 2026-05-22 (Session 2)
+**Session Date:** 2026-05-24 (Session 3)
 **Current Active Branch:** `feat/gemini-adk-migration`
-**HEAD Commit:** `d184754`
+**HEAD Commit:** `0d644f0` (fortification & hardening complete)
 
 ---
 
 ## 🏁 Current Active Status
 
-This session completed Tasks 1 and 2 in full:
-- **Architectural Audit:** Deep audit of `handler.py` (2282 lines). Found and fixed 3 silent bugs. Full findings in `brain/*/audit_and_code_review.md`.
-- **ADK Multi-Agent Graph:** `backend/services/adk/graph.py` — `ADKOrchestrator` with `OvelaManager` → `BookingWorker` + `InfoWorker` using `google-adk 2.0.0` (`LlmAgent` + `Runner` + `InMemorySessionService`).
-- **CallerMemoryBank:** `backend/services/voice_agent/memory.py` — persistent caller recognition via Appwrite.
-- **Test suite:** 16/16 passing (up from 7). Commit: `d184754`.
+This session marked Phase 2 as **100% COMPLETE**:
+- **conversational Hardening (Interruption Trimming):** `trim_assistant_transcript` added to `handler.py` and VAD start-time tracked. 8 TDD tests green.
+- **Stripe Payments:** `stripe_handlers.py` built for hosted Stripe Checkout sessions in AUD currency. 6 TDD tests green.
+- **Verification Gates:** Core suite audit complete. **30 / 30 tests green** (`pytest backend/tests/`).
 
 ---
 
 ## 🎯 Next Session Starting Target
 
 - **Starting File:** `backend/services/voice_agent/handler.py`
-- **Starting Point:** Implement `trim_assistant_transcript(text, elapsed_seconds, wpm=150)` function and wire it into `_handle_user_started_speaking()`.
-- **Goal:** Task 3 — Interruption trimming. Creates the mathematical VAD playback pruning story for the Innovation judging criterion.
+- **Starting Point:** Integrate `CallerMemoryBank` into the live WebSocket loop initialization.
+- **Goal:** Phase 3 — Voice Agent Integration & Bridging. Connect our unit-tested ADK Graph, Caller Memory, and Stripe checkout handlers to the live Twilio voice streaming handler.
 
 ---
 
 ## 🛠️ Step-by-Step Context Handoff
 
-1. **Task 3: Interruption Trimming (Next priority)**
-   - Implement `trim_assistant_transcript(text, elapsed_seconds, wpm=150)` in `handler.py`.
-   - Track TTS playback start time in `_handle_agent_started_speaking()` via `self._tts_playback_start = time.time()`.
-   - In `_handle_user_started_speaking()`, calculate elapsed and trim `self.transcript[-1]["text"]` if last role was `"ai"`.
-   - Test: `backend/tests/test_conversational_hardening.py` (already in plan).
+1. **Caller Memory Bank Hookup:**
+   - Bind `CallerMemoryBank.get_profile(caller_phone)` inside `handler.py` when a Twilio stream starts.
+   - Inject returning caller name and room preferences into the dynamic agent prompt to greet them.
+   - Hook `save_profile()` in `update_guest_info` tool dispatcher hook.
 
-2. **Task 4: Stripe + Email (After Task 3)**
-   - Create `backend/services/voice_agent/functions/stripe_handlers.py`.
-   - `STRIPE_SECRET_KEY` is already in `core/config.py` (optional field).
+2. **ADK Graph Webhook Routing:**
+   - Instantiate `ADKOrchestrator` in FastAPI backend server.
+   - Wire Deepgram tool webhook triggers to query `ADKOrchestrator.query()`.
 
-3. **DO NOT touch:**
-   - Silence detection thresholds — working correctly.
-   - VAD clear-event guard logic — critical, do not regress.
-   - `_is_processing_function` flag — correctly gates Twilio clears.
+3. **Stripe Checkout Mapping:**
+   - Hook `stripe_handlers.create_checkout_session()` inside booking confirmation webhook, sending payment links via background SMS tasks.
 
----
-
-## 🛡️ Architecture & Latency Invariants
-
-- **Hot Path Invariant:** Outbound and inbound voice frames (Twilio ↔ Deepgram ↔ Gemini 2.0 Flash ↔ Cartesia TTS) must bypass all synchronous DB and API blockages, keeping perceived conversational latency strictly below **850ms**.
-- **Cold Path Invariant:** ADKOrchestrator (`backend/services/adk/graph.py`), Appwrite CRUD, Stripe, and branded receipts are run asynchronously as cold webhooks or background processes.
-- **Interruption Trim Invariant:** Twilio VAD interruption signals trigger immediate word-playback truncation calculations (~150 WPM) inside `handler.py` VAD event listener.
-
-
----
-
-## 🏁 Current Active Status
-
-We have successfully locked down the **Phase 1 monorepo baseline** (all 7 backend unit tests green, Next.js frontend compiling cleanly) and removed all stale plans. We have completely realigned our strategy around a **Senior-Level Architectural Audit & Comprehensive Production Fortification** posture. 
-
-Rather than iterating small features sequentially, the next session will approach the codebase with an audit-first mindset to map out high-level reliability, conversational flows, and multi-agent execution graphs using Google's ADK and infrastructure patterns.
-
----
-
-## 🎯 Next Session Starting Target
-
-- **Target Directory:** `/Applications/Journey of pro/Nona/backend/services/voice_agent/`
-- **Starting File:** `backend/services/voice_agent/handler.py`
-- **Goal:** Perform a deep-dive, senior-level architectural audit of the voice agent loop and orchestrations to isolate latent latency risks, VAD timing races, and ADK integration boundaries.
-
----
-
-## 🛠️ Step-by-Step Context Handoff
-
-1. **Audit & Analysis Phase (Next Agent Start):**
-   - Conduct a systematic, line-by-line review of `handler.py` and its sibling files (`config.py`, `abuse_protection.py`, `silence_detection.py`).
-   - Identify precise integration hooks for the Google Agent Development Kit (ADK) multi-agent graph (Manager $\rightarrow$ Booking/Info Workers) to maintain a zero-latency Hot Path and asynchronous Cold Path.
-   - Outline failure patterns in Twilio media streams, checkout loops, and SMTP mail dispatchers.
-   - Refine the math, triggers, and state persistence of the Interruption Trimming engine.
-
-2. **Connected Blueprints:**
-   - Refer directly to the audit checklists inside `memory_bank/ACTIVE_PLAN.md` and the conceptual plans inside `docs/plans/2026-05-22-stateful-adk-and-production-fortification.md`.
+4. **DO NOT touch:**
+   - VAD clear-event guard logic (critical for voice clarity under async processes).
+   - `trim_assistant_transcript` formula — mathematically tested and calibrated at 150 WPM.
 
 ---
 
 ## 🛡️ Architecture & Latency Invariants
 
-- **Hot Path Invariant:** Outbound and inbound voice frames (Twilio $\leftrightarrow$ Deepgram $\leftrightarrow$ Gemini 2.0 Flash $\leftrightarrow$ Cartesia TTS) must bypass all synchronous DB and API blockages, keeping perceived conversational latency strictly below **850ms**.
-- **Cold Path Invariant:** Declarative multi-agent ADK graphs, Appwrite database CRUD executions, Stripe session creations, and branded receipts are run asynchronously as cold webhooks or background processes.
-- **Interruption Trim Invariant:** twilio VAD interruption signals triggers immediate word-playback truncation calculations (~150 WPM) inside `handler.py` VAD event listener, keeping history and system prompts strictly in-sync.
+- **Hot Path Invariant:** Outbound and inbound voice frames (Twilio ↔ Deepgram ↔ Gemini 2.0 Flash ↔ Cartesia TTS) must bypass all database and Stripe API checks, keeping response latency strictly under **850ms**.
+- **Cold Path Invariant:** ADKOrchestrator, Appwrite database CRUD, and Stripe checkout session creations are run asynchronously as cold webhooks or background processes.
+- **Interruption Trim Invariant:** Twilio VAD triggers immediate word-playback pruning (~150 WPM) inside `handler.py` to keep prompt histories pristine.

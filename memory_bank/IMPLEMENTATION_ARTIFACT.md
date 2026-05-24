@@ -15,12 +15,12 @@ gantt
     section Phase 1: Cleanup & Baseline
     Purge Legacies & Setup Baseline     :done, p1, 2026-05-21, 2026-05-22
     section Phase 2: Audit & Fortification
-    Senior-Level System & ADK Audit    :active, p2, 2026-05-22, 2026-05-25
-    Stateful ADK Graph Integration    : p3, 2026-05-25, 2026-05-29
-    Real-Time Audio Hardening & SMTP   : p4, 2026-05-29, 2026-06-01
-    section Phase 3: Stress & Tune
-    Performance & Caching Tuning       : p5, 2026-06-01, 2026-06-03
-    Stress Testing & Verification      : p6, 2026-06-03, 2026-06-05
+    Senior Audit & Module Creation     :done, p2, 2026-05-22, 2026-05-23
+    section Phase 3: Voice Integration
+    Wire Memory, ADK, Stripe to Twilio  :active, p3, 2026-05-23, 2026-05-27
+    section Phase 4: Stress & Tune
+    Gemini Caching & Concurrency Stress: p4, 2026-05-27, 2026-06-01
+    Final Verification & GCP Run Prep   : p5, 2026-06-01, 2026-06-05
 ```
 
 ---
@@ -33,16 +33,24 @@ gantt
 - Verified system integrity with 7 green backend unit tests.
 - Staged and committed clean workspace base on branch `feat/gemini-adk-migration`.
 
-### Phase 2: Senior-Level Audit & System Fortification [ACTIVE]
-- **Task 1: Comprehensive System Audit & Latency Review:** A deep, surgical audit of `/Applications/Journey of pro/Nona/backend/services/voice_agent` to expose silent bottlenecks, context sync flaws, VAD timings, and race conditions.
-- **Task 2: Stateful ADK Graph Integration:** Multi-agent Vertex AI graph routing (Manager, Booking Worker, Info Worker) with unified Session state persistence to support complex transactional logic.
-- **Task 3: Production-Grade Hardening (Stripe & Emails):** Dynamic invoice/checkout URL generation mid-call, integrated with beautiful SMTP confirmation layouts.
-- **Task 4: Conversational Quality & Hardening:** Real-time speech-rate playback pruning (~150 WPM) on interruption VAD events, plus Gemini Prompt Caching token optimization.
+### Phase 2: Senior-Level Audit & Module Fortification [100% COMPLETE]
+- **Architectural Audit & Latency Review:** A deep, surgical audit of `handler.py` to expose silent bottlenecks, context sync flaws, and VAD timings. Arg-inversion on filler phrases and CRM summary bugs fixed in production.
+- **Stateful ADK Graph Integration:** Created `backend/services/adk/graph.py` with multi-agent Vertex AI routing (Manager, Booking Worker, Info Worker) utilizing declarative `google-adk 2.0.0` schemas and isolated session memory.
+- **Persistent Caller Memory Bank:** Created `backend/services/voice_agent/memory.py` with Appwrite profile recognition hooks, error-contained for zero websocket lag.
+- **Dynamic Interruption Trimming:** Built exact conversational speed VAD trimming (~150 WPM) in `handler.py` to keep prompt histories in-sync with what the guest *actually* heard.
+- **Stripe Automated Payments:** Created `backend/services/voice_agent/functions/stripe_handlers.py` for dynamichosted payment links in AUD.
+- **Verification Gates:** Completed **30 / 30 backend unit tests green**.
 
-### Phase 3: Stress Testing, Caching & Performance [UPCOMING]
+### Phase 3: Voice Agent Integration & Bridging [ACTIVE]
+- **Task 1: Caller Memory Bank Hookup:** Bind caller memory recognition to Twilio initialization to identify returning guests by phone and greet them by name.
+- **Task 2: ADK Graph Webhook Integration:** Connect Deepgram's async tool-call callbacks directly to our Vertex AI ADK graph router.
+- **Task 3: Stripe Dispatch:** Link successful hotel bookings with instant Stripe session URLs sent via SMS.
+
+### Phase 4: Stress Testing, Caching & Performance [UPCOMING]
 - Optimization of model costs and speed via Gemini Prompt Caching.
 - Multi-agent concurrent load testing.
 - Static analysis and typescript safety audits.
+- Packaging and deployment to Google Cloud Run.
 
 ---
 
