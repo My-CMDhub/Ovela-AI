@@ -8,6 +8,9 @@ This file records verified accomplishments, test runs, evidence gates, and our h
 
 | Date | Milestone | Verified By | Proof / Output |
 |---|---|---|---|
+| **2026-05-24** | **Phase 3 Task 3 — Stripe Checkout Dispatch** | Antigravity | `_send_stripe_link()` coroutine fires as `asyncio.create_task` on booking success. Stripe URL SMS'd via `staff_notification_service`. Graceful fallback if `STRIPE_SECRET_KEY` missing. Commit: `9fd5a29`. |
+| **2026-05-24** | **Phase 3 Task 2 — ADK Graph Webhook Routing** | Antigravity | `ADKOrchestrator` singleton wired into `app.state` in `main.py` startup. `/api/adk/query` + `/api/adk/health` routes live in `backend/api/adk.py`. `fire_adk_cold_path()` method in `CoalCreekFunctionDispatcher`. Commit: `1cd41f3`. |
+| **2026-05-24** | **Phase 3 Task 1 — CallerMemoryBank Hookup** | Antigravity | Profile fetched in `_handle_twilio_start`, injected into `self.memory` before Deepgram Settings sent. `save_profile()` fires on `update_guest_info` via `asyncio.create_task`. 7 TDD tests green. Commit: `ba846f5`. |
 | **2026-05-23** | **Conversational Hardening (Interruption Trimming)** | Antigravity | Added `trim_assistant_transcript` pure function in `handler.py` and wired VAD playback timing to dynamically prune chat history on user cut-offs. 8 TDD tests green. |
 | **2026-05-23** | **Stripe Automated Payments (`stripe_handlers.py`)** | Antigravity | Created AUD currency-compliant hosted stripe checkout url generator. Error-contained and safe for live hot path. 6 TDD tests green. |
 | **2026-05-22** | **Senior-Level Architectural Audit** | Antigravity | Full line-by-line audit of `handler.py` (2282 lines). Found 3 silent bugs + 5 important issues. All critical findings captured in `brain/*/audit_and_code_review.md`. |
@@ -22,11 +25,12 @@ This file records verified accomplishments, test runs, evidence gates, and our h
 | **2026-05-21** | Memory Bank Initialization | Antigravity | Created active structures for `ACTIVE_PLAN.md`, `IMPLEMENTATION_ARTIFACT.md`, `CURRENT_STATUS.md` |
 
 > [!TIP]
-> **Total Test Suite Status:** **30 / 30 tests passing successfully** (`pytest backend/tests/`).
+> **Total Test Suite Status:** **37 / 37 tests passing successfully** (`pytest backend/tests/`).
 > - Baseline/Sanity tests: 7
 > - ADK & Memory Bank tests: 9
 > - Conversational Hardening (Trimming) tests: 8
 > - Stripe Payment Handler tests: 6
+> - Caller Memory Integration (Phase 3 T1) tests: 7
 
 ---
 

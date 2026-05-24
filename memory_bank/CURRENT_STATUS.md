@@ -37,12 +37,13 @@ graph TD
 | Module | Status | Verification / Evidence |
 |---|---|---|
 | **Frontend Dashboard** | `STABLE` | Next.js compilation completes with 0 errors. |
-| **FastAPI Backend** | `STABLE` | Outdated Meta/WhatsApp routes permanently purged. 16 pytest unit tests passing. |
+| **FastAPI Backend** | `STABLE` | Outdated Meta/WhatsApp routes permanently purged. Routes include ADK graph endpoint. |
 | **Twilio Live Voice Stream** | `PRODUCTION READY` | Twilio media streams bridged. Dynamic greeting waits & double filler protections active. |
-| **Gemini Enterprise ADK Graph** | `IMPLEMENTED` | `backend/services/adk/graph.py` — OvelaManager → BookingWorker + InfoWorker. google-adk 2.0.0. 4 tests green. |
-| **CallerMemoryBank** | `IMPLEMENTED` | `backend/services/voice_agent/memory.py` — get_profile + save_profile. 5 tests green. Error-contained. |
-| **Conversational Hardening** | `IMPLEMENTED` | `trim_assistant_transcript` added to `handler.py` and VAD start-time tracked. 8 tests passing in `test_conversational_hardening.py`. |
-| **Stripe Payments** | `IMPLEMENTED` | `stripe_handlers.py` built for hosted Stripe Checkout sessions in AUD currency. 6 tests passing in `test_stripe_and_email.py`. |
+| **Gemini Enterprise ADK Graph** | `PRODUCTION READY` | `backend/services/adk/graph.py` — OvelaManager → BookingWorker + InfoWorker. Singleton in `app.state`. `/api/adk/query` + `/api/adk/health` routes live. |
+| **CallerMemoryBank** | `PRODUCTION READY` | `backend/services/voice_agent/memory.py` — hooked into `_handle_twilio_start`. Profile injected into system prompt. `save_profile()` fires on `update_guest_info`. |
+| **Conversational Hardening** | `PRODUCTION READY` | `trim_assistant_transcript` in `handler.py`, VAD start-time tracked. 8 tests green. |
+| **Stripe Payments** | `PRODUCTION READY` | `stripe_handlers.py` linked to `create_booking_request`. Payment link SMSed to guest on booking. Graceful fallback if key missing. |
+| **ADK Cold Path Bridge** | `PRODUCTION READY` | `fire_adk_cold_path()` in `CoalCreekFunctionDispatcher` — fires after booking success. call_sid keyed session isolation. |
 
 ---
 

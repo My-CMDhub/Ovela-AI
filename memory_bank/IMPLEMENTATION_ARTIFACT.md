@@ -41,16 +41,18 @@ gantt
 - **Stripe Automated Payments:** Created `backend/services/voice_agent/functions/stripe_handlers.py` for dynamichosted payment links in AUD.
 - **Verification Gates:** Completed **30 / 30 backend unit tests green**.
 
-### Phase 3: Voice Agent Integration & Bridging [ACTIVE]
-- **Task 1: Caller Memory Bank Hookup:** Bind caller memory recognition to Twilio initialization to identify returning guests by phone and greet them by name.
-- **Task 2: ADK Graph Webhook Integration:** Connect Deepgram's async tool-call callbacks directly to our Vertex AI ADK graph router.
-- **Task 3: Stripe Dispatch:** Link successful hotel bookings with instant Stripe session URLs sent via SMS.
+### Phase 3: Voice Agent Integration & Bridging [100% COMPLETE]
+- **Task 1 — CallerMemoryBank Hookup:** `CallerMemoryBank` wired into `_handle_twilio_start`. Returning guest profile (name, room_preference) injected into `self.memory` before Deepgram Settings are sent. `save_profile()` fired on `update_guest_info` success.
+- **Task 2 — ADK Graph Webhook:** `ADKOrchestrator` singleton in `app.state` (startup_event). `/api/adk/query` + `/api/adk/health` endpoints live. `fire_adk_cold_path()` fires after booking success as background task.
+- **Task 3 — Stripe Dispatch:** `create_checkout_session()` fires as `asyncio.create_task` after booking confirmation. Payment link SMS'd via `staff_notification_service`. Graceful fallback if key missing.
+- **Verification Gates:** 37 / 37 backend unit tests green.
 
-### Phase 4: Stress Testing, Caching & Performance [UPCOMING]
-- Optimization of model costs and speed via Gemini Prompt Caching.
-- Multi-agent concurrent load testing.
-- Static analysis and typescript safety audits.
-- Packaging and deployment to Google Cloud Run.
+### Phase 4: Stress Testing, Caching & Performance [ACTIVE]
+- Gemini Prompt Caching in ADK LlmAgent models to reduce token overhead.
+- Interruption System Tags on VAD triggers.
+- Behind-the-scenes live visual feed UI in Next.js dashboard.
+- Concurrency stress tests under 3 concurrent WebSocket calls.
+- GCP Cloud Run deployment and final judging demo dry-run.
 
 ---
 

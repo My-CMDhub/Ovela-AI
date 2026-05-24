@@ -4,37 +4,40 @@ This tracks our active granular task checklists. We focus on a high-level, senio
 
 ---
 
-## 🚩 Current Active Phase: Phase 3 - Voice Agent Integration & Bridging
+## 🚩 Current Active Phase: Phase 4 — Stress Testing, Caching & Performance Tuning
 
-Now that our core modules (ADK Graph, Caller Memory Bank, Stripe payments, and Interruption trimming) are fully built, audited, and tested with a 30/30 green unit test suite, our active objective is to connect these fortified systems directly into the live Twilio voice streaming handler (`handler.py`).
+Phase 3 (Voice Agent Integration & Bridging) is **100% COMPLETE** with 37/37 tests green. Phase 4 focuses on performance optimization, real-time UI, and final polish for the judging demo.
 
 ---
 
 ## 📝 Active Task Board
 
-### 🎯 Task 1: Wire CallerMemoryBank into twilio initialization [IN_PROGRESS]
-- [ ] Connect `CallerMemoryBank` instance to the main `OvelaVoiceAgent` class.
-- [ ] In `_handle_twilio_start` or connection establishment, fetch caller profile using `get_profile(caller_phone)`.
-- [ ] Inject retrieved caller data (e.g. name, room preferences, last visit date) into the initial system prompt or greeting context so returning guests are instantly recognized.
-- [ ] In `update_guest_info` tool dispatcher hook, ensure new/updated guest profiles are asynchronously committed back to the DB via `save_profile(caller_phone, updated_data)`.
-- [ ] Verify error containment: prove database connectivity issues do not block or delay live websocket establishment.
+### 🎯 Task 4.1: Gemini Prompt Caching in ADK Graph [UPCOMING]
+- [ ] Configure `LlmAgent` instances in `backend/services/adk/graph.py` to leverage Gemini's `cachedContent` for static system instructions.
+- [ ] Target: reduce token overhead by ~60% on repeated multi-turn calls.
+- [ ] Verify: ADK unit tests still pass; add latency log check showing reduced TTFT.
 
-### 🎯 Task 2: Bridge ADK Graph Webhook Routing [UPCOMING]
-- [ ] Instantiate `ADKOrchestrator` in FastAPI backend server.
-- [ ] Wire Gemini webhook tool triggers (from Deepgram Cold Path) to route availability checking, bookings, and details through `ADKOrchestrator.query(call_sid, session_id, query)`.
-- [ ] Verify that ADK session variables retain state correctly across sequential multi-agent tool handoffs.
+### 🎯 Task 4.2: Interruption System Tags [UPCOMING]
+- [ ] On VAD interruption in `handler.py`, inject `[System Note: Caller interrupted. Continue from last confirmed point.]` into Deepgram message context.
+- [ ] Ensure the tag is not spoken aloud (stripped from TTS output).
+- [ ] Write TDD test confirming the tag is added on VAD interrupt and not emitted to TTS.
 
-### 🎯 Task 3: Map Stripe checkout to Booking Tool Dispatch [UPCOMING]
-- [ ] In the booking confirmation webhook tool handler, extract guest phone and email.
-- [ ] Call `stripe_handlers.create_checkout_session(amount_aud, room_type, booking_ref)`.
-- [ ] If Stripe URL is generated successfully, trigger a background task to SMS the link to the guest (or output the URL via Cartesia TTS if they ask for it directly).
-- [ ] Gracefully handle blank/missing Stripe API keys by falling back to "Soft Hold / Manual Confirm at Reception".
+### 🎯 Task 4.3: Behind-the-Scenes Live Visual Feed UI [UPCOMING]
+- [ ] Build a real-time dashboard component in Next.js frontend showing:
+  - Active caller's name + room preference (from CallerMemoryBank)
+  - ADK routing decisions (which worker was called)
+  - Live DB search events, booking events, Stripe payment links
+- [ ] Connect via polling to `/api/adk/health` + new `/api/calls/live-state` endpoint.
+- [ ] Demo-quality: must look polished for judging presentation.
 
-### 🎯 Task 4: Stress Testing, Caching & Performance Tuning [UPCOMING]
-- [ ] Integrate **Gemini Prompt Caching** inside ADK graph models to optimize token overhead and slash TTFT latency.
-- [ ] Inject **Interruption System Tags** (`[System Note: ... ]`) on VAD interruption triggers to preserve conversational context.
-- [ ] Fine-tune **Cartesia SSML Filler Parameters** (fast verbal responses + dynamic pauses) to cover back-end tool execution times.
-- [ ] Build the **Behind-the-Scenes live visual feed UI** in the Next.js dashboard showing real-time caller preferences, ADK routing decisions, database searches, and payment events.
-- [ ] Perform concurrency stress tests to verify WebSocket memory boundaries under load.
-- [ ] Clean up minor tech-debt items: `_transfer_tts_done` ghost events and max-capping silence monitor loops.
+### 🎯 Task 4.4: Concurrency Stress Testing [UPCOMING]
+- [ ] Simulate 3 concurrent Twilio WebSocket connections to `handler.py`.
+- [ ] Verify no session cross-contamination between `CallerMemoryBank` instances.
+- [ ] Verify `ADKOrchestrator` InMemory sessions are isolated per `call_sid`.
+- [ ] Clean up known tech-debt: `_transfer_tts_done` ghost events and max-capping silence monitor.
 
+### 🎯 Task 4.5: GCP Deployment & Final Verification [UPCOMING]
+- [ ] Package backend for Google Cloud Run deployment.
+- [ ] Validate Twilio webhook URLs point to GCP endpoints.
+- [ ] Perform end-to-end voice call test on GCP (not localhost).
+- [ ] Final judging demo dry-run with 3-minute presentation script.
