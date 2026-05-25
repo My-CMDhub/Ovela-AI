@@ -74,3 +74,63 @@ def test_trim_negative_elapsed_returns_empty():
     from services.voice_agent.handler import trim_assistant_transcript
     result = trim_assistant_transcript("Hello there!", elapsed_seconds=-1.0)
     assert result == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task 4.2: Interruption System Tags tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_system_note_stripped_from_tts():
+    """Ensure [System Note: ...] is stripped from TTS output."""
+    from services.voice_agent.text_utils import clean_tts_output
+    text = "Sure, I can help. [System Note: Caller interrupted. Continue from last confirmed point.] What dates?"
+    result = clean_tts_output(text)
+    assert result == "Sure, I can help. What dates?"
+
+@pytest.mark.asyncio
+async def test_vad_interruption_injects_system_note():
+    """Ensure a VAD interruption injects a System Note into Deepgram context."""
+    from services.voice_agent.handler import VoiceAgentHandler
+    from services.voice_agent.latency_tracker import LatencyTracker
+    import json
+    from unittest.mock import MagicMock, AsyncMock, patch
+    
+    # Mock latency tracker and silence monitor
+    latency_mock = MagicMock(spec=LatencyTracker)
+    silence_monitor_mock = MagicMock()
+    
+    # Instantiate handler
+    handler = VoiceAgentHandler(None)
+    handler.call_sid = "test_call_sid"
+    handler.stream_sid = "test_stream_sid"
+    handler.latency = latency_mock
+    handler.silence_monitor = silence_monitor_mock
+    
+    # Mock Deepgram and Twilio WebSockets
+    handler.deepgram_ws = AsyncMock()
+    handler.twilio_ws = AsyncMock()
+    
+    # Set up interruption scenario: AI was speaking
+    handler._ai_is_speaking = True
+    handler._tts_playback_start = 1000.0  # past time
+    handler.transcript = [{"role": "ai", "text": "I can definitely help with that booking right now."}]
+    
+    # Mock time.time to be later
+    with patch('time.time', return_value=1002.0):
+        # Fire user started speaking
+        await handler._handle_user_started_speaking()
+    
+    # Verify the Twilio 'clear' was sent
+    handler.twilio_ws.send_json.assert_called_once_with({
+        "event": "clear",
+        "streamSid": "test_stream_sid"
+    })
+    
+    # Verify Deepgram was injected with the system note
+    expected_msg = {
+        "type": "InjectUserMessage",
+        "content": "[System Note: Caller interrupted. Continue from last confirmed point.]"
+    }
+    handler.deepgram_ws.send.assert_called_once()
+    sent_call = handler.deepgram_ws.send.call_args[0][0]
+    assert json.loads(sent_call) == expected_msg

@@ -12,15 +12,15 @@ Phase 3 (Voice Agent Integration & Bridging) is **100% COMPLETE** with 37/37 tes
 
 ## 📝 Active Task Board
 
-### 🎯 Task 4.1: Gemini Prompt Caching in ADK Graph [UPCOMING]
-- [ ] Configure `LlmAgent` instances in `backend/services/adk/graph.py` to leverage Gemini's `cachedContent` for static system instructions.
-- [ ] Target: reduce token overhead by ~60% on repeated multi-turn calls.
-- [ ] Verify: ADK unit tests still pass; add latency log check showing reduced TTFT.
+### 🎯 Task 4.1: Gemini Prompt Caching in ADK Graph [DONE]
+- [x] Configure `LlmAgent` instances in `backend/services/adk/graph.py` to leverage Gemini's `cachedContent` for static system instructions.
+- [x] Target: reduce token overhead by ~60% on repeated multi-turn calls.
+- [x] Verify: ADK unit tests still pass; add latency log check showing reduced TTFT.
 
-### 🎯 Task 4.2: Interruption System Tags [UPCOMING]
-- [ ] On VAD interruption in `handler.py`, inject `[System Note: Caller interrupted. Continue from last confirmed point.]` into Deepgram message context.
-- [ ] Ensure the tag is not spoken aloud (stripped from TTS output).
-- [ ] Write TDD test confirming the tag is added on VAD interrupt and not emitted to TTS.
+### 🎯 Task 4.2: Interruption System Tags [DONE]
+- [x] On VAD interruption in `handler.py`, inject `[System Note: Caller interrupted. Continue from last confirmed point.]` into Deepgram message context.
+- [x] Ensure the tag is not spoken aloud (stripped from TTS output).
+- [x] Write TDD test confirming the tag is added on VAD interrupt and not emitted to TTS.
 
 ### 🎯 Task 4.3: Behind-the-Scenes Live Visual Feed UI [UPCOMING]
 - [ ] Build a real-time dashboard component in Next.js frontend showing:

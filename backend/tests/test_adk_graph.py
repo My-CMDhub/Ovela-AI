@@ -65,3 +65,14 @@ async def test_orchestrator_query_returns_string_response():
 
     assert isinstance(result, str)
     assert len(result) > 0
+
+
+@pytest.mark.anyio
+async def test_orchestrator_agents_use_static_instruction_for_caching():
+    """Agents must use static_instruction for prompt caching to reduce token overhead."""
+    from services.adk.graph import ADKOrchestrator
+    orc = ADKOrchestrator()
+
+    assert orc.manager.static_instruction is not None
+    assert orc.booking_worker.static_instruction is not None
+    assert orc.info_worker.static_instruction is not None

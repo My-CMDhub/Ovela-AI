@@ -115,19 +115,22 @@ class ADKOrchestrator:
         self.booking_worker = LlmAgent(
             name="BookingWorker",
             model=_ADK_MODEL,
-            instruction=_BOOKING_WORKER_INSTRUCTION,
+            instruction="",
+            static_instruction=_BOOKING_WORKER_INSTRUCTION,
         )
         self.info_worker = LlmAgent(
             name="InfoWorker",
             model=_ADK_MODEL,
-            instruction=_INFO_WORKER_INSTRUCTION,
+            instruction="",
+            static_instruction=_INFO_WORKER_INSTRUCTION,
         )
 
         # Manager orchestrates and routes to workers
         self.manager = LlmAgent(
             name="OvelaManager",
             model=_ADK_MODEL,
-            instruction=_MANAGER_INSTRUCTION,
+            instruction="",
+            static_instruction=_MANAGER_INSTRUCTION,
             sub_agents=[self.booking_worker, self.info_worker],
         )
 

@@ -1192,6 +1192,18 @@ class VoiceAgentHandler:
                     len(trimmed.split()) if trimmed else 0,
                     trimmed[:40] if trimmed else "(empty)",
                 )
+                
+                # INJECT SYSTEM TAG
+                if self.deepgram_ws:
+                    try:
+                        inject_msg = {
+                            "type": "InjectUserMessage",
+                            "content": "[System Note: Caller interrupted. Continue from last confirmed point.]"
+                        }
+                        await self.deepgram_ws.send(json.dumps(inject_msg))
+                        logger.info("💉 Injected interruption system tag into Deepgram context")
+                    except Exception as e:
+                        logger.warning(f"Failed to inject system tag: {e}")
 
         # CRITICAL: Force AI speaking state to False immediately
         # Deepgram might skip AgentAudioDone if interrupted, causing state lock

@@ -275,6 +275,7 @@ CONTROL_SIGNALS = [
 
 # Markdown patterns to clean
 MARKDOWN_PATTERNS = [
+    (r'\[System Note:.*?\]', ''),         # [System Note: ...] -> remove
     (r'\*\*(.+?)\*\*', r'\1'),           # **bold** -> bold
     (r'\*(.+?)\*', r'\1'),                # *italic* -> italic
     (r'__(.+?)__', r'\1'),                # __bold__ -> bold
