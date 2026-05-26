@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     BACKEND_URL: str = "https://ovela-12c561a30285.herokuapp.com"  
     ENVIRONMENT: str = "demo"  # 'demo' or 'production'
     TENANT_ID: str = "coalcreek"  
+    USE_LIVE_SCRAPING: bool = False  # Toggle between Appwrite PMS vs live scraping
 
     # Meta (WhatsApp Cloud API)
     META_ACCESS_TOKEN: str = ""

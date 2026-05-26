@@ -219,6 +219,51 @@ class BookingsMixin:
             logger.error(f"Error getting availability: {e}")
             return []
 
+    # ==================== MOTEL INVENTORY & AVAILABILITY ====================
+
+    async def get_motel_rooms(self, tenant_id: str = "coalcreek") -> list:
+        """Get all motel rooms for a tenant."""
+        try:
+            path = f"/databases/{self.motel_db_id}/collections/motel_rooms/documents"
+            # Assuming tenant_id might be added to rooms later, or all rooms belong to coalcreek
+            result = await self._make_request("GET", path, params={"queries": [self.Query.limit(100)]})
+            return result.get("documents", []) if result else []
+        except Exception as e:
+            logger.error(f"Error fetching motel rooms: {e}")
+            return []
+
+    async def get_motel_reservations(self, start_date: str, end_date: str, tenant_id: str = "coalcreek") -> list:
+        """
+        Get all motel reservations overlapping with the date range.
+        An overlap occurs if check_in < end_date AND check_out > start_date.
+        We fetch a broad range and filter accurately in python since Appwrite doesn't support complex OR overlap natively easily.
+        """
+        try:
+            path = f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
+            queries = [
+                self.Query.equal("tenant_id", tenant_id),
+                self.Query.limit(500) # Fetch up to 500 upcoming bookings
+            ]
+            
+            result = await self._make_request("GET", path, params={"queries": queries})
+            all_res = result.get("documents", []) if result else []
+            
+            # Filter in memory for precise overlap
+            overlapping = []
+            for res in all_res:
+                status = res.get("status", "")
+                if status in ["cancelled", "rejected"]:
+                    continue
+                c_in = res.get("check_in_date")
+                c_out = res.get("check_out_date")
+                if c_in and c_out:
+                    if c_in < end_date and c_out > start_date:
+                        overlapping.append(res)
+            return overlapping
+        except Exception as e:
+            logger.error(f"Error fetching motel reservations for availability: {e}")
+            return []
+
 
     # ==================== PAYMENT STATUS TRACKING ====================
     

@@ -26,6 +26,7 @@ from services.motel_knowledge_base import (
     set_tenant_context
 )
 from services.knowledge_base.coalcreek import COALCREEK_DATA
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,90 @@ def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utteranc
 
     return None, None, "unresolved"
 
+async def _check_appwrite_availability(db_service, check_in_str: str, check_out_str: str, room_type: str = None) -> dict:
+    """
+    Check availability purely from Appwrite DB.
+    Mimics the scraper output format.
+    """
+    try:
+        tenant_id = "coalcreek"
+        rooms = await db_service.get_motel_rooms(tenant_id)
+        reservations = await db_service.get_motel_reservations(check_in_str, check_out_str, tenant_id)
+        
+        # Parse dates
+        start_date = datetime.strptime(check_in_str, "%Y-%m-%d").date()
+        end_date = datetime.strptime(check_out_str, "%Y-%m-%d").date()
+        nights = (end_date - start_date).days
+        if nights <= 0:
+            return {"success": False, "error": "Invalid date range"}
+            
+        # Filter active rooms
+        active_rooms = [r for r in rooms if r.get("status") == "available"]
+        
+        per_night_results = {}
+        available_all_nights = True
+        all_available_room_types = set()
+        
+        for i in range(nights):
+            current_date = start_date + timedelta(days=i)
+            current_date_str = current_date.strftime("%Y-%m-%d")
+            
+            # Find reservations that overlap with this specific night
+            # Check-in on current_date or earlier, AND check-out strictly after current_date
+            night_res = [res for res in reservations 
+                         if res.get("check_in_date") <= current_date_str 
+                         and res.get("check_out_date") > current_date_str]
+                         
+            booked_room_numbers = set(res.get("room_number") for res in night_res if res.get("room_number"))
+            
+            available_this_night = []
+            
+            for room in active_rooms:
+                room_num = room.get("room_number")
+                r_type = room.get("room_type")
+                
+                # We group by mapped room types (e.g. "Queen/Double") to match scraper semantics
+                mapped_type = r_type.title()
+                if mapped_type == "Queen": mapped_type = "Queen/Double"
+                elif mapped_type == "Twin": mapped_type = "Twin Room"
+                elif mapped_type == "Family": mapped_type = "Family Suite"
+                
+                if room_num not in booked_room_numbers:
+                    available_this_night.append({
+                        "room_type": mapped_type,
+                        "room_number": room_num,
+                        "price_per_night": room.get("base_rate", 150),
+                        "available": True
+                    })
+            
+            # Aggregate available room types for this night
+            night_types = {}
+            for r in available_this_night:
+                rtype = r["room_type"]
+                if rtype not in night_types:
+                    night_types[rtype] = r
+            
+            per_night_results[current_date_str] = list(night_types.values())
+            
+            if i == 0:
+                all_available_room_types = set(night_types.keys())
+            else:
+                all_available_room_types = all_available_room_types.intersection(set(night_types.keys()))
+        
+        if room_type:
+            available_all_nights = room_type in all_available_room_types
+        else:
+            available_all_nights = len(all_available_room_types) > 0
+
+        return {
+            "success": True,
+            "available_all_nights": available_all_nights,
+            "available_rooms": list(all_available_room_types),
+            "per_night_results": per_night_results
+        }
+    except Exception as e:
+        logger.error(f"Appwrite DB availability error: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
 
 # =============================================================================
 # BOOKING HANDLERS (Read-Only + Soft Hold)
@@ -243,11 +328,15 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
         }
 
     if check_in_date < _today_melbourne_date():
+        today_formatted = _today_melbourne_date().strftime("%A, %d %B %Y")
         return {
             "available": False,
             "verified": True,
             "message": "Date in the past",
-            "ai_should_say": "That date has already passed. What dates were you looking at?"
+            "ai_should_say": (
+                f"Oh, just to let you know, today is {today_formatted}, so those dates have already passed! "
+                f"Did you mean that date for {_today_melbourne_date().year}, or was there another time you wanted to look at?"
+            )
         }
 
     if not check_out_date or check_out_date <= check_in_date:
@@ -285,36 +374,39 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
     scrape_target = None 
     
     try:
-        # Import the production scraper
-        from services.availability.coalcreek_scraper import check_multinight_availability
-        
         logger.info(f"🔍 Checking availability: {check_in} to {check_out} ({nights} nights), target={target_room or 'any'}")
         
         result = None
         MAX_RETRIES = 2
         
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                # Call the scraper
-                result = await check_multinight_availability(
-                    check_in_str=check_in,
-                    check_out_str=check_out,
-                    room_type=scrape_target  # ALWAYS scrape all rooms
-                )
-                
-                if result.get("success"):
-                    logger.info(f"✅ Scraping success on attempt {attempt}")
-                    break
-                else:
-                    logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
+        if settings.USE_LIVE_SCRAPING:
+            # Import the production scraper only when live scraping is active
+            from services.availability.coalcreek_scraper import check_multinight_availability
+            for attempt in range(1, MAX_RETRIES + 1):
+                try:
+                    # Call the scraper
+                    result = await check_multinight_availability(
+                        check_in_str=check_in,
+                        check_out_str=check_out,
+                        room_type=scrape_target  # ALWAYS scrape all rooms
+                    )
                     
-            except Exception as scrape_err:
-                logger.error(f"⚠️ Scraping exception on attempt {attempt}: {scrape_err}")
-                result = {"success": False, "error": str(scrape_err)}
-            
-            # Small delay before retry if not last attempt
-            if attempt < MAX_RETRIES:
-                await asyncio.sleep(1.0)
+                    if result.get("success"):
+                        logger.info(f"✅ Scraping success on attempt {attempt}")
+                        break
+                    else:
+                        logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
+                        
+                except Exception as scrape_err:
+                    logger.error(f"⚠️ Scraping exception on attempt {attempt}: {scrape_err}")
+                    result = {"success": False, "error": str(scrape_err)}
+                
+                # Small delay before retry if not last attempt
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(1.0)
+        else:
+            logger.info("Using Appwrite DB for availability (PMS Mode)")
+            result = await _check_appwrite_availability(db_service, check_in, check_out, scrape_target)
         
         # Check final result
         if not result or not result.get("success"):
@@ -485,6 +577,16 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "message": "I need a valid check-in date to place the hold."
         }
 
+    if check_in_date < _today_melbourne_date():
+        today_formatted = _today_melbourne_date().strftime("%A, %d %B %Y")
+        return {
+            "success": False,
+            "message": (
+                f"Oh, just to let you know, today is {today_formatted}, so that date has already passed. "
+                "Did you want to place a hold for a future date instead?"
+            )
+        }
+
     if not check_out_date or check_out_date <= check_in_date:
         check_out_date = check_in_date + timedelta(days=1)
 
@@ -520,7 +622,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         "num_nights": num_nights,
         "rate_per_night": rate,
         "total_amount": total,
-        "status": "pending", # Explicit Soft Hold status
+        "status": "pending", # Explicit Soft Hold status by default
         "source": "voice_ai_soft_hold",
         "booking_reference": booking_ref,
         "notes": notes or "Soft Hold Request via AI",
@@ -529,6 +631,27 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         "created_by": "ovela_ai",
         "tenant_id": "coalcreek"
     }
+
+    if not settings.USE_LIVE_SCRAPING:
+        # PMS Mode: Try to assign a specific room instantly and confirm the booking
+        avail_res = await _check_appwrite_availability(db_service, check_in, check_out, room_data["name"])
+        if avail_res.get("success") and avail_res.get("available_all_nights"):
+            per_night = avail_res.get("per_night_results", {})
+            first_night_date = list(per_night.keys())[0] if per_night else None
+            if first_night_date:
+                rooms_for_night = per_night[first_night_date]
+                for r in rooms_for_night:
+                    if r["room_type"] == room_data["name"] and r["available"]:
+                        reservation_data["room_number"] = r["room_number"]
+                        reservation_data["status"] = "confirmed"
+                        reservation_data["source"] = "voice_ai_pms_auto"
+                        logger.info(f"✅ PMS Mode: Auto-assigned room {r['room_number']} to {booking_ref}")
+                        break
+        else:
+            return {
+                "success": False,
+                "message": f"Unfortunately, the {room_data['name']} is no longer available for those dates."
+            }
     
     try:
         # Save to DB (if saving function provided)

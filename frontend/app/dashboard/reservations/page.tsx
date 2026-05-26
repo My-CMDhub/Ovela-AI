@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { columns } from "@/components/reservations/columns";
 import { DataTable } from "@/components/reservations/data-table";
+import { PmsBoard } from "@/components/reservations/pms-board";
 import { fetchWithAuth } from "@/lib/api-client";
 
 export interface Reservation {
@@ -49,6 +50,7 @@ export default function ReservationsPage() {
     const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
     const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
     const [isWalkInModalOpen, setIsWalkInModalOpen] = useState(false);
+    const [viewMode, setViewMode] = useState<"list" | "board">("board");
 
     const { tenant } = useTenant();
 
@@ -136,21 +138,58 @@ export default function ReservationsPage() {
             {/* Header */}
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div>
-                    <h1 className="text-2xl font-bold text-slate-900">Reservations</h1>
+                    <h1 className="text-2xl font-bold text-slate-900">Reservations & PMS</h1>
                     <p className="text-slate-600 mt-1">
-                        Manage guest bookings and check-ins
+                        Manage guest bookings and live room availability
                     </p>
+                </div>
+                <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg border border-slate-200">
+                    <button
+                        onClick={() => setViewMode("board")}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                            viewMode === "board" 
+                                ? "bg-white shadow-sm text-slate-900 border border-slate-200/50" 
+                                : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
+                        }`}
+                    >
+                        PMS Board
+                    </button>
+                    <button
+                        onClick={() => setViewMode("list")}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
+                            viewMode === "list" 
+                                ? "bg-white shadow-sm text-slate-900 border border-slate-200/50" 
+                                : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
+                        }`}
+                    >
+                        List View
+                    </button>
                 </div>
             </div>
 
-            {/* Data Table */}
-            <DataTable
-                columns={columns}
-                data={reservations}
-                loading={loading}
-                onRowClick={setSelectedReservation}
-                onAddWalkIn={() => setIsWalkInModalOpen(true)}
-            />
+            {/* View Mode Content */}
+            {viewMode === "board" ? (
+                <div className="space-y-4">
+                    <div className="flex justify-end">
+                        <button
+                            onClick={() => setIsWalkInModalOpen(true)}
+                            className="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-slate-900 text-white hover:bg-slate-900/90 h-10 px-4 py-2"
+                        >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add Walk-in
+                        </button>
+                    </div>
+                    <PmsBoard reservations={reservations} />
+                </div>
+            ) : (
+                <DataTable
+                    columns={columns}
+                    data={reservations}
+                    loading={loading}
+                    onRowClick={setSelectedReservation}
+                    onAddWalkIn={() => setIsWalkInModalOpen(true)}
+                />
+            )}
 
             {/* Walk-in Modal */}
             <AnimatePresence>

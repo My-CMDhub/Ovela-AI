@@ -176,9 +176,41 @@ async def get_reservations(
         }
         
     except Exception as e:
-        logger.error(f"Error getting reservations: {e}")
         return {"success": False, "error": str(e)}
 
+# ============================================================================
+# ROOMS ENDPOINT (PMS Dashboard view)
+# ============================================================================
+
+@router.get("/rooms")
+async def get_rooms(tenant_id: str = Depends(get_current_tenant_id)):
+    """Get list of motel rooms."""
+    try:
+        endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_rooms/documents"
+        # We fetch all rooms, assuming limit 100 is enough for a motel
+        params = {"queries": [AppwriteQuery.limit(100)]}
+        result = await appwrite_request("GET", endpoint, params=params)
+        
+        if "error" in result:
+             return {"success": False, "error": result["error"]}
+             
+        rooms = result.get("documents", [])
+        
+        # If tenant filtering is needed in the future:
+        # rooms = [r for r in rooms if r.get("tenant_id") == tenant_id]
+        
+        # Sort rooms by room_number logically
+        rooms.sort(key=lambda x: str(x.get("room_number", "")))
+             
+        return {
+            "success": True,
+            "rooms": rooms,
+            "total": len(rooms)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting motel rooms: {e}")
+        return {"success": False, "error": str(e)}
 
 @router.post("/reservations")
 async def create_reservation(data: dict, tenant_id: str = Depends(get_current_tenant_id)):

@@ -1443,24 +1443,72 @@ class VoiceAgentHandler:
                 fn_done_event = asyncio.Event()
                 long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event, function_name))
             
-            # Execute via dispatcher
+            # ── Execute via dispatcher ──────────────────────────────────────
             ctx = {
                 "pending_order": self.pending_order,
                 "availability_cache": self._availability_cache,
             }
-            result = await self.function_dispatcher.execute(function_name, function_args, context=ctx)
-            self.latency.mark_func_exec_done()
-            
-            # Cancel the long-wait filler if function completed
-            if fn_done_event:
-                fn_done_event.set()
-            if long_wait_task and not long_wait_task.done():
-                long_wait_task.cancel()
-            
+            try:
+                result = await self.function_dispatcher.execute(
+                    function_name, function_args, context=ctx
+                )
+                self.latency.mark_func_exec_done()
+
+            except Exception as dispatch_err:
+                # ── Graceful Degradation: Schema Hallucination Guard ──────────
+                # Catch pydantic ValidationError (LLM sent malformed JSON schema,
+                # wrong date format, bad type) or any other tool crash.
+                # Never let this surface as dead air — always return a safe
+                # user-facing fallback that prompts clarification.
+                err_type = type(dispatch_err).__name__
+                err_msg = str(dispatch_err)
+
+                if "ValidationError" in err_type or "validation" in err_msg.lower():
+                    # Schema hallucination: the LLM sent malformed arguments.
+                    # Ask the user to rephrase rather than dropping the call.
+                    logger.warning(
+                        "⚠️ ADK schema hallucination detected in %s — "
+                        "ValidationError: %s. Returning safe clarification prompt.",
+                        function_name,
+                        err_msg[:200],
+                    )
+                    result = {
+                        "success": False,
+                        "message": (
+                            "I didn't quite catch all the details I need. "
+                            "Could you repeat the date or spelling for me?"
+                        ),
+                        "_degradation_reason": f"schema_hallucination:{err_type}",
+                    }
+                else:
+                    # Generic tool failure: DB timeout, network error, etc.
+                    logger.error(
+                        "❌ Tool execution failed for %s — %s: %s",
+                        function_name,
+                        err_type,
+                        err_msg[:300],
+                    )
+                    result = {
+                        "success": False,
+                        "message": (
+                            "I'm having a little trouble with that right now. "
+                            "Let me try something else, or I can take a note and "
+                            "have someone follow up with you."
+                        ),
+                        "_degradation_reason": f"tool_failure:{err_type}",
+                    }
+
+            finally:
+                # Always cancel the long-wait filler — even on error paths.
+                if fn_done_event:
+                    fn_done_event.set()
+                if long_wait_task and not long_wait_task.done():
+                    long_wait_task.cancel()
+
             # Capture system errors/outcome overrides
             if result.get("outcome_override"):
                 self.call_outcome = result["outcome_override"]
-                
+
                 # Log error to transcript (visible in CRM)
                 if result.get("error_details"):
                     self.transcript.append({
@@ -1469,12 +1517,11 @@ class VoiceAgentHandler:
                         "timestamp": datetime.now().isoformat()
                     })
                     logger.error(f"🚨 System Error logged to transcript: {result['error_details']}")
-                    
+
                     # Create visible System Alert (Notification Center)
                     if result["outcome_override"] == "system_failure":
-                        # Trigger Soft Transfer
                         asyncio.create_task(self._handle_system_failure(result['error_details']))
-                        
+
                         await db_service.create_system_alert(
                             title=f"Voice Agent Error: {function_name}",
                             message=result['error_details'],
@@ -1487,6 +1534,7 @@ class VoiceAgentHandler:
                                 "function": function_name
                             }
                         )
+
         except Exception as func_err:
             logger.error(f"❌ Unexpected error in function call handling: {func_err}")
             result = {"success": False, "message": "I encountered a technical issue."}

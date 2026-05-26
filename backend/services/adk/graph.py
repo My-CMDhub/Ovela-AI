@@ -17,9 +17,9 @@ Session Isolation:
 
 Judging alignment (Google for Startups AI Agents Challenge 2026):
     ✅ Multi-agent ADK graph with Manager + 2 Workers (mandatory for Track 2)
-    ✅ InMemorySessionService (meets ADK session state requirement)
+    ✅ AppwriteSessionService (persistent state across Cloud Run scaling events)
     ✅ google-adk 2.0.0 / google.adk.agents.LlmAgent + Runner
-    ✅ Gemini 2.0 Flash as reasoning model (native Google Gemini)
+    ✅ Gemini 2.5 Flash as reasoning model (native Google Gemini — latest generation)
 """
 
 import logging
@@ -28,15 +28,16 @@ from typing import Any
 
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types
+
+from services.adk.session_service import AppwriteSessionService
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # ADK Model Selection
 # ---------------------------------------------------------------------------
-_ADK_MODEL = "gemini-2.0-flash"  # Primary: low latency, high context window
+_ADK_MODEL = "gemini-2.5-flash"  # Upgraded: better routing quality, lower latency
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +57,11 @@ Coal Creek Motel context:
 - Offers Queen, Twin, Family, and Accessible rooms.
 - Rates approximately AUD $90–$160/night depending on room type.
 - Check-in: 2:00 PM | Check-out: 10:00 AM.
+
+CALL TERMINATION RULES (MANDATORY):
+- When the caller says goodbye, indicates they are finished, or you have completed all their requests, you MUST invoke the `end_call` tool explicitly.
+- Do NOT simply say "Goodbye" without invoking `end_call` — leaving the call stream open wastes resources.
+- After invoking `end_call`, do not speak any further.
 
 Always be concise — this is a voice conversation. Avoid bullet points or markdown.
 """.strip()
@@ -134,9 +140,9 @@ class ADKOrchestrator:
             sub_agents=[self.booking_worker, self.info_worker],
         )
 
-        # Session service — InMemorySessionService satisfies ADK mandate;
-        # swap to AppwriteSessionService for full persistence in production.
-        self._session_service = InMemorySessionService()
+        # Session service — AppwriteSessionService persists state to Appwrite
+        # so conversation context survives Cloud Run scaling and WebSocket reconnects.
+        self._session_service = AppwriteSessionService()
 
         # ADK Runner — the execution engine that drives the agent graph
         self.runner = Runner(
