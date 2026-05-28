@@ -63,6 +63,7 @@ scripts/*.py
 !scripts/health_check.py
 .agent/
 .agents/
+.windsurf/
 docs/
 logs
 backend/tests

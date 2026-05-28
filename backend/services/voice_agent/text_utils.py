@@ -275,6 +275,17 @@ CONTROL_SIGNALS = [
 
 # Markdown patterns to clean
 MARKDOWN_PATTERNS = [
+    # ── Unicode smart punctuation (bleeds into TTS if not caught) ──────────
+    ('\u2019', "'"),   # right single quotation mark → apostrophe
+    ('\u2018', "'"),   # left single quotation mark → apostrophe
+    ('\u201c', '"'),   # left double quotation mark → straight quote
+    ('\u201d', '"'),   # right double quotation mark → straight quote
+    ('\u2014', ', '),  # em dash → comma-space (natural pause in speech)
+    ('\u2013', '-'),   # en dash → hyphen
+    ('\u2026', '...'), # ellipsis character → three dots
+    ('\n\n', '. '),    # paragraph break → sentence ending + space
+    ('\n', ' '),       # single newline → space
+    # ── Markdown formatting ─────────────────────────────────────────────────
     (r'\[System Note:.*?\]', ''),         # [System Note: ...] -> remove
     (r'\*\*(.+?)\*\*', r'\1'),           # **bold** -> bold
     (r'\*(.+?)\*', r'\1'),                # *italic* -> italic
@@ -296,49 +307,55 @@ MARKDOWN_PATTERNS = [
 def clean_tts_output(text: str) -> str:
     """
     Clean text for TTS output.
-    
-    Removes control signals and markdown formatting so TTS doesn't
-    read them aloud.
-    
+
+    Removes control signals, unicode smart punctuation, and markdown formatting
+    so TTS never reads raw symbols, newlines, or curly quotes aloud.
+
     Examples:
         "Have a great day! [[HANGUP]]" -> "Have a great day!"
         "Check **this** out" -> "Check this out"
-        "Visit [our site](https://example.com)" -> "Visit our site"
-        "**Family Room**" -> "Family Room"
-    
+        "It\u2019s available" -> "It's available"
+        "Room\\ndetails" -> "Room details"
+
     Args:
-        text: Raw text that might contain control signals or markdown
-        
+        text: Raw text that might contain control signals, unicode, or markdown
+
     Returns:
         Clean text suitable for TTS
     """
     if not text:
         return ""
-    
+
     result = text
-    
+
     # Remove control signals
     for signal in CONTROL_SIGNALS:
         result = result.replace(signal, '')
-    
-    # Apply markdown cleaning patterns
+
+    # Apply cleaning patterns — split plain-string and regex passes
     for pattern, replacement in MARKDOWN_PATTERNS:
-        result = re.sub(pattern, replacement, result, flags=re.MULTILINE)
-    
+        if isinstance(pattern, str) and not pattern.startswith('(') and not any(c in pattern for c in r'\.^$*+?{}[]|()'):
+            # Plain string replacement (unicode chars, literal newlines)
+            result = result.replace(pattern, replacement)
+        else:
+            # Regex replacement — use DOTALL so \n is matched by .
+            result = re.sub(pattern, replacement, result, flags=re.MULTILINE | re.DOTALL)
+
     # IMPORTANT: Remove any remaining standalone markdown symbols
     # This catches cases where ** or * appear without matching pairs
     # or when text is split across multiple chunks
-    result = re.sub(r'\*{2,}', '', result)  # ** or more
-    result = re.sub(r'(?<!\w)\*(?!\w)', '', result)  # standalone *
-    result = re.sub(r'_{2,}', '', result)   # __ or more
-    result = re.sub(r'(?<!\w)_(?!\w)', '', result)   # standalone _
-    result = re.sub(r'~{2,}', '', result)   # ~~ or more
-    result = re.sub(r'`+', '', result)      # ` backticks
-    
-    # Clean up extra whitespace
+    result = re.sub(r'\*{2,}', '', result)           # ** or more
+    result = re.sub(r'(?<!\w)\*(?!\w)', '', result)   # standalone *
+    result = re.sub(r'_{2,}', '', result)             # __ or more
+    result = re.sub(r'(?<!\w)_(?!\w)', '', result)    # standalone _
+    result = re.sub(r'~{2,}', '', result)             # ~~ or more
+    result = re.sub(r'`+', '', result)                # ` backticks
+
+    # Clean up extra whitespace (collapses multiple spaces from replacements)
     result = ' '.join(result.split())
-    
+
     return result.strip()
+
 
 
 def extract_control_signals(text: str) -> tuple[str, list[str]]:

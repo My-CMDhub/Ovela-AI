@@ -248,3 +248,33 @@ async def test_dispatcher_skips_save_when_update_fails():
     # save_profile must NOT be called
     bank.save_profile.assert_not_called()
     assert result.get("success") is False
+
+
+@pytest.mark.asyncio
+async def test_lookup_booking_hides_unrelated_caller_phone_booking_on_name_mismatch():
+    from services.voice_agent.functions.coalcreek_handlers import handle_lookup_booking
+
+    mock_db = MagicMock()
+    mock_db.lookup_motel_reservation = AsyncMock(side_effect=[
+        [{
+            "booking_reference": "CC-02618",
+            "guest_name": "Tom Harris",
+            "room_type": "Twin Room",
+            "check_in_date": "2026-05-31",
+            "check_out_date": "2026-06-01",
+            "status": "confirmed",
+            "total_amount": 160,
+        }],
+        [],
+    ])
+
+    result = await handle_lookup_booking(
+        {"guest_name": "Emma Clark"},
+        mock_db,
+        "+61499888777",
+    )
+
+    assert result.get("found") is False
+    assert result.get("name_mismatch") is True
+    assert result.get("needs_reference") is True
+    assert "Tom Harris" not in str(result)

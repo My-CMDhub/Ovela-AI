@@ -138,6 +138,7 @@ class EmailService:
         
         # Build final context payload
         ctx = {
+            "badge": "Action Required" if payment_link else "Booking Confirmed",
             "guest_name": context.get("guest_name", "Guest"),
             "email_content": context.get("content", "Your booking has been approved. Please review the details below."),
             "booking_ref": context.get("booking_ref", "N/A"),
@@ -175,12 +176,28 @@ class EmailService:
 
     async def send_email(self, to_email: Union[str, List[str]], subject: str, html_content: str, from_email: str = None):
         """
-        Send an email via Zoho SMTP.
+        Send an email via appropriate SMTP provider (Zoho for Ovela, Gmail for Coal Creek).
         to_email: can be a single email string or a list of email strings.
         """
         try:
             sender = from_email if from_email else self.default_from_email
-            
+
+            # Determine which SMTP provider to use based on sender
+            if "officialcoalcreek@gmail.com" in sender or "coalcreekmotel.com.au" in sender:
+                # Use Gmail SMTP for Coal Creek Motel
+                smtp_host = settings.GMAIL_SMTP_HOST
+                smtp_port = settings.GMAIL_SMTP_PORT
+                smtp_user = settings.GMAIL_SMTP_USER
+                smtp_password = settings.COALCREEK_APP_PASSWORD
+                provider_name = "Gmail"
+            else:
+                # Use Zoho SMTP for Ovela
+                smtp_host = self.smtp_host
+                smtp_port = self.smtp_port
+                smtp_user = self.smtp_user
+                smtp_password = self.smtp_password
+                provider_name = "Zoho"
+
             # Ensure we have a list for the 'to' field
             if isinstance(to_email, str):
                 recipients = [email.strip() for email in to_email.split(",") if email.strip()]
@@ -197,25 +214,35 @@ class EmailService:
             message["Subject"] = subject
             message.set_content(html_content, subtype="html")
 
+            # Add anti-spam headers
+            message["Reply-To"] = sender
+            message["List-Unsubscribe"] = f"<mailto:{sender}>"
+
             # SMTP Settings
-            use_tls = (self.smtp_port == 587)
-            
-            async with aiosmtplib.SMTP(
-                hostname=self.smtp_host,
-                port=self.smtp_port,
-                use_tls=not use_tls  # Port 465 uses SSL/TLS directly
-            ) as smtp:
-                if use_tls:
-                    await smtp.starttls()
-                
-                await smtp.login(self.smtp_user, self.smtp_password)
-                await smtp.send_message(message)
-                
-            logger.info(f"Email sent successfully to {recipients} via Zoho SMTP")
+            # Port 465: SSL/TLS from start (use_tls=True)
+            # Port 587: STARTTLS (start_tls=True, use_tls=False)
+            if smtp_port == 465:
+                async with aiosmtplib.SMTP(
+                    hostname=smtp_host,
+                    port=smtp_port,
+                    use_tls=True
+                ) as smtp:
+                    await smtp.login(smtp_user, smtp_password)
+                    await smtp.send_message(message)
+            else:  # Port 587 (STARTTLS)
+                async with aiosmtplib.SMTP(
+                    hostname=smtp_host,
+                    port=smtp_port,
+                    start_tls=True
+                ) as smtp:
+                    await smtp.login(smtp_user, smtp_password)
+                    await smtp.send_message(message)
+
+            logger.info(f"Email sent successfully to {recipients} via {provider_name} SMTP")
             return True
 
         except Exception as e:
-            logger.error(f"Zoho SMTP Error: {e}")
+            logger.error(f"SMTP Error: {e}")
             return False
 
     async def send_booking_confirmation(self, name: str, email: str, date: str, time: str, service: str = "Beauty Consultation", business_name: str = "ibrow threading"):
@@ -803,9 +830,8 @@ class EmailService:
     <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
         <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
             <div style="padding: 40px 30px 30px; text-align: center; background: #ffffff; border-bottom: 1px solid #f0f0f0;">
-                <div style="font-size: 48px; margin-bottom: 8px;">💰</div>
-                <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: #000000;">Payment Confirmed</div>
-                <div style="font-size: 14px; color: #86868b; font-weight: 500; margin-top: 4px;">Ready to process</div>
+                <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: #000000;">Payment Received</div>
+                <div style="font-size: 14px; color: #86868b; font-weight: 500; margin-top: 4px;">Booking Confirmed - Ready to Process</div>
             </div>
             
             <div style="padding: 32px 30px;">
@@ -847,7 +873,7 @@ class EmailService:
 </body>
 </html>'''
         
-        sender = settings.MAIL_BOOKINGS
+        sender = settings.MAIL_NOTIFICATIONS  # Ovela-branded for staff
         success = await self.send_email(staff_email, subject, html, from_email=sender)
         
         if success:
@@ -868,7 +894,8 @@ class EmailService:
         business_name: str = "Motel",
         business_phone: str = "",
         business_location: str = "",
-        tenant_id: str = "coalcreek"
+        tenant_id: str = "coalcreek",
+        message_context: str = None
     ):
         """Send payment or card setup link to guest using CLIENT'S custom template."""
         if not to_email:
@@ -885,9 +912,12 @@ class EmailService:
             check_out_fmt = co.strftime("%A, %d %B %Y")
         except:
             check_in_fmt, check_out_fmt = check_in, check_out
-            
-        action_text = "To confirm your reservation, please securely save your card details via the button below. (No charge is made today)." if is_setup else "To secure your room, please complete payment using the secure link below."
-        content = f"Good news! Your booking request has been approved. {action_text}"
+
+        if message_context:
+            content = message_context
+        else:
+            action_text = "To confirm your reservation, please securely save your card details via the button below. (No charge is made today)." if is_setup else "To secure your room, please complete payment using the secure link below."
+            content = f"Your booking has been confirmed. {action_text}"
         
         html = self._client_template(tenant_id, {
             "guest_name": guest_name,

@@ -273,6 +273,7 @@ class BookingsMixin:
         payment_status: str,
         payment_link_url: str = None,
         stripe_payment_id: str = None,
+        payment_expires_at: int = None,
         tenant_id: str = "coalcreek"
     ) -> dict:
         """
@@ -289,6 +290,9 @@ class BookingsMixin:
             if payment_link_url:
                 data["payment_link_url"] = payment_link_url
                 data["payment_link_sent_at"] = now
+
+            if payment_expires_at:
+                data["payment_expires_at"] = payment_expires_at
                 
             if stripe_payment_id:
                 data["stripe_payment_id"] = stripe_payment_id
@@ -437,6 +441,21 @@ class BookingsMixin:
                 docs = result.get("documents", []) if result else []
                 if docs:
                     return docs
+
+                queries = [base_tenant, self.Query.order_desc("created_at"), self.Query.limit(100)]
+                result = await self._motel_request(
+                    "GET",
+                    f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                    params={"queries": queries}
+                )
+                docs = result.get("documents", []) if result else []
+                name_folded = name_clean.casefold()
+                matches = [
+                    doc for doc in docs
+                    if doc.get("guest_name", "").strip().casefold() == name_folded
+                ]
+                if matches:
+                    return matches[:5]
 
             # 4. Email match
             if email:

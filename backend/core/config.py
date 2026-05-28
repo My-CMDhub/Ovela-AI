@@ -1,3 +1,4 @@
+import os
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -5,7 +6,7 @@ class Settings(BaseSettings):
     # App Settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Ovela AI Backend"
-    BACKEND_URL: str = "https://ovela-12c561a30285.herokuapp.com"  
+    BACKEND_URL: str = os.getenv("BACKEND_URL", "https://ovela-12c561a30285.herokuapp.com")
     ENVIRONMENT: str = "demo"  # 'demo' or 'production'
     TENANT_ID: str = "coalcreek"  
     USE_LIVE_SCRAPING: bool = False  # Toggle between Appwrite PMS vs live scraping
@@ -30,16 +31,22 @@ class Settings(BaseSettings):
     # Optional Security Keys
     DASHBOARD_API_KEY: Optional[str] = None  # Internal key for dashboard access
 
-    # SMTP
+    # SMTP (Ovela - Zoho)
     SMTP_HOST: str = "smtppro.zoho.com.au"
     SMTP_PORT: int = 465
     SMTP_USER: str = "bookings@ovela.dev"
     SMTP_PASSWORD: str
     MAIL_FROM: str = "Ovela <hello@ovela.dev>"
-    
+
+    # SMTP (Coal Creek Motel - Gmail)
+    GMAIL_SMTP_HOST: str = "smtp.gmail.com"
+    GMAIL_SMTP_PORT: int = 587
+    GMAIL_SMTP_USER: str = "officialcoalcreek@gmail.com"
+    COALCREEK_APP_PASSWORD: str = ""
+
     # Internal aliases
     MAIL_NOTIFICATIONS: str = "Ovela Notifications <notifications@ovela.dev>"
-    MAIL_BOOKINGS: str = "Ovela Bookings <bookings@ovela.dev>"
+    MAIL_BOOKINGS: str = "Coal Creek Motel <officialcoalcreek@gmail.com>"
 
     # Resend (Deprecated, kept for compatibility if needed)
     RESEND_API_KEY: str = ""
@@ -52,7 +59,6 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_PHONE_NUMBER: str = "+61468088990"  # my purchased number
-    TWILIO_WHATSAPP_NUMBER: str = "+14155238886"  
     
 
     # Personal Assistant Target Number

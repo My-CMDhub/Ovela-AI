@@ -15,6 +15,7 @@ Stripe SDK note:
 """
 
 import logging
+import time
 from typing import Optional
 
 import stripe
@@ -37,8 +38,13 @@ def create_checkout_session(
     amount_aud: int,
     room_type: str,
     booking_ref: Optional[str] = None,
-    success_url: str = "https://ovela.dev/payment-success",
-    cancel_url: str = "https://ovela.dev/payment-cancel",
+    guest_email: Optional[str] = None,
+    guest_name: Optional[str] = None,
+    check_in: Optional[str] = None,
+    check_out: Optional[str] = None,
+    success_url: Optional[str] = None,
+    cancel_url: Optional[str] = None,
+    expires_at: Optional[int] = None,
 ) -> Optional[str]:
     """
     Create a Stripe Checkout Session for a motel room booking.
@@ -52,8 +58,13 @@ def create_checkout_session(
         amount_aud:   Booking amount in AUD dollars (e.g. 150 for $150).
         room_type:    Room type string for the product name (e.g. "queen").
         booking_ref:  Optional booking reference to attach as Stripe metadata.
-        success_url:  URL Stripe redirects to on successful payment.
-        cancel_url:   URL Stripe redirects to if user cancels checkout.
+        guest_email:  Optional guest email — stored in metadata for webhook.
+        guest_name:   Optional guest name — stored in metadata for webhook.
+        check_in:     Optional check-in date (YYYY-MM-DD) — stored in metadata.
+        check_out:    Optional check-out date (YYYY-MM-DD) — stored in metadata.
+        success_url:  Override URL Stripe redirects to on payment success.
+        cancel_url:   Override URL Stripe redirects to if user cancels.
+        expires_at:   Unix timestamp for session expiry; defaults to now+1800.
 
     Returns:
         Stripe hosted checkout URL (str) or None on failure.
@@ -66,12 +77,25 @@ def create_checkout_session(
         product_name = f"Coal Creek Motel — {room_type.capitalize()} Room"
         amount_cents = amount_aud * 100  # Stripe requires integer cents
 
-        metadata = {}
+        _success_url = success_url or f"{settings.BACKEND_URL}/payment-success?session_id={{CHECKOUT_SESSION_ID}}"
+        _cancel_url = cancel_url or f"{settings.BACKEND_URL}/payment-cancel"
+        _expires_at = expires_at if expires_at else int(time.time()) + 1800
+
+        metadata = {"room_type": room_type}
         if booking_ref:
             metadata["booking_ref"] = booking_ref
+        if guest_email:
+            metadata["guest_email"] = guest_email
+        if guest_name:
+            metadata["guest_name"] = guest_name
+        if check_in:
+            metadata["check_in"] = check_in
+        if check_out:
+            metadata["check_out"] = check_out
 
         session = stripe.checkout.Session.create(
             mode="payment",
+            expires_at=_expires_at,
             line_items=[
                 {
                     "price_data": {
@@ -85,8 +109,8 @@ def create_checkout_session(
                     "quantity": 1,
                 }
             ],
-            success_url=success_url,
-            cancel_url=cancel_url,
+            success_url=_success_url,
+            cancel_url=_cancel_url,
             metadata=metadata,
         )
 

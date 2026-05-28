@@ -467,7 +467,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                 "nights": nights,
                 "price_per_night": price,
                 "total": price * nights if price else None,
-                "ai_should_say": f"Great news! The {target_room} is available for {check_in if nights == 1 else f'{nights} nights from {check_in}'}. The rate is ${price} per night{f', total ${price * nights}' if nights > 1 else ''}. Would you like me to place a hold?"
+                "ai_should_say": f"The {target_room} is available for {check_in if nights == 1 else f'{nights} nights from {check_in}'}. The rate is ${price} per night{f', total ${price * nights}' if nights > 1 else ''}. Would you like me to place a hold?"
             }
             if isinstance(availability_cache, dict):
                 availability_cache[cache_key] = copy.deepcopy(payload)
@@ -548,7 +548,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
         return payload
 
 
-async def handle_create_booking_request(args: dict, user_phone: str, save_reservation_fn) -> dict:
+async def handle_create_booking_request(args: dict, user_phone: str, save_reservation_fn, db_service=None) -> dict:
     """
     Create a SOFT HOLD booking request.
     Status: pending_confirmation
@@ -658,24 +658,25 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         if save_reservation_fn:
             await save_reservation_fn(reservation_data)
         
+        # ── Future requirement if human in loop needed ──
         # Trigger staff notification
-        try:
-            from services.staff_notifications import staff_notification_service
-            asyncio.create_task(
-                staff_notification_service.notify_new_booking_request(
-                    guest_name=guest_name,
-                    guest_phone=guest_phone,
-                    guest_email=guest_email,
-                    check_in=check_in,
-                    check_out=check_out,
-                    room_type=room_data["name"],
-                    total_amount=total,
-                    booking_reference=booking_ref,
-                    num_nights=num_nights,
-                )
-            )
-        except Exception as notify_err:
-            logger.error(f"Failed to send staff notification: {notify_err}")
+        # try:
+        #     from services.staff_notifications import staff_notification_service
+        #     asyncio.create_task(
+        #         staff_notification_service.notify_new_booking_request(
+        #             guest_name=guest_name,
+        #             guest_phone=guest_phone,
+        #             guest_email=guest_email,
+        #             check_in=check_in,
+        #             check_out=check_out,
+        #             room_type=room_data["name"],
+        #             total_amount=total,
+        #             booking_reference=booking_ref,
+        #             num_nights=num_nights,
+        #         )
+        #     )
+        # except Exception as notify_err:
+        #     logger.error(f"Failed to send staff notification: {notify_err}")
             
         return {
             "success": True,
@@ -685,7 +686,11 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "check_out_date": check_out,
             "room_type": room_data["name"],
             "total_amount": total,
-            "message": f"I've placed a temporary hold and sent this to the team. They'll email you a payment link shortly to confirm."
+            "message": (
+                f"A payment link has been sent to your email — it expires in 30 minutes."
+                if guest_email
+                else "I've placed a hold on your room. Our team will follow up with payment details shortly."
+            )
         }
 
     except Exception as e:
@@ -807,6 +812,8 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         return n in db_name or db_name in n
 
     try:
+        caller_phone_name_mismatch = False
+
         # ── Step 0: Caller's own phone (Twilio) — always try first ──────────
         if caller_phone:
             docs = await db_service.lookup_motel_reservation(
@@ -818,10 +825,10 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                     matched = [d for d in docs if _name_matches(d, guest_name)]
                     if matched:
                         return _format_doc(matched[0], len(matched), found_by="caller_phone")
-                    # Phone matched but name differs — still return; flag for AI to clarify
-                    return _format_doc(docs[0], len(docs), found_by="caller_phone", name_mismatch=True)
+                    caller_phone_name_mismatch = True
                 # No name given — return booking, let AI confirm with user
-                return _format_doc(docs[0], len(docs), found_by="caller_phone")
+                else:
+                    return _format_doc(docs[0], len(docs), found_by="caller_phone")
 
         # ── Step 1: Reference lookup (normalized) ───────────────────────────
         if reference:
@@ -873,6 +880,14 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 return _format_doc(docs[0], len(docs), found_by="email")
 
         # ── Nothing found ────────────────────────────────────────────────────
+        if caller_phone_name_mismatch:
+            return {
+                "found": False,
+                "name_mismatch": True,
+                "needs_reference": True,
+                "message": "I can see a booking linked to this phone number, but it is not under that name. Could you give me the booking reference, or would you like me to put you through to reception?",
+            }
+
         return {
             "found": False,
             "message": "I couldn't find a booking linked to your number or the details I have here - want me to put you through to reception?"
@@ -981,6 +996,92 @@ async def handle_update_guest_info(args: dict, db_service) -> dict:
         message = "Details captured (temporary)."
         
     return {"success": True, "message": message}
+
+
+# =============================================================================
+# STRIPE + EMAIL COLD PATH HELPER
+# =============================================================================
+
+async def _handle_stripe_and_guest_email(
+    booking_ref: str,
+    room_type: str,
+    total_amt: float,
+    guest_email: str,
+    guest_name: str,
+    guest_phone: str,
+    check_in: str,
+    check_out: str,
+    db_service,
+) -> None:
+    """
+    Cold-path task: creates Stripe checkout session, PATCHes Appwrite reservation
+    to pending_payment with expiry, and emails the guest payment link.
+    Never raises — all errors are logged and swallowed.
+    """
+    try:
+        from .stripe_handlers import create_checkout_session
+        expiry_ts = int(time.time()) + 1800
+        stripe_url = create_checkout_session(
+            amount_aud=int(total_amt),
+            room_type=room_type,
+            booking_ref=booking_ref,
+            guest_email=guest_email or None,
+            guest_name=guest_name or None,
+            check_in=check_in or None,
+            check_out=check_out or None,
+            expires_at=expiry_ts,
+        )
+
+        if not stripe_url:
+            logger.info("💳 Stripe not configured — skipping payment link dispatch for %s", booking_ref)
+            return
+
+        # ── 1. PATCH Appwrite reservation to pending_payment ──────────────────
+        if db_service:
+            try:
+                doc = await db_service.get_booking_by_reference(booking_ref)
+                if doc and doc.get("$id"):
+                    await db_service.update_booking_payment_status(
+                        booking_id=doc["$id"],
+                        payment_status="pending_payment",
+                        payment_link_url=stripe_url,
+                        payment_expires_at=expiry_ts,
+                    )
+                    logger.info(
+                        "💳 Reservation %s → pending_payment | expiry=%d",
+                        booking_ref,
+                        expiry_ts,
+                    )
+            except Exception as db_err:
+                logger.error("💳 DB update failed for %s: %s", booking_ref, db_err)
+
+        # ── 2. Email guest payment link ───────────────────────────────────────
+        if guest_email and guest_email.strip():
+            try:
+                from services.email import email_service
+                await email_service.send_payment_link(
+                    to_email=guest_email,
+                    guest_name=guest_name,
+                    booking_ref=booking_ref,
+                    payment_link=stripe_url,
+                    room_type=room_type,
+                    check_in=check_in,
+                    check_out=check_out,
+                    amount=int(total_amt),
+                    tenant_id="coalcreek",
+                    message_context=(
+                        "Your room hold is confirmed. Please complete your payment via "
+                        "the secure link below — this link expires in 30 minutes."
+                    ),
+                )
+                logger.info("💳 Payment link emailed to guest for %s", booking_ref)
+            except Exception as email_err:
+                logger.error("💳 Guest email failed for %s: %s", booking_ref, email_err)
+        else:
+            logger.info("💳 No guest email — skipping email dispatch for %s", booking_ref)
+
+    except Exception as outer_err:
+        logger.error("💳 _handle_stripe_and_guest_email outer error for %s: %s", booking_ref, outer_err)
 
 
 # =============================================================================
@@ -1111,7 +1212,7 @@ class CoalCreekFunctionDispatcher:
             return await handle_check_availability(args, self.db_service, context=context)
 
         elif function_name == "create_booking_request":
-            result = await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn)
+            result = await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn, self.db_service)
 
             if result.get("success"):
                 booking_ref = result.get("booking_reference", "")
@@ -1120,37 +1221,18 @@ class CoalCreekFunctionDispatcher:
                 guest_phone = args.get("guest_phone", "") or self.user_phone
                 guest_name  = args.get("guest_name", "")
 
-                # ── Task 3: Stripe Checkout (Cold Path, fire-and-forget) ───────
-                async def _send_stripe_link():
-                    try:
-                        from .stripe_handlers import create_checkout_session
-                        stripe_url = create_checkout_session(
-                            amount_aud=int(total_amt),
-                            room_type=room_type,
-                            booking_ref=booking_ref,
-                        )
-                        if stripe_url and guest_phone and guest_phone not in ("unknown", ""):
-                            from services.staff_notifications import staff_notification_service
-                            await staff_notification_service.notify_new_callback_request(
-                                customer_phone=guest_phone,
-                                customer_name=guest_name,
-                                reason=(
-                                    f"PAYMENT LINK for booking {booking_ref}: {stripe_url}"
-                                ),
-                                urgency="high",
-                            )
-                            logger.info(
-                                "💳 Stripe link SMSed to %s for booking %s",
-                                (guest_phone[:4] + "****") if guest_phone else "N/A",
-                                booking_ref,
-                            )
-                        elif not stripe_url:
-                            logger.info("💳 Stripe not configured — skipping SMS link for %s", booking_ref)
-                    except Exception as stripe_err:
-                        # Never propagate — hot path must stay alive
-                        logger.error("💳 Stripe link dispatch error for %s: %s", booking_ref, stripe_err)
-
-                asyncio.create_task(_send_stripe_link())
+                # ── Task 3: Stripe Checkout + Email (Cold Path, fire-and-forget) ──
+                asyncio.create_task(_handle_stripe_and_guest_email(
+                    booking_ref=booking_ref,
+                    room_type=room_type,
+                    total_amt=total_amt,
+                    guest_email=args.get("guest_email", ""),
+                    guest_name=guest_name,
+                    guest_phone=guest_phone,
+                    check_in=result.get("check_in_date", ""),
+                    check_out=result.get("check_out_date", ""),
+                    db_service=self.db_service,
+                ))
 
                 # ── Task 2: ADK Cold Path session state update ─────────────────
                 if self.call_sid:
@@ -1229,6 +1311,7 @@ class CoalCreekFunctionDispatcher:
                 "success": True,
                 "message": args.get("message", ""),
                 "user_utterance": args.get("_user_utterance", ""),
+                "ai_should_say": "Thanks for calling Coal Creek Motel, goodbye.",
             }
              
         elif function_name == "transfer_to_staff":

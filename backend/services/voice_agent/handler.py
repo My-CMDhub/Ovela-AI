@@ -1640,22 +1640,36 @@ class VoiceAgentHandler:
             self._is_processing_function = False
     
     async def _send_function_response(self, call_id: str, function_name: str, result: dict):
-        """Send function result back to Deepgram (V1 API format)."""
+        """Send function result back to Deepgram (V1 API format).
+        
+        Sanitizes 'ai_should_say' and 'message' fields through clean_tts_output()
+        before transmitting, so no unicode smart quotes, newlines, or markdown
+        characters ever reach the Cartesia TTS synthesis pipeline.
+        """
         if not self.deepgram_ws:
             return
-        
+
         try:
+            # ── TTS Sanitization: strip unicode + markdown from human-facing fields ──
+            # These fields are used by Deepgram's LLM to construct the agent's spoken
+            # response. Any curly quotes, em-dashes, or \n will be synthesized verbatim.
+            sanitized = dict(result)
+            for field in ("ai_should_say", "message", "error_message", "description"):
+                if isinstance(sanitized.get(field), str):
+                    sanitized[field] = clean_tts_output(sanitized[field])
+
             response = {
                 "type": "FunctionCallResponse",
                 "id": call_id,
                 "name": function_name,
-                "content": json.dumps(result)
+                "content": json.dumps(sanitized)
             }
             await self.deepgram_ws.send(json.dumps(response))
             self.latency.mark_func_response()
             logger.info(f"📤 Sent function response for {function_name}")
         except Exception as e:
             logger.error(f"Failed to send function response: {e}")
+
     
     # =========================================================================
     # SILENCE DETECTION

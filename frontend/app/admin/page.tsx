@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { LayoutDashboard, Users, AlertTriangle, ArrowRight, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Users, AlertTriangle, ArrowRight, ShieldCheck, BarChart2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
 
@@ -81,6 +81,25 @@ export default function AdminPage() {
                         </div>
                         <p className="text-3xl font-bold text-white">{stats.alerts}</p>
                         <p className="text-sm text-slate-500 mt-1">Pending Alerts</p>
+                    </div>
+                </div>
+
+                {/* Quick Actions */}
+                <div className="space-y-4">
+                    <h2 className="text-lg font-semibold text-slate-200">Tools</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <Link href="/evaluations" className="group flex items-center justify-between bg-slate-900 border border-slate-800 hover:border-violet-500/30 p-5 rounded-2xl transition-all hover:shadow-lg hover:shadow-violet-500/10">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-violet-500/10 rounded-lg text-violet-400">
+                                    <BarChart2 className="w-5 h-5" />
+                                </div>
+                                <div>
+                                    <p className="text-sm font-semibold text-white group-hover:text-violet-400 transition-colors">Evaluation Runs</p>
+                                    <p className="text-xs text-slate-500 mt-0.5">Multi-agent simulation results</p>
+                                </div>
+                            </div>
+                            <ArrowRight className="w-4 h-4 text-slate-600 group-hover:text-violet-400 transform group-hover:translate-x-1 transition-all" />
+                        </Link>
                     </div>
                 </div>
 

@@ -3,14 +3,43 @@ Tests for ADKOrchestrator — Google ADK multi-agent graph routing.
 """
 
 import pytest
+import time
 from unittest.mock import AsyncMock, patch, MagicMock
+
+
+class _FakeSessionService:
+    """Minimal in-memory stub so these unit tests never hit real Appwrite."""
+    def __init__(self):
+        self._store = {}
+
+    async def create_session(self, *, app_name, user_id, state=None, session_id=None):
+        from google.adk.sessions import Session
+        sid = session_id or f"sess_{user_id}"
+        s = Session(id=sid, app_name=app_name, user_id=user_id, state=state or {}, events=[], last_update_time=time.time())
+        self._store[sid] = s
+        return s
+
+    async def get_session(self, *, app_name, user_id, session_id, config=None):
+        return self._store.get(session_id)
+
+    async def list_sessions(self, *, app_name, user_id=None):
+        from google.adk.sessions.base_session_service import ListSessionsResponse
+        return ListSessionsResponse(sessions=list(self._store.values()))
+
+    async def delete_session(self, *, app_name, user_id, session_id):
+        self._store.pop(session_id, None)
+
+    async def append_event(self, session, event):
+        session.events.append(event)
+        return event
 
 
 @pytest.mark.anyio
 async def test_orchestrator_initializes_with_three_agents():
     """Manager + BookingWorker + InfoWorker are registered in graph."""
-    from services.adk.graph import ADKOrchestrator
-    orc = ADKOrchestrator()
+    with patch("services.adk.graph.AppwriteSessionService", return_value=_FakeSessionService()):
+        from services.adk.graph import ADKOrchestrator
+        orc = ADKOrchestrator()
     assert orc.manager.name == "OvelaManager"
     assert orc.booking_worker.name == "BookingWorker"
     assert orc.info_worker.name == "InfoWorker"
@@ -19,8 +48,11 @@ async def test_orchestrator_initializes_with_three_agents():
 @pytest.mark.anyio
 async def test_orchestrator_creates_session_per_caller():
     """Each unique call_sid gets an isolated ADK session."""
-    from services.adk.graph import ADKOrchestrator
-    orc = ADKOrchestrator()
+    fake_svc = _FakeSessionService()
+    with patch("services.adk.graph.AppwriteSessionService", return_value=fake_svc):
+        from services.adk.graph import ADKOrchestrator
+        orc = ADKOrchestrator()
+    orc._session_service = fake_svc
 
     session_a = await orc.get_or_create_session(user_id="call_sid_aaa")
     session_b = await orc.get_or_create_session(user_id="call_sid_bbb")
@@ -31,8 +63,11 @@ async def test_orchestrator_creates_session_per_caller():
 @pytest.mark.anyio
 async def test_orchestrator_reuses_existing_session():
     """Same call_sid returns the same session (state is preserved)."""
-    from services.adk.graph import ADKOrchestrator
-    orc = ADKOrchestrator()
+    fake_svc = _FakeSessionService()
+    with patch("services.adk.graph.AppwriteSessionService", return_value=fake_svc):
+        from services.adk.graph import ADKOrchestrator
+        orc = ADKOrchestrator()
+    orc._session_service = fake_svc
 
     session_a1 = await orc.get_or_create_session(user_id="call_sid_abc")
     session_a2 = await orc.get_or_create_session(user_id="call_sid_abc")
@@ -43,9 +78,11 @@ async def test_orchestrator_reuses_existing_session():
 @pytest.mark.anyio
 async def test_orchestrator_query_returns_string_response():
     """query() returns a non-empty string (mocked LLM response)."""
-    from services.adk.graph import ADKOrchestrator
-
-    orc = ADKOrchestrator()
+    fake_svc = _FakeSessionService()
+    with patch("services.adk.graph.AppwriteSessionService", return_value=fake_svc):
+        from services.adk.graph import ADKOrchestrator
+        orc = ADKOrchestrator()
+    orc._session_service = fake_svc
 
     # Patch runner.run_async to yield a mocked final response event
     mock_event = MagicMock()
@@ -70,8 +107,9 @@ async def test_orchestrator_query_returns_string_response():
 @pytest.mark.anyio
 async def test_orchestrator_agents_use_static_instruction_for_caching():
     """Agents must use static_instruction for prompt caching to reduce token overhead."""
-    from services.adk.graph import ADKOrchestrator
-    orc = ADKOrchestrator()
+    with patch("services.adk.graph.AppwriteSessionService", return_value=_FakeSessionService()):
+        from services.adk.graph import ADKOrchestrator
+        orc = ADKOrchestrator()
 
     assert orc.manager.static_instruction is not None
     assert orc.booking_worker.static_instruction is not None
