@@ -1419,7 +1419,7 @@ class VoiceAgentHandler:
                 preset = get_preset_phrase(self.tenant_id, "availability_checking")
                 if preset:
                     asyncio.create_task(
-                        self._speak_system_message(preset, clip_key="filler_short")
+                        self._speak_system_message(preset, clip_key="filler_short", wait_for_playback=True)
                     )
                 asyncio.create_task(self._unlock_interruptions(2.5))
                 fn_done_event = asyncio.Event()
