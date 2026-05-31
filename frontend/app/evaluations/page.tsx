@@ -35,7 +35,15 @@ interface ApiResponse {
     error?: string;
 }
 
-function DeltaBadge({ delta }: { delta: number }) {
+function DeltaBadge({ delta }: { delta: number | null | undefined }) {
+    if (delta == null) {
+        return (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-500">
+                <Minus className="w-3 h-3" />
+                N/A
+            </span>
+        );
+    }
     const display = delta * 10; // stored 0-10 → display 0-100
     if (display > 0) {
         return (
@@ -168,6 +176,17 @@ export default function EvaluationsPage() {
             </header>
 
             <main className="p-8 max-w-6xl mx-auto space-y-8">
+                {/* Takeaway Banner */}
+                <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-2xl p-5 flex gap-4 items-start">
+                    <AlertCircle className="w-5 h-5 text-indigo-400 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                        <h3 className="text-sm font-semibold text-indigo-300">Technical Takeaway: Clean Audio vs. ASR Noise Resilience</h3>
+                        <p className="text-xs text-slate-400 leading-relaxed max-w-4xl">
+                            The Legacy Baseline model scores slightly higher on <strong>P1 (Clean Audio)</strong> because raw LLMs are naturally bubblier and chatty without structural constraints. However, the Optimized Gemini ADK Graph shines in <strong>P2 (Noisy ASR)</strong>. When callers mumble, interrupt, or speak in a noisy environment, the baseline crashes or loops, whereas the ADK strict graph state routing recovers gracefully—proving enterprise resilience over simple API wrappers.
+                        </p>
+                    </div>
+                </div>
+
                 {/* KPI Strip */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5">
@@ -266,13 +285,13 @@ export default function EvaluationsPage() {
                                             Scenarios
                                         </th>
                                         <th className="px-4 py-3 text-xs font-mono text-slate-500 uppercase tracking-wider text-center">
-                                            P1 Avg
+                                            P1 (Clean)
                                         </th>
                                         <th className="px-4 py-3 text-xs font-mono text-slate-500 uppercase tracking-wider text-center">
-                                            P2 Avg
+                                            P2 (ASR Noise)
                                         </th>
                                         <th className="px-4 py-3 text-xs font-mono text-slate-500 uppercase tracking-wider text-center">
-                                            Delta
+                                            ASR Delta
                                         </th>
                                         <th className="px-4 py-3 text-xs font-mono text-slate-500 uppercase tracking-wider text-center">
                                             Pass Rate

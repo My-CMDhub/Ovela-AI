@@ -197,3 +197,92 @@ class CustomersMixin:
         except Exception as e:
             logger.error(f"Error fetching customers: {e}")
             return []
+
+    async def get_caller_profile(self, phone: str, tenant_id: str = "coalcreek") -> dict:
+        """
+        Fetch customer from 'customers' collection and format it as a caller profile.
+        Compatible with CallerMemoryBank.
+        """
+        try:
+            customer = await self.find_customer_by_phone(phone, tenant_id)
+            if not customer:
+                return None
+            
+            # Parse preferences_json
+            prefs = {}
+            if customer.get("preferences_json"):
+                try:
+                    prefs = json.loads(customer["preferences_json"])
+                except:
+                    prefs = {}
+            
+            return {
+                "name": customer.get("name"),
+                "email": prefs.get("email") or customer.get("email"),
+                "room_preference": prefs.get("room_preference"),
+                "last_visit": prefs.get("last_visit"),
+                "notes": prefs.get("notes")
+            }
+        except Exception as e:
+            logger.error(f"Error in get_caller_profile for {phone}: {e}")
+            return None
+
+    async def save_caller_profile(self, phone: str, data: dict, tenant_id: str = "coalcreek") -> bool:
+        """
+        Persist caller profile to Appwrite 'customers' collection.
+        Compatible with CallerMemoryBank.
+        """
+        try:
+            customer = await self.find_customer_by_phone(phone, tenant_id)
+            
+            # Prepare preferences_json
+            prefs = {}
+            if customer and customer.get("preferences_json"):
+                try:
+                    prefs = json.loads(customer["preferences_json"])
+                except:
+                    prefs = {}
+            
+            # Merge new data into preferences
+            if "room_preference" in data:
+                prefs["room_preference"] = data["room_preference"]
+            if "last_visit" in data:
+                prefs["last_visit"] = data["last_visit"]
+            if "notes" in data:
+                prefs["notes"] = data["notes"]
+            if "email" in data:
+                prefs["email"] = data["email"]
+                
+            payload = {
+                "name": data.get("name") or (customer.get("name") if customer else "Guest"),
+                "preferences_json": json.dumps(prefs)
+            }
+            
+            if customer:
+                # Update existing customer
+                cust_id = customer["$id"]
+                result = await self._make_request(
+                    "PATCH",
+                    f"/databases/{self.db_id}/collections/customers/documents/{cust_id}",
+                    data={"data": payload}
+                )
+            else:
+                # Create a new customer
+                doc_id = ID.unique()
+                payload["phone"] = phone
+                payload["tenant_id"] = tenant_id
+                payload["created_at"] = datetime.now().isoformat()
+                payload["calls_count"] = 1
+                
+                result = await self._make_request(
+                    "POST",
+                    f"/databases/{self.db_id}/collections/customers/documents",
+                    data={
+                        "documentId": doc_id,
+                        "data": payload
+                    }
+                )
+            return result is not None
+        except Exception as e:
+            logger.error(f"Error in save_caller_profile for {phone}: {e}")
+            return False

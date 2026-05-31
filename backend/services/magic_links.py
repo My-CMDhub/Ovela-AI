@@ -96,13 +96,13 @@ def generate_action_url(notification_id: str, action: str, base_url: str = None)
     Args:
         notification_id: The notification ID
         action: The action (complete, dismiss, approve, reject)
-        base_url: Optional base URL (defaults to Heroku app URL)
+        base_url: Optional base URL (defaults to Cloud Run app URL)
     
     Returns:
         Complete URL with token
     """
     if not base_url:
-        base_url = "https://ovela-12c561a30285.herokuapp.com"
+        base_url = "https://ovela-backend-278930799830.australia-southeast1.run.app"
     
     token = generate_action_token(notification_id, action)
     return f"{base_url}/api/actions/{action}?token={token}"
@@ -120,6 +120,6 @@ def generate_demo_approval_url(lead_id: str, action: str, extra_data: dict = Non
     Returns:
         Complete URL with token
     """
-    base_url = getattr(settings, 'BACKEND_URL', "https://ovela-12c561a30285.herokuapp.com")
+    base_url = getattr(settings, 'BACKEND_URL', "https://ovela-backend-278930799830.australia-southeast1.run.app")
     token = generate_action_token(lead_id, action, expiry_hours=24, extra_data=extra_data)
     return f"{base_url}/api/voice/{action}?token={token}"

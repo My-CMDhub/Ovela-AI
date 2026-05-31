@@ -359,7 +359,7 @@ class VoiceAgentHandler:
         This configures:
         - Audio encoding (mulaw for Twilio)
         - STT model (flux-general-en)
-        - LLM (OpenAI gpt-4.1-mini)
+        - LLM (Google gemini-2.5-flash / gpt-4.1-nano edge-gateway)
         - TTS (Deepgram aura-2-thalia-en)
         - System prompt and functions
         """
@@ -426,17 +426,15 @@ class VoiceAgentHandler:
         Build the Deepgram Voice Agent think block.
 
         Model priority (highest → lowest):
-          1. voice_settings.llm_model in tenant DB  ← change per-tenant without redeploy
-          2. LLM_MODEL env var (Heroku)             ← global override
-          3. gpt-4.1-mini hard default
+          1. voice_settings.llm_model in tenant DB  
+          2. LLM_MODEL env var (Cloud Run)             ← global override
+          3. gemini-2.5-flash primary default
 
         All models below are Deepgram-managed — only your DEEPGRAM_API_KEY needed.
-        Verified available on this account (2026-03-11):
 
-          OpenAI   : gpt-4.1-mini*, gpt-4.1-nano, gpt-4.1, gpt-4o-mini
-          Anthropic: claude-haiku-4-5, claude-sonnet-4-5, claude-sonnet-4-6
-          Google   : gemini-2.0-flash, gemini-2.5-flash, gemini-2.5-flash-lite
-          Groq     : openai/gpt-oss-20b
+          Google   : gemini-2.5-flash*, gemini-2.5-flash-lite, gemini-2.0-flash
+          OpenAI   : gpt-4.1-nano, gpt-4.1-mini, gpt-4o-mini
+          Anthropic: claude-sonnet-4-6, claude-sonnet-4-5
           (* = current default)
         """
         voice_settings = self.tenant_config.get("voice_settings", {})
@@ -1145,6 +1143,34 @@ class VoiceAgentHandler:
         # FILLER PROTECTION: Ignore user noise during injected filler playback
         if getattr(self, '_blocking_interruptions', False):
             logger.info("🎤 User started speaking during filler - IGNORING (Block Interruptions)")
+            return
+
+        # ─────────────────────────────────────────────────────────────────
+        # POST-ACK DEAF WINDOW: After the agent plays an ACK filler
+        # ("One moment, let me check..."), the audio is still playing in
+        # the caller's earpiece for ~2.5s after Twilio's buffer drains.
+        # Short affirmations said during that window ("okay", "sure",
+        # "no worries", "yep") must NOT trigger a full clear-event that
+        # wipes the AI's processing state.
+        #
+        # Gate: suppress Twilio clear if ALL of the following are true:
+        #   1. We are within 2.5s of the last ACK filler TTS completing
+        #   2. The ConversationText word-count gate (≤2 words) will handle
+        #      the transcript-level filtering — we only suppress the clear.
+        # Real interruptions that arrive after the window pass through normally.
+        # ─────────────────────────────────────────────────────────────────
+        _ack_done = getattr(self, '_ack_tts_done_at', None)
+        _ACK_WINDOW_S = 2.5
+        if _ack_done and (time.time() - _ack_done) < _ACK_WINDOW_S:
+            logger.info(
+                "🙉 VAD fired within ACK window (%.2fs ago) — suppressing Twilio clear "
+                "(word-count gate in ConversationText will still filter transcript)",
+                time.time() - _ack_done,
+            )
+            # Still update VAD timing state so latency tracking stays accurate
+            self.user_speech_start_time = time.time()
+            self.latency.mark_user_vad()
+            self.has_user_spoken = True
             return
         
         logger.info("🎤 User started speaking (VAD)")
@@ -2095,6 +2121,20 @@ class VoiceAgentHandler:
             return False
         finally:
             self._blocking_interruptions = False
+            # ─────────────────────────────────────────────────────────────────
+            # ACK SUPPRESSION WINDOW: After a filler/ACK clip is sent to
+            # Twilio's buffer, the audio is still playing in the caller's
+            # earpiece for the next 2-3 seconds.  Stamp the finish time so
+            # _handle_user_started_speaking can gate VAD-triggered Twilio
+            # 'clear' events during that window ("okay", "sure", "no worries"
+            # said right after hearing the ACK must not nuke the AI's state).
+            # Only stamp for filler/ACK clips, not farewell or transfer audio.
+            _is_filler_clip = clip_key and any(
+                tag in clip_key for tag in ("filler", "availability", "checking")
+            )
+            if _is_filler_clip or (clip_key is None and self._is_processing_function):
+                self._ack_tts_done_at = time.time()
+                logger.debug("⏱️ ACK suppression window opened (%.1fs)", self._ack_tts_done_at)
             # preserve_escalation=True during silence escalation so on_ai_finished_speaking
             # does NOT reset silence_followup_count (which would break the chain).
             self.silence_monitor.on_ai_finished_speaking(
@@ -2398,7 +2438,7 @@ class VoiceAgentHandler:
     async def _generate_call_summary(self) -> str:
         """
         Generates a concise 1-sentence summary of the call transcript 
-        using a dedicated model after the call ends.
+        using Google Gemini 2.5 Flash via Vertex AI after the call ends.
         """
         # Return cached summary if available (avoids re-generation on cleanup)
         if getattr(self, 'cached_summary', None):
@@ -2408,23 +2448,37 @@ class VoiceAgentHandler:
             return ""
 
         try:
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+            from google import genai
+            import asyncio
+            
+            client = genai.Client(
+                vertexai=True,
+                project=os.getenv("GOOGLE_CLOUD_PROJECT", "project-bd29d7f8-c65f-4597-b7b"),
+                location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+            )
             
             # Format transcript for the summarizer
             transcript_text = "\n".join([f"{m['role'].upper()}: {m['text']}" for m in self.transcript])
             
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini", # Dedicated efficient model for summarizing
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant that summarizes customer service calls. Provide a ultra-concise, 1-sentence summary of what happened in the call (e.g. 'Customer ordered 2 large pepperoni pizzas for 7:30pm pickup'). Focus on the intent and result."},
-                    {"role": "user", "content": f"Summarize this call transcript:\n\n{transcript_text}"}
-                ],
-                max_tokens=60,
-                temperature=0.3
+            system_instruction = (
+                "You are a helpful assistant that summarizes customer service calls. "
+                "Provide an ultra-concise, 1-sentence summary of what happened in the call "
+                "(e.g., 'Customer ordered 2 large pepperoni rooms for 7:30pm pickup'). Focus on the intent and result."
             )
             
-            summary = response.choices[0].message.content.strip()
+            # Run in a threadpool to prevent blocking the async event loop
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=f"Summarize this call transcript:\n\n{transcript_text}",
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.3,
+                    max_tokens=60
+                )
+            )
+            
+            summary = response.text.strip()
             logger.info(f"📝 Generated call summary: {summary}")
             self.cached_summary = summary
             return summary

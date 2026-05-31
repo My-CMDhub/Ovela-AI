@@ -2,7 +2,8 @@
 Memory Consolidation Service
 Handles conversation summarization and token-efficient memory management.
 """
-from openai import OpenAI
+import os
+from google import genai
 from core.config import settings
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -10,7 +11,11 @@ import json
 import logging
 
 logger = logging.getLogger(__name__)
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+client = genai.Client(
+    vertexai=True,
+    project=os.getenv("GOOGLE_CLOUD_PROJECT", "project-bd29d7f8-c65f-4597-b7b"),
+    location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+)
 
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 
@@ -93,27 +98,29 @@ class MemoryService:
     
     async def consolidate_conversation(self, history: list) -> dict:
         """
-        Use GPT to summarize a conversation into structured memory.
+        Use Gemini 2.5 Flash via Vertex AI to summarize a conversation into structured memory.
         Returns dict with extracted info.
         """
         try:
+            import asyncio
             # Build conversation text
             conv_text = "\n".join([
                 f"{msg.get('role', 'unknown')}: {msg.get('content', '')}"
                 for msg in history
             ])
             
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",  # Cheaper model for summarization
-                messages=[
-                    {"role": "system", "content": CONSOLIDATION_PROMPT},
-                    {"role": "user", "content": conv_text}
-                ],
-                temperature=0.3,
-                max_tokens=300
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=conv_text,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=CONSOLIDATION_PROMPT,
+                    temperature=0.3,
+                    max_tokens=300
+                )
             )
             
-            result_text = response.choices[0].message.content
+            result_text = response.text
             
             # Try to parse as JSON
             try:
@@ -134,24 +141,26 @@ class MemoryService:
     
     async def compact_profile(self, current_summary: str) -> str:
         """
-        Ultra-compact a profile that has grown too large.
+        Ultra-compact a profile that has grown too large using Gemini 2.5 Flash.
         Used when even summaries get too long over time.
         """
         try:
             if len(current_summary) <= MAX_PROFILE_LENGTH:
                 return current_summary
             
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": ULTRA_COMPACT_PROMPT},
-                    {"role": "user", "content": current_summary}
-                ],
-                temperature=0.3,
-                max_tokens=200
+            import asyncio
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=current_summary,
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=ULTRA_COMPACT_PROMPT,
+                    temperature=0.3,
+                    max_tokens=200
+                )
             )
             
-            compacted = response.choices[0].message.content
+            compacted = response.text
             return compacted[:MAX_PROFILE_LENGTH]
             
         except Exception as e:

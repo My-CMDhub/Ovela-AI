@@ -1,5 +1,5 @@
 #!/bin/bash
-# Heroku-style Ovela Log Streamer Shortcut
+# Ovela Log Streamer Shortcut
 cd "$(dirname "$0")"
 if [ -d "venv" ]; then
     source venv/bin/activate

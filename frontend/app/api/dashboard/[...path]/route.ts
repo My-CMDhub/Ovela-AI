@@ -21,7 +21,7 @@ async function proxyRequest(request: NextRequest, path: string) {
     // /api/dashboard/settings -> /api/motel/settings
     // /api/dashboard/call-logs -> /api/motel/call-logs
     // Construct target URL
-    // BACKEND_URL normally doesn't have /api/ (e.g. herokuapp.com)
+    // BACKEND_URL normally doesn't have /api/ (e.g. run.app)
     // path normally is just the suffix (e.g. 'settings')
     let targetBase = BACKEND_URL;
     if (targetBase.endsWith('/api')) targetBase = targetBase.replace(/\/api$/, '');

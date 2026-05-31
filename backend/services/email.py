@@ -861,7 +861,7 @@ class EmailService:
                 </div>
                 
                 <div style="text-align: center; margin: 30px 0;">
-                    <a href="https://ovela-12c561a30285.herokuapp.com/dashboard" style="display: inline-block; padding: 14px 28px; background-color: #3b82f6; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">View in Dashboard</a>
+                    <a href="https://ovela-backend-278930799830.australia-southeast1.run.app/dashboard" style="display: inline-block; padding: 14px 28px; background-color: #3b82f6; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">View in Dashboard</a>
                 </div>
             </div>
             
