@@ -87,6 +87,8 @@ async def get_evaluation_runs(
                 "delta": doc.get("delta"),
                 "pass_rate": doc.get("pass_rate"),
                 "notes": doc.get("notes"),
+                # Full per-scenario detail for Tier 2 (matrix table) and Tier 3 (trace accordion)
+                "scenarios_json": doc.get("scenarios_json"),
             })
 
         return {

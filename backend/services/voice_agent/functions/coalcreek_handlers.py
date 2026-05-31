@@ -443,6 +443,12 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
         available_all_nights = result.get("available_all_nights", False)
         blocked_dates = result.get("blocked_dates", [])
         available_rooms = result.get("available_rooms", [])
+
+        # CRITICAL FIX: Because we force scrape_target=None to fetch all rooms efficiently,
+        # available_all_nights might be True just because ANY room is available.
+        # We must explicitly verify that the specific target_room is actually in the available list.
+        if target_room:
+            available_all_nights = available_all_nights and (target_room in available_rooms)
         
         # 5. Build compact AI response
         if available_all_nights and target_room:
@@ -656,7 +662,13 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     try:
         # Save to DB (if saving function provided)
         if save_reservation_fn:
-            await save_reservation_fn(reservation_data)
+            save_res = await save_reservation_fn(reservation_data)
+            if isinstance(save_res, dict) and not save_res.get("success"):
+                logger.error(f"Failed to save reservation: {save_res.get('error')}")
+                return {
+                    "success": False,
+                    "message": "There was a system error securing your hold. Please try again or contact reception."
+                }
         
         # ── Future requirement if human in loop needed ──
         # Trigger staff notification
@@ -1045,7 +1057,6 @@ async def _handle_stripe_and_guest_email(
                         booking_id=doc["$id"],
                         payment_status="pending_payment",
                         payment_link_url=stripe_url,
-                        payment_expires_at=expiry_ts,
                     )
                     logger.info(
                         "💳 Reservation %s → pending_payment | expiry=%d",

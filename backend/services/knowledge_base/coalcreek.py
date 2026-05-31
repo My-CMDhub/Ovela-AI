@@ -37,7 +37,7 @@ COALCREEK_DATA = {
     },
     "rooms": {
         "queen": {
-            "name": "Standard Queen Room",
+            "name": "Queen/Double",
             "price": 135,
             "bedding": "1 Queen Bed",
             "max_guests": 2,
@@ -61,8 +61,8 @@ COALCREEK_DATA = {
             "best_for": "Couples, special occasions, relaxation"
         },
         "family": {
-            "name": "Family Room",
-            "price": 180, # Estimate/Placeholder based on market rates, to be confirmed by client
+            "name": "Family Suite",
+            "price": 180, 
             "bedding": "1 Queen Bed + 2 Single Beds",
             "max_guests": 4,
             "features": "Larger room, Ground floor, Parking at door, Ensuite, Free WiFi, Flat-screen TV, Fridge, Microwave, Toaster",

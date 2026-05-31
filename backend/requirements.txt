@@ -20,3 +20,5 @@ squareup
 stripe
 cartesia>=0.1.0
 google-adk>=2.0.0
+litellm
+google-genai
