@@ -412,6 +412,28 @@ class VoiceAgentHandler:
                         "model": voice_settings.get("model", "nova-2"),
                         "endpointing": voice_settings.get("endpointing",
                                         voice_settings.get("utterance_end_ms", 300)),
+                        # Keyterms boost Nova-2's acoustic priors toward domain vocabulary
+                        # that non-native English speakers (Asian/other accent callers) most
+                        # commonly trigger transcription errors on.  Each entry is a string
+                        # (Deepgram multiplies the default weight automatically).
+                        "keyterms": [
+                            "Coal Creek",
+                            "Chiltern",
+                            "Queen Room",
+                            "King Room",
+                            "Twin Room",
+                            "Family Room",
+                            "Deluxe Room",
+                            "Standard Room",
+                            "gmail",
+                            "hotmail",
+                            "yahoo",
+                            "outlook",
+                            "icloud",
+                            "booking",
+                            "check-in",
+                            "check-out",
+                        ],
                     }
                 },
                 "think": self._get_llm_config(),
