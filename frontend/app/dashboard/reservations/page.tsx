@@ -23,6 +23,7 @@ export interface Reservation {
     guest_phone: string;
     guest_email: string;
     room_type: string;
+    room_number?: string;
     check_in_date: string;
     check_out_date: string;
     num_guests: number;
@@ -37,6 +38,7 @@ export interface Reservation {
     notes: string;
     created_at: string;
 }
+
 
 type StatusFilter = "all" | "pending" | "confirmed" | "checked_in" | "checked_out" | "cancelled" | "rejected" | "link_sent" | "approved";
 
@@ -146,21 +148,19 @@ export default function ReservationsPage() {
                 <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg border border-slate-200">
                     <button
                         onClick={() => setViewMode("board")}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                            viewMode === "board" 
-                                ? "bg-white shadow-sm text-slate-900 border border-slate-200/50" 
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${viewMode === "board"
+                                ? "bg-white shadow-sm text-slate-900 border border-slate-200/50"
                                 : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
-                        }`}
+                            }`}
                     >
                         PMS Board
                     </button>
                     <button
                         onClick={() => setViewMode("list")}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${
-                            viewMode === "list" 
-                                ? "bg-white shadow-sm text-slate-900 border border-slate-200/50" 
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${viewMode === "list"
+                                ? "bg-white shadow-sm text-slate-900 border border-slate-200/50"
                                 : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
-                        }`}
+                            }`}
                     >
                         List View
                     </button>

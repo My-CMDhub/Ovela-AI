@@ -91,8 +91,8 @@ class CoalCreekStripeService:
                     "type": "payment"
                 },
                 expires_at=expiry_time,
-                success_url=success_url or "https://coalcreekmotel.com.au/booking/success?ref=" + booking_ref, 
-                cancel_url=cancel_url or "https://coalcreekmotel.com.au/booking/cancel?ref=" + booking_ref,
+                success_url=success_url or f"{settings.BACKEND_URL}/payment-success?ref={booking_ref}",
+                cancel_url=cancel_url or f"{settings.BACKEND_URL}/payment-cancel?ref={booking_ref}",
             )
             
             logger.info(f"✅ [Coal Creek] Payment session created: {booking_ref} (Expires in 24h)")

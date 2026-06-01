@@ -128,88 +128,151 @@ def read_root():
 
 @app.get("/payment-success", response_class=HTMLResponse)
 async def payment_success(request: Request):
-    """Professional payment success page for Stripe redirect."""
-    return HTMLResponse(content="""<!DOCTYPE html>
+    """Production payment success page — surfaced after Stripe checkout completes."""
+    booking_ref = request.query_params.get("ref", "")
+    ref_html = f'<div class="ref">Booking Reference: <strong>{booking_ref}</strong></div>' if booking_ref else ""
+    return HTMLResponse(content=f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Payment Successful — Coal Creek Motel</title>
+  <meta name="robots" content="noindex">
+  <title>Payment Confirmed — Coal Creek Motel</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-           background: #f5f5f7; display: flex; align-items: center;
-           justify-content: center; min-height: 100vh; padding: 24px; }
-    .card { background: #fff; border-radius: 20px; padding: 48px 40px;
-            max-width: 520px; width: 100%; text-align: center;
-            box-shadow: 0 4px 32px rgba(0,0,0,0.08); }
-    .icon { width: 72px; height: 72px; background: #d1fae5; border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            margin: 0 auto 28px; font-size: 36px; }
-    h1 { font-size: 26px; font-weight: 700; color: #111827; margin-bottom: 14px;
-         letter-spacing: -0.02em; }
-    p  { font-size: 16px; color: #6b7280; line-height: 1.6; margin-bottom: 10px; }
-    .ref { display: inline-block; margin-top: 24px; padding: 12px 24px;
-           background: #f3f4f6; border-radius: 10px; font-size: 14px;
-           color: #374151; font-weight: 500; }
-    .footer { margin-top: 36px; font-size: 12px; color: #9ca3af; }
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; padding: 24px;
+    }}
+    .card {{
+      background: #ffffff; border-radius: 24px; padding: 52px 44px;
+      max-width: 540px; width: 100%; text-align: center;
+      box-shadow: 0 8px 48px rgba(0,0,0,0.10); border: 1px solid #d1fae5;
+      animation: fadeUp 0.5s ease;
+    }}
+    @keyframes fadeUp {{
+      from {{ opacity: 0; transform: translateY(16px); }}
+      to   {{ opacity: 1; transform: translateY(0); }}
+    }}
+    .icon-wrap {{
+      width: 80px; height: 80px; background: #d1fae5; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 32px; font-size: 40px;
+      box-shadow: 0 0 0 8px #ecfdf5;
+    }}
+    h1 {{ font-size: 28px; font-weight: 700; color: #111827; margin-bottom: 12px; letter-spacing: -0.02em; }}
+    .subtitle {{ font-size: 17px; color: #4b5563; line-height: 1.6; margin-bottom: 8px; }}
+    .next-steps {{
+      margin-top: 28px; padding: 20px 24px;
+      background: #f9fafb; border-radius: 14px; border: 1px solid #e5e7eb;
+      text-align: left;
+    }}
+    .next-steps p {{ font-size: 14px; color: #374151; margin-bottom: 8px; line-height: 1.5; }}
+    .next-steps p:last-child {{ margin-bottom: 0; }}
+    .next-steps strong {{ color: #111827; }}
+    .ref {{
+      display: inline-block; margin-top: 24px; padding: 12px 28px;
+      background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 12px;
+      font-size: 15px; color: #065f46; font-weight: 600; letter-spacing: 0.01em;
+    }}
+    .footer {{ margin-top: 32px; font-size: 12px; color: #9ca3af; }}
+    .footer a {{ color: #9ca3af; text-decoration: none; }}
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="icon">✅</div>
+    <div class="icon-wrap">✅</div>
     <h1>Payment Confirmed</h1>
-    <p>Your booking at <strong>Coal Creek Motel</strong> is now confirmed.</p>
-    <p>A confirmation email has been sent to your inbox with all booking details.</p>
-    <div class="ref">Check your email for your booking reference</div>
-    <p class="footer">Powered by Ovela AI &mdash; Coal Creek Motel</p>
+    <p class="subtitle">Your booking at <strong>Coal Creek Motel</strong> is confirmed.</p>
+    <p class="subtitle">A confirmation email with your booking details is on its way.</p>
+    {ref_html}
+    <div class="next-steps">
+      <p><strong>What happens next?</strong></p>
+      <p>📧 Check your inbox for a confirmation email with your full booking summary.</p>
+      <p>📞 Questions? Call us on <strong>(03) 5166 0244</strong> — we're open 8am–8pm daily.</p>
+    </div>
+    <p class="footer">Powered by <a href="https://ovela.ai">Ovela AI</a> &mdash; Coal Creek Motel</p>
   </div>
 </body>
 </html>""")
+
 
 
 @app.get("/payment-cancel", response_class=HTMLResponse)
 async def payment_cancel(request: Request):
-    """Professional payment cancel page for Stripe redirect."""
-    return HTMLResponse(content="""<!DOCTYPE html>
+    """Production payment cancel/incomplete page — surfaced when user exits Stripe checkout."""
+    booking_ref = request.query_params.get("ref", "")
+    ref_note = f"(Reference: {booking_ref})" if booking_ref else ""
+    return HTMLResponse(content=f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Payment Cancelled — Coal Creek Motel</title>
+  <meta name="robots" content="noindex">
+  <title>Payment Incomplete — Coal Creek Motel</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-           background: #f5f5f7; display: flex; align-items: center;
-           justify-content: center; min-height: 100vh; padding: 24px; }
-    .card { background: #fff; border-radius: 20px; padding: 48px 40px;
-            max-width: 520px; width: 100%; text-align: center;
-            box-shadow: 0 4px 32px rgba(0,0,0,0.08); }
-    .icon { width: 72px; height: 72px; background: #fee2e2; border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            margin: 0 auto 28px; font-size: 36px; }
-    h1 { font-size: 26px; font-weight: 700; color: #111827; margin-bottom: 14px;
-         letter-spacing: -0.02em; }
-    p  { font-size: 16px; color: #6b7280; line-height: 1.6; margin-bottom: 10px; }
-    .note { display: inline-block; margin-top: 24px; padding: 14px 24px;
-            background: #fff7ed; border: 1px solid #fed7aa; border-radius: 10px;
-            font-size: 14px; color: #92400e; line-height: 1.5; }
-    .footer { margin-top: 36px; font-size: 12px; color: #9ca3af; }
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; padding: 24px;
+    }}
+    .card {{
+      background: #ffffff; border-radius: 24px; padding: 52px 44px;
+      max-width: 540px; width: 100%; text-align: center;
+      box-shadow: 0 8px 48px rgba(0,0,0,0.10); border: 1px solid #fed7aa;
+      animation: fadeUp 0.5s ease;
+    }}
+    @keyframes fadeUp {{
+      from {{ opacity: 0; transform: translateY(16px); }}
+      to   {{ opacity: 1; transform: translateY(0); }}
+    }}
+    .icon-wrap {{
+      width: 80px; height: 80px; background: #fee2e2; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 32px; font-size: 40px;
+      box-shadow: 0 0 0 8px #fff7ed;
+    }}
+    h1 {{ font-size: 28px; font-weight: 700; color: #111827; margin-bottom: 12px; letter-spacing: -0.02em; }}
+    .subtitle {{ font-size: 17px; color: #4b5563; line-height: 1.6; margin-bottom: 8px; }}
+    .warning {{
+      margin-top: 28px; padding: 20px 24px;
+      background: #fff7ed; border: 1px solid #fed7aa; border-radius: 14px;
+      font-size: 14px; color: #92400e; line-height: 1.6; text-align: left;
+    }}
+    .warning strong {{ color: #7c2d12; }}
+    .actions {{ margin-top: 28px; display: flex; flex-direction: column; gap: 12px; }}
+    .btn {{
+      display: block; width: 100%; padding: 14px 24px; border-radius: 12px;
+      font-size: 15px; font-weight: 600; text-decoration: none; cursor: pointer;
+      transition: opacity 0.15s ease;
+    }}
+    .btn:hover {{ opacity: 0.85; }}
+    .btn-primary {{ background: #111827; color: #ffffff; }}
+    .footer {{ margin-top: 32px; font-size: 12px; color: #9ca3af; }}
+    .footer a {{ color: #9ca3af; text-decoration: none; }}
   </style>
 </head>
 <body>
   <div class="card">
-    <div class="icon">⏰</div>
+    <div class="icon-wrap">⏳</div>
     <h1>Payment Not Completed</h1>
-    <p>Your booking hold is still active, but payment was not received.</p>
-    <p>Your payment link expires in <strong>30 minutes</strong> from when it was sent.</p>
-    <div class="note">
-      Please check your email for the original payment link,<br>
-      or call us directly to complete your booking.<br><br>
-      <strong>Coal Creek Motel &mdash; (03) 5166 0244</strong>
+    <p class="subtitle">Your room hold is still active — payment was not received.</p>
+    <p class="subtitle" style="font-size:13px;color:#9ca3af">{ref_note}</p>
+    <div class="warning">
+      <strong>Your payment link is valid for 24 hours.</strong><br><br>
+      Check your email for the original payment link, or call us directly
+      to complete the booking with a staff member.<br><br>
+      <strong>Coal Creek Motel &mdash; (03) 5166 0244</strong><br>
+      Open daily 8:00 AM &ndash; 8:00 PM
     </div>
-    <p class="footer">Powered by Ovela AI &mdash; Coal Creek Motel</p>
+    <div class="actions">
+      <a href="tel:+61351660244" class="btn btn-primary">📞 Call to Complete Booking</a>
+    </div>
+    <p class="footer">Powered by <a href="https://ovela.ai">Ovela AI</a> &mdash; Coal Creek Motel</p>
   </div>
 </body>
 </html>""")
-
