@@ -90,7 +90,7 @@ class EmailService:
             <!-- Footer -->
             <div style="padding: 30px; text-align: center; background: #f9f9fa; border-top: 1px solid #f0f0f0;">
                 <p style="font-size: 12px; color: #86868b; line-height: 1.6; margin-bottom: 12px;">
-                    Questions? Reply to this email or message us on WhatsApp.
+                    Questions? Reply to this email or call us.
                 </p>
                 <div>
                     <a href="https://ovela.dev" style="color: #0066cc; text-decoration: none; font-size: 12px; margin: 0 10px;">Powered by Ovela</a>
@@ -259,7 +259,7 @@ class EmailService:
                 f"<strong>Date:</strong> {date}",
                 f"<strong>Time:</strong> {time}"
             ],
-            closing_text="Need to reschedule? Just message us on WhatsApp anytime."
+            closing_text="Need to reschedule? Just reply to this email or call us anytime."
         )
         
         # Use bookings alias for customer communications
@@ -282,7 +282,7 @@ class EmailService:
             ],
             button_text="Review in Dashboard",
             button_url="https://ovela.dev/dashboard/requests",
-            closing_text="Approve this request to automatically notify the customer on WhatsApp."
+            closing_text="Approve this request to confirm."
         )
         
         # Use notifications alias for system alerts
@@ -316,7 +316,7 @@ class EmailService:
             title=f"Hey {name}, your appointment has been moved.",
             content="No worries — we've updated your booking to the new time below.",
             steps=steps,
-            closing_text="Need to make more changes? Just message us on WhatsApp — happy to help!"
+            closing_text="Need to make more changes? Just reply to this email or call us — happy to help!"
         )
         # Use bookings alias for customer communications
         sender = settings.MAIL_BOOKINGS
@@ -336,8 +336,8 @@ class EmailService:
             business_name=business_name,
             steps=[],
             button_text="Book Again",
-            button_url="https://wa.me/your-whatsapp-number",
-            closing_text="Ready to book again? Just message us on WhatsApp anytime — we're here for you."
+            button_url="tel:your-phone-number",
+            closing_text="Ready to book again? Just call us anytime — we're here for you."
         )
         # Use business name for white-label customer experience
         sender = f"{business_name} via Ovela <{settings.MAIL_BOOKINGS.split('<')[-1][:-1]}>"

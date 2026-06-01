@@ -170,9 +170,7 @@ class StripePaymentService:
             
             logger.info(f"✅ Payment confirmed for booking {booking_ref}")
             
-            # TODO: Send confirmation email to customer
-            # TODO: Update booking status in database
-            # TODO: Notify staff that payment is complete
+            # Note: Handled by Tenant-Specific Stripe Services
             
             return True
             

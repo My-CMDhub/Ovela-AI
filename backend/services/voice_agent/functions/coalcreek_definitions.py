@@ -268,6 +268,20 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
             }
         },
         {
+            "name": "perform_live_search",
+            "description": "Perform a live Google Search for current, real-time factual information (e.g., weather, traffic, local news). ONLY trigger this if the user is clearly asking for up-to-date facts strictly relevant to their trip or the area. NEVER use this for casual questions, playing songs, general conversation, or if you can answer confidently without searching. Prioritize answering directly; treat search as an optional last resort.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The explicit search query to look up."
+                    }
+                },
+                "required": ["query"]
+            }
+        },
+        {
             "name": "end_call",
             "description": "End the call by saying goodbye. ONLY use when the caller explicitly wants to finish the conversation, such as 'bye', 'goodbye', 'see you', 'that's all', or when they clearly confirm they are done after your final help-offer. If they only say thanks, appreciation, or a polite wrap-up, do ONE final natural help-offer first instead of ending immediately. NEVER use this when they want to speak to staff or be transferred.",
             "parameters": {

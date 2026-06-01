@@ -639,24 +639,46 @@ class VoiceAgentHandler:
         self.business_name = custom_params.get("business_name", "your business")
         self.user_phone = custom_params.get("user_phone", "unknown")
 
+        # Multi-tenant: Resolve tenant_id
+        explicit_tenant = custom_params.get("tenant_id")
+        self.tenant_id = explicit_tenant if explicit_tenant else (settings.TENANT_ID or "coalcreek")
+
         # =====================================================================
-        # CALLER MEMORY BANK: Fetch persistent profile for returning guests.
-        # Fire-and-forget — error-contained, never blocks stream establishment.
-        # Profile is injected into self.memory so _get_active_prompt() enriches
-        # the system prompt before Deepgram Settings are sent.
+        # ASYNC INIT: Fetch profile and tenant config concurrently
+        # Reduces cold start TTFT latency by not blocking sequentially.
         # =====================================================================
         try:
-            caller_profile = await self.caller_memory_bank.get_profile(self.user_phone)
-            if caller_profile.get("name"):
-                self.memory["name"] = caller_profile["name"]
-                logger.info("🧠 Returning guest recognised: %s", self.user_phone[:4] + "****")
-            if caller_profile.get("room_preference"):
-                self.memory["room_type"] = caller_profile["room_preference"]
-        except Exception as _cmb_err:
-            # Should never reach here (CallerMemoryBank swallows errors internally),
-            # but belt-and-suspenders: never let a DB issue break stream start.
-            logger.error("🧠 CallerMemoryBank unexpected error in handler: %s", _cmb_err)
-
+            logger.info(f"📥 Loading config for tenant: {self.tenant_id} and profile for {self.user_phone[:4]}****")
+            caller_profile, tenant_config = await asyncio.gather(
+                self.caller_memory_bank.get_profile(self.user_phone),
+                db_service.get_tenant_config(self.tenant_id),
+                return_exceptions=True
+            )
+            
+            # Handle profile result
+            if isinstance(caller_profile, Exception):
+                logger.error("🧠 CallerMemoryBank unexpected error in handler: %s", caller_profile)
+            elif caller_profile:
+                if caller_profile.get("name"):
+                    self.memory["name"] = caller_profile["name"]
+                    logger.info("🧠 Returning guest recognised: %s", self.user_phone[:4] + "****")
+                if caller_profile.get("room_preference"):
+                    self.memory["room_type"] = caller_profile["room_preference"]
+            
+            # Handle config result
+            if isinstance(tenant_config, Exception):
+                logger.error(f"❌ Failed to load tenant config: {tenant_config}")
+                self.tenant_config = {}
+            elif not tenant_config:
+                logger.warning(f"⚠️ No config found for {self.tenant_id}, using defaults")
+                self.tenant_config = {}
+            else:
+                self.tenant_config = tenant_config
+                
+        except Exception as e:
+            logger.error(f"❌ Failed in concurrent init: {e}")
+            self.tenant_config = {}
+            
         # Multi-tenant detection
         self.is_demo_call = custom_params.get("is_demo", "false").lower() == "true"
         self.demo_type = custom_params.get("demo_type", "")
@@ -671,26 +693,6 @@ class VoiceAgentHandler:
              self.smart_greeting_task = asyncio.create_task(self._smart_greeting_logic())
             
         call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
-        
-        # Multi-tenant: Resolve tenant_id
-        explicit_tenant = custom_params.get("tenant_id")
-        
-        if explicit_tenant:
-            self.tenant_id = explicit_tenant
-        else:
-            self.tenant_id = settings.TENANT_ID or "coalcreek" 
-            
-        # =====================================================================
-        # CONFIG-DRIVEN ARCHITECTURE: Load settings from DB (ASYNC)
-        # =====================================================================
-        try:
-            logger.info(f"📥 Loading config for tenant: {self.tenant_id}")
-            self.tenant_config = await db_service.get_tenant_config(self.tenant_id)
-            if not self.tenant_config:
-                logger.warning(f"⚠️ No config found for {self.tenant_id}, using defaults")
-        except Exception as e:
-            logger.error(f"❌ Failed to load tenant config: {e}")
-            self.tenant_config = {}
             
         # Set context for knowledge base
         set_tenant_context(self.tenant_id)
@@ -1423,7 +1425,7 @@ class VoiceAgentHandler:
         # OTHER SLOW TOOLS: keep a reduced 0.3s grace period so the LLM's
         # own brief filler can flush before the system fallback fires.
         # ─────────────────────────────────────────────────────────────────
-        FAST_TOOLS = {"check_availability"}
+        FAST_TOOLS = {"check_availability", "perform_live_search"}
         SLOW_TOOLS = [
             "report_missing_booking",
             "create_booking",

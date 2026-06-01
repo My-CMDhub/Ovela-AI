@@ -1289,6 +1289,33 @@ class CoalCreekFunctionDispatcher:
         elif function_name == "search_motel_info":
              return search_motel_info(args.get("query", ""))
              
+        elif function_name == "perform_live_search":
+             query = args.get("query", "")
+             if not query:
+                 return {"error": "No query provided"}
+             
+             import httpx
+             call_sid = self.call_sid or "unknown"
+             try:
+                 payload = {
+                     "call_sid": call_sid,
+                     "query": query,
+                     "session_state": {}
+                 }
+                 # Increase timeout because Google Search via Gemini takes time
+                 adk_url = f"{settings.BACKEND_URL.rstrip('/')}/api/adk/query"
+                 async with httpx.AsyncClient(timeout=45.0) as client:
+                     resp = await client.post(adk_url, json=payload)
+                 if resp.status_code == 200:
+                     data = resp.json()
+                     response_text = data.get("response", "I'm sorry, I couldn't find an answer to that right now.")
+                     return {"success": True, "answer": response_text}
+                 else:
+                     return {"success": False, "error": f"ADK returned status {resp.status_code}", "message": "I'm having trouble connecting to my search service."}
+             except Exception as e:
+                 logger.error(f"Live search failed: {e}")
+                 return {"success": False, "error": str(e), "message": "My search service is currently unavailable."}
+             
         elif function_name == "get_policies":
              return get_policies(args.get("policy_type"))
              
