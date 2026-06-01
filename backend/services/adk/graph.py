@@ -66,7 +66,13 @@ class VertexGemini(AdkGemini):
     def _api_backend(self) -> GoogleLLMVariant:
         return GoogleLLMVariant.VERTEX_AI
 
-_ADK_MODEL_VERTEX = VertexGemini(model="gemini-2.5-flash")  
+    def __eq__(self, other):
+        if isinstance(other, str):
+            return self.model == other
+        return super().__eq__(other)
+
+_ADK_MODEL = "gemini-2.5-flash"
+_ADK_MODEL_VERTEX = VertexGemini(model=_ADK_MODEL)  
 
 
 # ---------------------------------------------------------------------------
@@ -97,6 +103,8 @@ TONE RULES (NON-NEGOTIABLE):
 - Be warm, calm, and professional -- like a confident hotel receptionist, not a chatbot.
 - Never use bullet points, numbered lists, headers, or any markdown in speech.
 - Keep sentences short and conversational.
+- Never proactively read out booking reference numbers, URLs, IDs, or phone country codes unless necessary or explicitly requested.
+- When stating booking references (e.g. 'CC-7777'), read them as individual characters and numbers (e.g., 'C C seven seven seven seven') and NEVER pronounce dashes, hyphens, plus symbols, or URL protocol names.
 """.strip()
 
 _BOOKING_WORKER_INSTRUCTION = """
@@ -114,6 +122,8 @@ TONE RULES (NON-NEGOTIABLE):
 - Be calm and direct -- like a professional receptionist, not a chatbot.
 - Speak in plain conversational English. No bullet points, no markdown.
 - Always confirm booking details before finalising.
+- Never proactively read out booking reference numbers, URLs, IDs, or phone country codes unless necessary or explicitly requested.
+- When stating booking references (e.g. 'CC-7777'), read them as individual characters and numbers (e.g., 'C C seven seven seven seven') and NEVER pronounce dashes, hyphens, plus symbols, or URL protocol names.
 """.strip()
 
 _INFO_WORKER_INSTRUCTION = """
@@ -127,6 +137,8 @@ Your responsibilities:
 - For questions about current weather, local tourist attractions, events near Chiltern, road conditions, or anything requiring live information — use the perform_live_search tool to retrieve accurate, up-to-date answers. Always ground your answer in the search result.
 
 Be accurate and concise. This is a voice conversation — no bullet points, no markdown.
+- Never proactively read out booking reference numbers, URLs, IDs, or phone country codes unless necessary or explicitly requested.
+- When stating booking references (e.g. 'CC-7777'), read them as individual characters and numbers (e.g., 'C C seven seven seven seven') and NEVER pronounce dashes, hyphens, plus symbols, or URL protocol names.
 """.strip()
 
 

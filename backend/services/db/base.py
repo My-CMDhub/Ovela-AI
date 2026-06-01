@@ -39,8 +39,6 @@ class AppwriteBase:
             query_list = params.pop('queries')
             new_params = params.copy()
             for i, q in enumerate(query_list):
-                # Appwrite SDK Query objects have a to_json() or are already strings
-                # Converting to string explicitly handles both
                 new_params[f'queries[{i}]'] = str(q)
             params = new_params
         

@@ -74,7 +74,12 @@ def create_checkout_session(
         return None
 
     try:
-        product_name = f"Coal Creek Motel — {room_type.capitalize()} Room"
+        # Normalize room type formatting
+        clean_room_type = room_type.title()
+        if "Room" not in clean_room_type:
+            clean_room_type = f"{clean_room_type} Room"
+
+        product_name = f"Coal Creek Motel — {clean_room_type}"
         amount_cents = amount_aud * 100  # Stripe requires integer cents
 
         _success_url = success_url or f"{settings.BACKEND_URL}/payment-success?session_id={{CHECKOUT_SESSION_ID}}"
@@ -93,6 +98,18 @@ def create_checkout_session(
         if check_out:
             metadata["check_out"] = check_out
 
+        # Dynamically build description based on check-in/out
+        description = f"Stay at Coal Creek Motel — {clean_room_type}"
+        if check_in and check_out:
+            try:
+                from datetime import datetime
+                d1 = datetime.strptime(check_in, "%Y-%m-%d")
+                d2 = datetime.strptime(check_out, "%Y-%m-%d")
+                nights = (d2 - d1).days
+                description = f"{nights} night(s) stay: {check_in} to {check_out} — {clean_room_type}"
+            except Exception:
+                description = f"Stay from {check_in} to {check_out} — {clean_room_type}"
+
         session = stripe.checkout.Session.create(
             mode="payment",
             expires_at=_expires_at,
@@ -102,7 +119,7 @@ def create_checkout_session(
                         "currency": "aud",
                         "product_data": {
                             "name": product_name,
-                            "description": f"One night at Coal Creek Motel — {room_type.capitalize()} Room",
+                            "description": description,
                         },
                         "unit_amount": amount_cents,
                     },

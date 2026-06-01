@@ -296,3 +296,86 @@ class TranscriptsMixin:
         except Exception as e:
             logger.error(f"Error updating call log for {call_sid}: {e}")
             return False
+
+    async def check_voice_rate_limit(self, phone: str, tenant_id: str = "coalcreek") -> tuple[bool, str]:
+        """
+        Enforce rate limiting on incoming voice calls:
+        - Admin / Whitelisted numbers bypass all limits.
+        - User-Level Limit: Max 2 calls/24hr (AEST-anchored).
+        - Global Limit: Max 10 calls/hr globally (for non-whitelisted callers).
+        
+        Returns:
+            (is_allowed, reason)
+        """
+        from datetime import timedelta
+        from rules.whitelist import is_whitelisted
+        
+        # 1. Admin/Whitelisted check
+        if is_whitelisted(phone):
+            logger.info(f"🟢 Whitelisted phone {mask_phone(phone)} bypassed all voice rate limits.")
+            return True, "whitelisted"
+            
+        try:
+            collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
+            from datetime import timezone
+            now_utc = datetime.now(timezone.utc)
+            
+            # --- 2. User-Level Limit Check ---
+            # Max 2 calls / 24 hours (UTC comparison matching Appwrite's storage format)
+            hour_24_ago = (now_utc - timedelta(hours=24)).isoformat()
+            
+            user_queries = [
+                AppwriteQuery.equal("caller_phone", phone),
+                AppwriteQuery.greater_than_equal("created_at", hour_24_ago),
+                AppwriteQuery.limit(10)
+            ]
+            
+            user_result = await self._make_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/{collection_id}/documents",
+                params={'queries': user_queries}
+            )
+            
+            user_docs = user_result.get("documents", []) if user_result else []
+            valid_user_calls = [d for d in user_docs if d.get("status") != "blocked" and d.get("outcome") != "blocked"]
+            
+            if len(valid_user_calls) >= 2:
+                logger.warning(f"🚫 User rate limit exceeded for {mask_phone(phone)}: {len(valid_user_calls)} calls in last 24h")
+                return False, "user_limit_exceeded"
+                
+            # --- 3. Global Limit Check ---
+            # Max 10 calls / hour globally (non-whitelisted)
+            hour_ago = (now_utc - timedelta(hours=1)).isoformat()
+
+            
+            global_queries = [
+                AppwriteQuery.greater_than_equal("created_at", hour_ago),
+                AppwriteQuery.limit(50)
+            ]
+            
+            global_result = await self._make_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/{collection_id}/documents",
+                params={'queries': global_queries}
+            )
+            
+            global_docs = global_result.get("documents", []) if global_result else []
+            
+            non_whitelisted_global_count = 0
+            for doc in global_docs:
+                doc_phone = doc.get("caller_phone")
+                doc_status = doc.get("status") or doc.get("outcome")
+                if doc_phone and not is_whitelisted(doc_phone) and doc_status != "blocked":
+                    non_whitelisted_global_count += 1
+                    
+            if non_whitelisted_global_count >= 10:
+                logger.warning(f"🚫 Global rate limit exceeded: {non_whitelisted_global_count} non-whitelisted calls in last hour")
+                return False, "global_limit_exceeded"
+                
+            return True, "allowed"
+            
+        except Exception as e:
+            logger.error(f"Error checking voice rate limit for {mask_phone(phone)}: {e}")
+            # Fail-safe: allow on error to prevent blocking legitimate business, but log it
+            return True, "error_fallback"
+

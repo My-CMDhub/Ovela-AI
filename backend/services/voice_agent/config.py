@@ -91,17 +91,17 @@ DEMO_CONFIG = {
     "soft_warning_minutes": 5,    # Gentle "wrapping up" prompt (5 min for demo)
     "hard_cap_minutes": 8,        # Maximum call duration (8 min for demo)
     "transfer_on_cap": False,     # Demo: Just hang up, don't transfer
-    "off_topic_limit": 5,         # flag_off_topic calls before auto-hangup
+    "off_topic_limit": 4,         # flag_off_topic calls before auto-hangup
     "human_escalation": False,    # No human escalation in demo
 }
 
 # Production settings (more lenient, with human escalation)
 PROD_CONFIG = {
-    "context_pairs": 8,           # More context for pattern detection
-    "soft_warning_minutes": 10,    # More time for complex bookings
-    "hard_cap_minutes": 12,       # Higher limit with escalation
+    "context_pairs": 6,           # More context for pattern detection
+    "soft_warning_minutes": 5,    # More time for complex bookings
+    "hard_cap_minutes": 8,       # Higher limit with escalation
     "transfer_on_cap": True,      # Production: Transfer to staff when cap reached
-    "off_topic_limit": 3,         # Same threshold
+    "off_topic_limit": 4,         # Same threshold
     "human_escalation": True,     # Log for human follow-up
 }
 

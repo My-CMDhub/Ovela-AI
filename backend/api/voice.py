@@ -350,7 +350,7 @@ async def get_twiml(request: Request, background_tasks: BackgroundTasks):
     form_data = await request.form()
     user_name = params.get("name", "there")
     business_name = params.get("business", "your business")
-    user_phone = params.get("phone", "unknown")
+    user_phone = params.get("phone") or params.get("From") or form_data.get("From") or "unknown"
     transfer_failed = params.get("transfer_failed", "false")
     tenant_id = params.get("tenant_id", "ovela_demo")
     demo_type = params.get("demo_type", "")
@@ -358,8 +358,30 @@ async def get_twiml(request: Request, background_tasks: BackgroundTasks):
     
     answered_by = params.get("AnsweredBy", "") or form_data.get("AnsweredBy", "")
     call_sid = params.get("CallSid") or form_data.get("CallSid")
+
+    # Enforce P8 Abuse Prevention & Rate Limiting
+    if user_phone != "unknown":
+        is_allowed, limit_reason = await db_service.check_voice_rate_limit(user_phone, tenant_id)
+        if not is_allowed:
+            logger.warning(f"🚫 Call from {user_phone} blocked by rate limiting: {limit_reason}")
+            # Log blocked attempt as a transcript record
+            await db_service.save_call_transcript(
+                tenant_id=tenant_id,
+                call_sid=call_sid,
+                caller_phone=user_phone,
+                transcript=f"[SYSTEM ALERT: Call from {user_phone} blocked by rate limit check. Reason: {limit_reason}]",
+                duration=0,
+                status="blocked",
+                metadata={"reason": limit_reason}
+            )
+            
+            response = VoiceResponse()
+            response.say("Thank you for calling. We are currently experiencing high call volumes, or you have reached our call limit. Please try calling back later or visit our website to complete your reservation. Goodbye!", voice="Polly.Nicole")
+            response.hangup()
+            return HTMLResponse(content=str(response), media_type="application/xml")
     
     # FORCE RECORDING: Ensure all calls (inbound & outbound) are recorded
+
     if call_sid:
         background_tasks.add_task(_enable_recording, call_sid)
     

@@ -670,25 +670,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                     "message": "There was a system error securing your hold. Please try again or contact reception."
                 }
         
-        # ── Future requirement if human in loop needed ──
-        # Trigger staff notification
-        # try:
-        #     from services.staff_notifications import staff_notification_service
-        #     asyncio.create_task(
-        #         staff_notification_service.notify_new_booking_request(
-        #             guest_name=guest_name,
-        #             guest_phone=guest_phone,
-        #             guest_email=guest_email,
-        #             check_in=check_in,
-        #             check_out=check_out,
-        #             room_type=room_data["name"],
-        #             total_amount=total,
-        #             booking_reference=booking_ref,
-        #             num_nights=num_nights,
-        #         )
-        #     )
-        # except Exception as notify_err:
-        #     logger.error(f"Failed to send staff notification: {notify_err}")
+
             
         return {
             "success": True,
@@ -784,8 +766,8 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             opener = f"I found a booking on this number under {guest}"
         elif found_by == "phone":
             opener = f"I found a booking on that number under {guest}"
-        elif found_by == "reference" and result.get("booking_reference"):
-            opener = f"I found booking {result['booking_reference']} under {guest}"
+        elif found_by == "reference":
+            opener = f"I found a booking under {guest}"
         else:
             opener = f"I found a booking under {guest}"
 
@@ -1057,6 +1039,7 @@ async def _handle_stripe_and_guest_email(
                         booking_id=doc["$id"],
                         payment_status="pending_payment",
                         payment_link_url=stripe_url,
+                        payment_expires_at=expiry_ts,
                     )
                     logger.info(
                         "💳 Reservation %s → pending_payment | expiry=%d",

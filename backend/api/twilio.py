@@ -65,10 +65,33 @@ async def handle_voice_webhook(
             # 3. Default Fallback
             tenant_id = settings.TENANT_ID or "coalcreek"
             logger.info(f"⚠️ Unknown Ingress Number {cleaned_to} -> Fallback to {tenant_id}")
+
+    # Enforce Abuse Prevention & Rate Limiting
+    is_allowed, limit_reason = await db_service.check_voice_rate_limit(From, tenant_id)
+    if not is_allowed:
+        logger.warning(f"🚫 Call from {mask_phone(From)} blocked by rate limiting: {limit_reason}")
+        # Log blocked attempt as a transcript record with status='blocked'
+        await db_service.save_call_transcript(
+            tenant_id=tenant_id,
+            call_sid=CallSid,
+            caller_phone=From,
+            transcript=f"[SYSTEM ALERT: Call from {From} blocked by rate limit check. Reason: {limit_reason}]",
+            duration=0,
+            status="blocked",
+            metadata={"reason": limit_reason}
+        )
+        
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">Thank you for calling. We are currently experiencing high call volumes, or you have reached our call limit. Please try calling back later or visit our website to complete your reservation. Goodbye!</Say>
+    <Hangup/>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
         
     # Return TwiML that connects to the AI stream
     # Pass tenant_id to the WebSocket via Parameter
     stream_url = f"wss://{settings.BACKEND_URL.replace('https://', '')}/api/voice/stream"
+
     
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>

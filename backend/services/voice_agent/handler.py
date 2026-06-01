@@ -323,11 +323,10 @@ class VoiceAgentHandler:
         }
 
     def _should_offer_one_more_help_before_hangup(self, user_utterance: str) -> bool:
-        if self.call_outcome == "abuse_timeout":
-            return False
-        if self._final_help_offer_active:
-            return False
-        return self._is_soft_close_only(user_utterance)
+        # P9 UX Optimization: Rely purely on LLM's deep contextual intent detection 
+        # to decide call completion, avoiding accidental keyword triggers or premature close blocks.
+        return False
+
 
     def _should_end_call_deterministically(self, user_utterance: str) -> bool:
         normalized = self._normalize_phrase(user_utterance)
@@ -554,12 +553,11 @@ class VoiceAgentHandler:
         """
         # Look for custom voice ID in DB config
         voice_settings = self.tenant_config.get("voice_settings", {})
-        voice_id = voice_settings.get("voice_id", CARTESIA_VOICE_ID)
+        voice_id = voice_settings.get("voice_id", "default")
         
         # MAP SLUGS TO UUIDS
-        # put readable names in DB config
-        if voice_id == "cartesia-sonic-3-thalia":
-            voice_id = "f9836c6e-a0bd-460e-9d3c-f7299fa60f94"
+        if voice_id in ("default"):
+            voice_id = CARTESIA_VOICE_ID
         elif len(voice_id) < 30: # Simple check for non-UUID
             logger.warning(f"⚠️ Invalid Voice ID format: {voice_id} - falling back to default")
             voice_id = CARTESIA_VOICE_ID
@@ -1610,9 +1608,9 @@ class VoiceAgentHandler:
                     if not message:
                         message = get_random_farewell(self.tenant_id)
                         logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
-                    # Use the actual selected farewell text for normal conversational endings.
-                    # A fixed farewell clip can mismatch the chosen message and sound wrong.
-                    await self._speak_system_message(message)
+                    # Use the pre-recorded farewell clip if available to eliminate Cartesia TTS network latency
+                    # (falls back gracefully to live Cartesia TTS if missing).
+                    await self._speak_system_message(message, clip_key="farewell")
                     delay = max(4.0, (len(message) * 0.1) + 2.0)
                     logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
                     asyncio.create_task(self._scheduled_hangup(delay))
@@ -1972,8 +1970,8 @@ class VoiceAgentHandler:
     
     def _get_cartesia_voice_id(self) -> str:
         voice_settings = self.tenant_config.get("voice_settings", {})
-        voice_id = voice_settings.get("voice_id", CARTESIA_VOICE_ID)
-        if voice_id == "cartesia-sonic-3-thalia":
+        voice_id = voice_settings.get("voice_id", "default")
+        if voice_id in ("default"):
             return CARTESIA_VOICE_ID
         if len(voice_id) < 30:
             return CARTESIA_VOICE_ID
@@ -2025,7 +2023,7 @@ class VoiceAgentHandler:
                 ", ".join(missing_keys),
             )
         else:
-            logger.info("🎵 All required system clip keys available")
+            logger.info("🎵 All required system clip keys available — zero-latency mode active")
 
     def _load_cached_clip(self, clip_key: str | None) -> bytes | None:
         clip_path = self._get_clip_path(clip_key)
@@ -2476,7 +2474,7 @@ class VoiceAgentHandler:
                 config=genai.types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0.3,
-                    max_tokens=60
+                    max_output_tokens=60
                 )
             )
             
