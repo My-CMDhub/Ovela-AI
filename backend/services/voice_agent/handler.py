@@ -408,7 +408,31 @@ class VoiceAgentHandler:
             
         # Extract voice settings from DB config
         voice_settings = self.tenant_config.get("voice_settings", {})
-        
+        _stt_model = voice_settings.get("model", "nova-2")
+        _endpointing = voice_settings.get("endpointing",
+                        voice_settings.get("utterance_end_ms", 250 if "nova-3" in _stt_model else 300))
+
+        # ── Domain vocabulary for accent-resilient STT ────────────────────────
+        # Nova-2 uses 'keyterms' (flat list of strings).
+        # Nova-3 uses 'vocabulary' (list of {"word": str} dicts).
+        # Sending the wrong one is silently ignored — wasting the accuracy boost.
+        # ─────────────────────────────────────────────────────────────────────
+        _domain_terms = [
+            "Coal Creek", "Chiltern", "Queen Room", "King Room",
+            "Twin Room", "Family Room", "Deluxe Room", "Standard Room",
+            "gmail", "hotmail", "yahoo", "outlook", "icloud",
+            "booking", "check-in", "check-out",
+        ]
+        _stt_provider: dict = {
+            "type": "deepgram",
+            "model": _stt_model,
+            "endpointing": _endpointing,
+        }
+        if "nova-3" in _stt_model:
+            _stt_provider["vocabulary"] = [{"word": t} for t in _domain_terms]
+        else:
+            _stt_provider["keyterms"] = _domain_terms
+
         return {
             "type": "Settings",
             "audio": {
@@ -425,34 +449,7 @@ class VoiceAgentHandler:
             "agent": {
                 "language": "en",
                 "listen": {
-                    "provider": {
-                        "type": "deepgram",
-                        "model": voice_settings.get("model", "nova-2"),
-                        "endpointing": voice_settings.get("endpointing",
-                                        voice_settings.get("utterance_end_ms", 300)),
-                        # Keyterms boost Nova-2's acoustic priors toward domain vocabulary
-                        # that non-native English speakers (Asian/other accent callers) most
-                        # commonly trigger transcription errors on.  Each entry is a string
-                        # (Deepgram multiplies the default weight automatically).
-                        "keyterms": [
-                            "Coal Creek",
-                            "Chiltern",
-                            "Queen Room",
-                            "King Room",
-                            "Twin Room",
-                            "Family Room",
-                            "Deluxe Room",
-                            "Standard Room",
-                            "gmail",
-                            "hotmail",
-                            "yahoo",
-                            "outlook",
-                            "icloud",
-                            "booking",
-                            "check-in",
-                            "check-out",
-                        ],
-                    }
+                    "provider": _stt_provider
                 },
                 "think": self._get_llm_config(),
                 "speak": self._get_tts_config(),
@@ -1518,7 +1515,14 @@ class VoiceAgentHandler:
                     asyncio.create_task(
                         self._speak_system_message(preset, clip_key="filler_short", wait_for_playback=True)
                     )
-                asyncio.create_task(self._unlock_interruptions(2.5))
+                # ── Deaf window tuning per tool ───────────────────────────────
+                # check_availability: PMS round-trip is ~1-2s → unlock after 2.5s
+                # perform_live_search: Vertex grounding is ~3-5s → stay deaf for 9s
+                # (long_wait_filler will play a "still checking" bridge if >5s anyway)
+                if function_name == "perform_live_search":
+                    asyncio.create_task(self._unlock_interruptions(9.0))
+                else:
+                    asyncio.create_task(self._unlock_interruptions(2.5))
                 fn_done_event = asyncio.Event()
                 long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event, function_name))
 
@@ -1667,10 +1671,30 @@ class VoiceAgentHandler:
                 if self._should_offer_one_more_help_before_hangup(user_utterance):
                     logger.info("↩️ Suppressing premature end_call for soft close: '%s'", user_utterance)
                     self._final_help_offer_active = True
+                    soft_close_msg = "No problem, if you need anything else just let me know."
+                    # ── Deterministic voice: never rely on LLM to read this back ─
+                    # The LLM is in "shutdown mode" after calling end_call, so it
+                    # won't speak unless we do it from the system audio lane.
+                    await self._speak_system_message(soft_close_msg)
+                    # ── Sync LLM context so it knows the system already spoke ────
+                    if self.deepgram_ws:
+                        try:
+                            inject_msg = {
+                                "type": "InjectUserMessage",
+                                "content": (
+                                    f"[System: end_call intercepted for soft close. "
+                                    f"System already said: '{soft_close_msg}'. "
+                                    f"Do NOT repeat this. Wait for the caller to respond.]"
+                                )
+                            }
+                            await self.deepgram_ws.send(json.dumps(inject_msg))
+                            logger.info("💉 Injected soft-close context tag into Deepgram")
+                        except Exception as e:
+                            logger.warning(f"Failed to inject soft-close tag: {e}")
                     result = {
                         "success": True,
                         "soft_close_redirected": True,
-                        "message": "No problem, if you need anything else just let me know.",
+                        "message": soft_close_msg,
                     }
                 else:
                     logger.info("👋 end_call function called - injecting farewell + scheduling hangup")

@@ -269,13 +269,13 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         },
         {
             "name": "perform_live_search",
-            "description": "Perform a live Google Search for current, real-time factual information (e.g., weather, traffic, local news). ONLY trigger this if the user is clearly asking for up-to-date facts strictly relevant to their trip or the area. NEVER use this for casual questions, playing songs, general conversation, or if you can answer confidently without searching. Prioritize answering directly; treat search as an optional last resort.",
+            "description": "Perform a live Google Search for current, real-time information. Use immediately when a caller asks about: weather, temperature, rain, forecast, traffic, road conditions, local events, or any fact you cannot answer from memory. Do NOT ask the caller to confirm before searching — just search. NEVER use for general motel questions you can answer directly, playing music, or unrelated topics. only perform live search for what make sense actually during their trip for coalcreek area and chiltern ",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The explicit search query to look up."
+                        "description": "The search query. Be specific and location-aware, e.g. 'current weather Chiltern Victoria Australia'."
                     }
                 },
                 "required": ["query"]
