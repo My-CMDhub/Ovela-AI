@@ -87,7 +87,7 @@ The system undergoes continuous evaluation against 10 adversarial scenarios simu
 * **Phase 2 Average Score: 99.5 / 100**
 * **Combined Average Score: 99.0 / 100** (Voice Realism Resistance: **100%** with +1.0% gain under noise)
 
-For detailed methodology, refer to the [Evaluation Methodology System Card](file:///Applications/Journey%20of%20pro/Nona/docs/EVALUATION_METHODOLOGY.md).
+For detailed methodology, refer to the [Evaluation Methodology System Card](docs/EVALUATION_METHODOLOGY.md).
 
 ---
 
