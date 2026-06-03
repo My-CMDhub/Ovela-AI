@@ -1107,6 +1107,90 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
     return {"success": True, "message": message, "email_resent": email_resent}
 
 
+async def handle_resend_payment_confirmation(args: dict, db_service) -> dict:
+    """
+    Manually resend the payment confirmation or receipt email.
+    """
+    guest_email = args.get("guest_email", "")
+    
+    if not guest_email or not db_service:
+        return {
+            "success": False,
+            "message": "I need your email address to resend the confirmation."
+        }
+        
+    try:
+        # Find their active booking
+        # Note: We rely on the db_service lookup to find their most recent booking by email
+        # If we have their phone number we could use that, but usually email is what they give
+        docs = await db_service.lookup_motel_reservation(
+            email=guest_email,
+            tenant_id="coalcreek"
+        )
+        
+        active_doc = None
+        for doc in (docs or []):
+            if doc.get("status") in ("paid", "confirmed", "link_sent", "pending_payment"):
+                active_doc = doc
+                break
+                
+        if not active_doc:
+            return {
+                "success": False,
+                "message": "I couldn't find a recent booking for that email address. Would you like to use a different email or your phone number?"
+            }
+            
+        # Resend Email (Fire and forget)
+        if active_doc.get("status") in ("paid", "confirmed"):
+            from services.email import email_service
+            # Wait, email_service isn't async-safe to import at top if it has circular deps, but we can import locally
+            from services.appwrite import db_service as main_db_service
+            tenant_config = await main_db_service.get_tenant_config("coalcreek")
+            
+            asyncio.create_task(email_service.send_guest_booking_confirmation(
+                guest_email=guest_email,
+                guest_name=active_doc.get("guest_name", "Guest"),
+                booking_reference=active_doc.get("booking_reference", ""),
+                room_type=active_doc.get("room_type", ""),
+                check_in=active_doc.get("check_in_date", ""),
+                check_out=active_doc.get("check_out_date", ""),
+                num_nights=active_doc.get("num_nights", 1),
+                total_amount=active_doc.get("total_amount", 0),
+                business_name=tenant_config.get("business_name", "Coal Creek Motel"),
+                business_phone=tenant_config.get("business_phone", ""),
+                business_location=tenant_config.get("location", ""),
+                tenant_id="coalcreek"
+            ))
+            return {
+                "success": True,
+                "message": f"I've just resent your confirmation receipt to {guest_email}. It should arrive in a moment."
+            }
+        else:
+            # It's an unpaid booking, so resend the payment link
+            asyncio.create_task(_handle_stripe_and_guest_email(
+                booking_ref=active_doc.get("booking_reference", ""),
+                room_type=active_doc.get("room_type", ""),
+                total_amt=float(active_doc.get("total_amount", 0)),
+                guest_email=guest_email,
+                guest_name=active_doc.get("guest_name", ""),
+                guest_phone=active_doc.get("guest_phone", ""),
+                check_in=active_doc.get("check_in_date", ""),
+                check_out=active_doc.get("check_out_date", ""),
+                db_service=db_service,
+            ))
+            return {
+                "success": True,
+                "message": f"I've resent the payment link to {guest_email}. Please check your inbox."
+            }
+
+    except Exception as e:
+        logger.error(f"Error resending payment confirmation: {e}")
+        return {
+            "success": False,
+            "message": "I had a bit of trouble sending that email right now. I can ask reception to follow up with you."
+        }
+
+
 # =============================================================================
 # STRIPE + EMAIL COLD PATH HELPER
 # =============================================================================
@@ -1429,6 +1513,9 @@ class CoalCreekFunctionDispatcher:
         elif function_name == "lookup_booking":
             return await handle_lookup_booking(args, self.db_service, self.user_phone)
         
+        elif function_name == "resend_payment_confirmation":
+            return await handle_resend_payment_confirmation(args, self.db_service)
+
         # Knowledge Base (Direct calls to motel_knowledge_base service)
         elif function_name == "get_room_pricing":
              return get_room_pricing(args.get("room_type"))

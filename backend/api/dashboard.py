@@ -932,18 +932,18 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                         guest_email = doc.get("guest_email")
                         
                         # 1. Notify Staff (Ovela Branded)
-                        if mode == "payment":
-                            await email_service.send_staff_payment_notification(
-                                staff_email=staff_email,
-                                booking_reference=booking_ref,
-                                customer_name=doc.get("guest_name", "Guest"),
-                                customer_email=guest_email,
-                                room_type=doc.get("room_type", ""),
-                                check_in=doc.get("check_in_date", ""),
-                                check_out=doc.get("check_out_date", ""),
-                                num_nights=doc.get("num_nights", 1),
-                                amount_paid=result.get("amount_total", 0) / 100.0  # Stripe returns cents, but we just use 0 or fetch properly
-                            )
+                        await email_service.send_staff_payment_notification(
+                            staff_email=staff_email,
+                            booking_reference=booking_ref,
+                            customer_name=doc.get("guest_name", "Guest"),
+                            customer_email=guest_email,
+                            room_type=doc.get("room_type", ""),
+                            check_in=doc.get("check_in_date", ""),
+                            check_out=doc.get("check_out_date", ""),
+                            num_nights=doc.get("num_nights", 1),
+                            amount_paid=result.get("amount_total", 0) / 100.0 if mode == "payment" else 0.0,
+                            mode=mode
+                        )
                         
                         # 2. Notify Guest (Client Branded Receipt)
                         if guest_email:

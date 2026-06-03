@@ -795,10 +795,10 @@ class EmailService:
         customer_name: str,
         customer_email: str,
         room_type: str,
-        check_in: str,
         check_out: str,
         num_nights: int,
-        amount_paid: float
+        amount_paid: float,
+        mode: str = "payment"
     ):
         """
         Notify staff when payment is received (industry best practice).
@@ -808,7 +808,14 @@ class EmailService:
             logger.info("No staff email - skipping payment notification")
             return False
         
-        subject = f"💰 Payment Received - Booking {booking_reference}"
+        if mode == "setup":
+            subject = f"🛡️ Card Secured - Booking {booking_reference}"
+            title = "Booking Secured (Card on File)"
+            desc = "The customer has securely saved their card on file. This booking is confirmed and ready to be added to your CRM."
+        else:
+            subject = f"💰 Payment Received - Booking {booking_reference}"
+            title = "Booking Paid & Confirmed"
+            desc = "The customer has completed payment. This booking is ready to be added to your CRM."
         
         # Format dates nicely
         try:
@@ -830,14 +837,14 @@ class EmailService:
     <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
         <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
             <div style="padding: 40px 30px 30px; text-align: center; background: #ffffff; border-bottom: 1px solid #f0f0f0;">
-                <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: #000000;">Payment Received</div>
-                <div style="font-size: 14px; color: #86868b; font-weight: 500; margin-top: 4px;">Booking Confirmed - Ready to Process</div>
+                <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: #000000;">{title}</div>
+                <div style="font-size: 14px; color: #86868b; font-weight: 500; margin-top: 4px;">Ready to Process</div>
             </div>
             
             <div style="padding: 32px 30px;">
-                <h1 style="font-size: 20px; font-weight: 700; color: #1d1d1f; margin-bottom: 16px;">Booking Paid & Confirmed</h1>
+                <h1 style="font-size: 20px; font-weight: 700; color: #1d1d1f; margin-bottom: 16px;">{title}</h1>
                 
-                <p style="font-size: 15px; color: #86868b; margin-bottom: 24px;">The customer has completed payment. This booking is ready to be added to your CRM.</p>
+                <p style="font-size: 15px; color: #86868b; margin-bottom: 24px;">{desc}</p>
                 
                 <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
                     <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">

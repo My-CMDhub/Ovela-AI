@@ -218,6 +218,20 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
             }
         },
         {
+            "name": "resend_payment_confirmation",
+            "description": "Resend the payment confirmation or receipt email. ONLY use this when the user says they have already paid/secured the booking but didn't receive the payment receipt or confirmation email.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "guest_email": {
+                        "type": "string",
+                        "description": "Guest email address to send the receipt to"
+                    }
+                },
+                "required": ["guest_email"]
+            }
+        },
+        {
             "name": "request_human_callback",
             "description": "Request staff callback for complex issues or group bookings.",
             "parameters": {
