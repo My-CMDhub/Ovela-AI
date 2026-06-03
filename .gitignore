@@ -5,6 +5,9 @@
 !/.gitignore
 !/README.md
 !/deploy_cloud_run.py
+!/docs/
+/docs/*
+!/docs/EVALUATION_METHODOLOGY.md
 
 # Ignore Next.js / Node / python cache files inside backend and frontend
 **/node_modules/
@@ -29,3 +32,4 @@ backend/stream
 # Ignore all markdown files except root README.md
 **/*.md
 !/README.md
+!/docs/EVALUATION_METHODOLOGY.md

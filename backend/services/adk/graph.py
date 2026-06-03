@@ -445,8 +445,7 @@ class ADKOrchestrator:
                         for part in event.content.parts:
                             if hasattr(part, "text") and part.text:
                                 response_parts.append(part.text)
-                    break
-
+                    
         except Exception as exc:
             logger.error("🤖 ADK: query failed for user %s — %s", user_id[:8], exc)
             return ""
