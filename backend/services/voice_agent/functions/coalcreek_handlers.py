@@ -714,7 +714,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                 if guest_email
                 else (
                     f"I've placed a hold on your room. Your reference is {ref_spoken}. "
-                    "Our team will follow up with payment details shortly."
+                    "However, I still need an email address to send you the payment link. What is your email address?"
                 )
             )
         }
@@ -1361,20 +1361,6 @@ class CoalCreekFunctionDispatcher:
                     saved_doc_id=saved_doc_id,
                 ))
 
-                # ── Task 2: Staff Notification (P11-D, fire-and-forget) ────────
-                asyncio.create_task(
-                    self._notify_staff_booking_created(
-                        guest_name=guest_name,
-                        guest_phone=guest_phone,
-                        guest_email=guest_email,
-                        check_in=check_in,
-                        check_out=check_out,
-                        room_type=room_type,
-                        total_amount=total_amt,
-                        booking_ref=booking_ref,
-                        num_nights=num_nights,
-                    )
-                )
 
                 # ── Task 3: ADK Cold Path session state update ─────────────────
                 if self.call_sid:
