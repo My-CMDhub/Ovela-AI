@@ -1,4 +1,4 @@
-# Ignore all files/folders in root except backend/, frontend/, and the 3 core files
+# Ignore all files/folders in root except backend/, frontend/, and the core files
 /*
 !/backend/
 !/frontend/
@@ -6,8 +6,13 @@
 !/README.md
 !/deploy_cloud_run.py
 !/docs/
+
+# Ignore contents of docs except methodology and the visual architecture diagram
 /docs/*
 !/docs/EVALUATION_METHODOLOGY.md
+!/docs/Googlr AI Challenge/
+/docs/Googlr AI Challenge/*
+!/docs/Googlr AI Challenge/ovela_architecture_diagram.png
 
 # Ignore Next.js / Node / python cache files inside backend and frontend
 **/node_modules/
@@ -29,7 +34,7 @@ backend/redeploy-guide.md
 backend/Procfile
 backend/stream
 
-# Ignore all markdown files except root README.md
+# Ignore all markdown files except root README.md and evaluation methodology
 **/*.md
 !/README.md
 !/docs/EVALUATION_METHODOLOGY.md
