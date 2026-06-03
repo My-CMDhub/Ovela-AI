@@ -335,7 +335,7 @@ class VoiceAgentHandler:
         This configures:
         - Audio encoding (mulaw for Twilio)
         - STT model (flux-general-en)
-        - LLM (Google gemini-2.5-flash / gpt-4.1-nano edge-gateway)
+        - LLM (Google gemini-2.5-flash-lite / gpt-4.1-nano edge-gateway)
         - TTS (Deepgram aura-2-thalia-en)
         - System prompt and functions
         """
@@ -420,11 +420,11 @@ class VoiceAgentHandler:
         Model priority (highest → lowest):
           1. voice_settings.llm_model in tenant DB  
           2. LLM_MODEL env var (Cloud Run)             ← global override
-          3. gemini-2.5-flash primary default
+          3. gemini-2.5-flash-lite primary default
 
         All models below are Deepgram-managed — only your DEEPGRAM_API_KEY needed.
 
-          Google   : gemini-2.5-flash*, gemini-2.5-flash-lite, gemini-2.0-flash
+          Google   : gemini-2.5-flash-lite*, gemini-2.5-flash-lite-lite, gemini-2.0-flash
           OpenAI   : gpt-4.1-nano, gpt-4.1-mini, gpt-4o-mini
           Anthropic: claude-sonnet-4-6, claude-sonnet-4-5
           (* = current default)
@@ -2450,7 +2450,7 @@ class VoiceAgentHandler:
             # Run in a threadpool to prevent blocking the async event loop
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model="gemini-2.5-flash",
+                model="gemini-2.5-flash-lite",
                 contents=f"Summarize this call transcript:\n\n{transcript_text}",
                 config=genai.types.GenerateContentConfig(
                     system_instruction=system_instruction,

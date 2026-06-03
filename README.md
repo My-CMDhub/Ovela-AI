@@ -44,7 +44,7 @@ To achieve both sub-second latency and deep reasoning, Ovela utilizes a dual-pat
   - ├─ `BookingWorker` (availability, Stripe, email)
   - └─ `InfoWorker` (policies, live search grounding)
 - **Orchestration:** Built natively on **Google ADK**, utilizing multi-agent graphs to distribute complex logic without stalling the voice interaction.
-- **Reasoning:** Powered by **Gemini 2.5 Flash** (via Vertex AI Application Default Credentials) for rapid, cost-efficient tool execution.
+- **Reasoning:** Powered by **Gemini 2.5 Flash Lite** (via Vertex AI Application Default Credentials) for rapid, cost-efficient tool execution.
 - **State Persistence:** Implements a custom `AppwriteSessionService` that serializes the ADK graph state into Appwrite. This ensures continuous memory retention across Cloud Run container scale-out events.
 
 ---
@@ -98,7 +98,7 @@ For detailed methodology, refer to the [Evaluation Methodology System Card](docs
 ### Backend
 - **Framework:** FastAPI 0.109.2 + Uvicorn
 - **AI Orchestration:** Google Vertex AI ADK (LlmAgent, Runner, BaseSessionService)
-- **AI Model:** Gemini 2.5 Flash (via Vertex AI)
+- **AI Model:** Gemini 2.5 Flash Lite (via Vertex AI)
 - **Voice Infrastructure:** Twilio WebSockets, Deepgram (STT/VAD), Cartesia (TTS)
 - **Database & State:** Appwrite Cloud
 - **Integrations:** Stripe, Zoho Mail

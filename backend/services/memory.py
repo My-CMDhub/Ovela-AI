@@ -111,7 +111,7 @@ class MemoryService:
             
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model="gemini-2.5-flash",
+                model="gemini-2.5-flash-lite",
                 contents=conv_text,
                 config=genai.types.GenerateContentConfig(
                     system_instruction=CONSOLIDATION_PROMPT,
@@ -151,7 +151,7 @@ class MemoryService:
             import asyncio
             response = await asyncio.to_thread(
                 client.models.generate_content,
-                model="gemini-2.5-flash",
+                model="gemini-2.5-flash-lite",
                 contents=current_summary,
                 config=genai.types.GenerateContentConfig(
                     system_instruction=ULTRA_COMPACT_PROMPT,

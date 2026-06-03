@@ -70,7 +70,7 @@ class VertexGemini(AdkGemini):
             return self.model == other
         return super().__eq__(other)
 
-_ADK_MODEL = "gemini-2.5-flash"
+_ADK_MODEL = "gemini-2.5-flash-lite"
 _ADK_MODEL_VERTEX = VertexGemini(model=_ADK_MODEL)  
 
 
@@ -288,7 +288,7 @@ async def perform_live_search(query: str, tool_context: ToolContext = None) -> s
         location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
         client = genai.Client(vertexai=True, project=project, location=location)
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-flash-lite",
             contents=query,
             config=types.GenerateContentConfig(
                 tools=[{"google_search": {}}]
