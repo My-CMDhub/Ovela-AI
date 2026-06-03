@@ -314,8 +314,7 @@ class BookingsMixin:
                 data["payment_link_url"] = payment_link_url
                 data["payment_link_sent_at"] = now
 
-            if payment_expires_at:
-                data["payment_expires_at"] = payment_expires_at
+            # Note: payment_expires_at is omitted as the Appwrite collection schema
                 
             if stripe_payment_id:
                 data["stripe_payment_id"] = stripe_payment_id

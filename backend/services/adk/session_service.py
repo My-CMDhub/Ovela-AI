@@ -46,9 +46,27 @@ _ADK_COLLECTION_ID = "adk_sessions"
 
 
 def _serialise_events(events: list[Event]) -> str:
-    """Serialise ADK Event list to a compact JSON string for storage."""
+    """Serialise ADK Event list to a compact JSON string for storage, with size limits."""
     try:
-        return json.dumps([e.model_dump(mode="json") for e in events])
+        raw_events = []
+        for e in events:
+            dumped = e.model_dump(mode="json")
+            # Truncate large content/payload strings to prevent blowing past Appwrite's 65,535 limit
+            if "content" in dumped and isinstance(dumped["content"], str) and len(dumped["content"]) > 1000:
+                dumped["content"] = dumped["content"][:1000] + "... [truncated]"
+            if "payload" in dumped and isinstance(dumped["payload"], dict):
+                for k, v in list(dumped["payload"].items()):
+                    if isinstance(v, str) and len(v) > 1000:
+                        dumped["payload"][k] = v[:1000] + "... [truncated]"
+            raw_events.append(dumped)
+        
+        # Programmatically prune oldest events if serialized string is still too large
+        serialized = json.dumps(raw_events)
+        while len(serialized) > 64000 and len(raw_events) > 2:
+            raw_events.pop(0)
+            serialized = json.dumps(raw_events)
+            
+        return serialized
     except Exception as exc:
         logger.warning("AppwriteSessionService: failed to serialise events — %s", exc)
         return "[]"
