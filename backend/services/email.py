@@ -795,6 +795,7 @@ class EmailService:
         customer_name: str,
         customer_email: str,
         room_type: str,
+        check_in: str,
         check_out: str,
         num_nights: int,
         amount_paid: float,
