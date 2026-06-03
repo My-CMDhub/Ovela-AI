@@ -141,6 +141,14 @@ def _next_weekday(base_date, target_weekday: int, include_today: bool = False):
         delta_days = 7
     return base_date + timedelta(days=delta_days)
 
+def _format_date_spoken(date_obj: datetime) -> str:
+    """Format a date for natural TTS speech, e.g., 'Saturday the 6th of June'."""
+    day = date_obj.day
+    if 4 <= day <= 20 or 24 <= day <= 30:
+        suffix = "th"
+    else:
+        suffix = ["st", "nd", "rd"][day % 10 - 1]
+    return date_obj.strftime(f"%A the {day}{suffix} of %B")
 
 def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utterance: str):
     """
@@ -344,6 +352,9 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
     if not check_out_date or check_out_date <= check_in_date:
         check_out_date = check_in_date + timedelta(days=1)
 
+    ci_spoken = _format_date_spoken(check_in_date)
+    co_spoken = _format_date_spoken(check_out_date)
+    
     check_in = check_in_date.strftime("%Y-%m-%d")
     check_out = check_out_date.strftime("%Y-%m-%d")
     nights = (check_out_date - check_in_date).days
@@ -475,7 +486,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                 "nights": nights,
                 "price_per_night": price,
                 "total": price * nights if price else None,
-                "ai_should_say": f"The {target_room} is available for {check_in if nights == 1 else f'{nights} nights from {check_in}'}. The rate is ${price} per night{f', total ${price * nights}' if nights > 1 else ''}. Would you like me to place a hold?"
+                "ai_should_say": f"The {target_room} is available from {ci_spoken} for {nights} night{'s' if nights > 1 else ''}. The rate is ${price} per night{f', total ${price * nights}' if nights > 1 else ''}. Would you like me to place a hold?"
             }
             if isinstance(availability_cache, dict):
                 availability_cache[cache_key] = copy.deepcopy(payload)
@@ -503,7 +514,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                 "check_out": check_out,
                 "nights": nights,
                 "rooms_with_pricing": prices,
-                "ai_should_say": f"I have {len(available_rooms)} room types available for those dates: {room_list}. Which would you prefer?"
+                "ai_should_say": f"I have {len(available_rooms)} room types available starting {ci_spoken}: {room_list}. Which would you prefer?"
             }
             if isinstance(availability_cache, dict):
                 availability_cache[cache_key] = copy.deepcopy(payload)
@@ -597,6 +608,9 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
 
     if not check_out_date or check_out_date <= check_in_date:
         check_out_date = check_in_date + timedelta(days=1)
+
+    ci_spoken = _format_date_spoken(check_in_date)
+    co_spoken = _format_date_spoken(check_out_date)
 
     check_in = check_in_date.strftime("%Y-%m-%d")
     check_out = check_out_date.strftime("%Y-%m-%d")
@@ -697,6 +711,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             ref_spoken = f"{_prefix}, {_suffix}"   # "C C, A B 1 2 3 4"
         else:
             ref_spoken = " ".join(booking_ref)
+            
         return {
             "success": True,
             "booking_reference": booking_ref,
@@ -708,12 +723,12 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "total_amount": total,
             "_saved_doc_id": reservation_data.get("_saved_doc_id"),
             "message": (
-                f"I've placed a hold and your reference is {ref_spoken}. "
+                f"I've placed a {num_nights} night hold for {ci_spoken}. Your reference is {ref_spoken}. "
                 f"A payment link has been sent to {guest_email} — "
                 "could you check your inbox now to confirm it arrived? I'll stay on the line."
                 if guest_email
                 else (
-                    f"I've placed a hold on your room. Your reference is {ref_spoken}. "
+                    f"I've placed a {num_nights} night hold for {ci_spoken}. Your reference is {ref_spoken}. "
                     "However, I still need an email address to send you the payment link. What is your email address?"
                 )
             )
@@ -786,7 +801,12 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
     def _booking_detail_tail(doc: dict) -> str:
         details = []
         if doc.get("check_in_date"):
-            details.append(f"checking in on {doc['check_in_date']}")
+            # Try to format for speech if it's a valid date string
+            try:
+                dt = datetime.strptime(doc.get("check_in_date"), "%Y-%m-%d")
+                details.append(f"checking in on {_format_date_spoken(dt)}")
+            except:
+                details.append(f"checking in on {doc['check_in_date']}")
         if doc.get("room_type"):
             details.append(f"for the {doc['room_type']}")
         return " ".join(details)
@@ -1031,10 +1051,19 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                     active_doc = doc
                     break
             if active_doc and active_doc.get("$id"):
+                if active_doc.get("payment_status") == "email_failed":
+                    # We had a hard bounce or format error previously on this doc
+                    # Unless they gave us a NEW email, we should warn them
+                    if active_doc.get("guest_email") == guest_email:
+                        return {
+                            "success": False,
+                            "message": f"My system flagged a delivery error for {guest_email}. Could we verify the spelling, or do you have a different email address?"
+                        }
+
                 # PATCH email in Appwrite using generic update
                 await db_service.update_motel_reservation(
                     booking_id=active_doc["$id"],
-                    data={"guest_email": guest_email},
+                    data={"guest_email": guest_email, "payment_status": "pending_payment"},
                 )
                 logger.info("📧 Email corrected in Appwrite for %s", active_doc.get("booking_reference"))
                 # Resend payment link to corrected email (fire-and-forget)
@@ -1149,10 +1178,17 @@ async def _handle_stripe_and_guest_email(
                 logger.error("💳 DB update failed for %s: %s", booking_ref, db_err)
 
         # ── 2. Email guest payment link ───────────────────────────────────────
+        import re
+        is_valid_email = False
         if guest_email and guest_email.strip():
+            # Basic validation check to simulate reality (bounce error if invalid)
+            if re.match(r"[^@]+@[^@]+\.[^@]+", guest_email.strip()):
+                is_valid_email = True
+
+        if is_valid_email:
             try:
                 from services.email import email_service
-                await email_service.send_payment_link(
+                success = await email_service.send_payment_link(
                     to_email=guest_email,
                     guest_name=guest_name,
                     booking_ref=booking_ref,
@@ -1167,11 +1203,22 @@ async def _handle_stripe_and_guest_email(
                         "the secure link below — this link expires in 30 minutes."
                     ),
                 )
+                if not success:
+                    raise Exception("SMTP Provider failed to send email (bounce simulated).")
                 logger.info("💳 Payment link emailed to guest for %s", booking_ref)
             except Exception as email_err:
                 logger.error("💳 Guest email failed for %s: %s", booking_ref, email_err)
+                if doc_id and db_service:
+                    await db_service.update_booking_payment_status(
+                        booking_id=doc_id, payment_status="email_failed"
+                    )
         else:
-            logger.info("💳 No guest email — skipping email dispatch for %s", booking_ref)
+            logger.info("💳 Invalid or missing guest email — skipping dispatch for %s", booking_ref)
+            if doc_id and db_service and guest_email:
+                # They provided an email but it was invalid format (bounce simulated)
+                await db_service.update_booking_payment_status(
+                    booking_id=doc_id, payment_status="email_failed"
+                )
 
     except Exception as outer_err:
         logger.error("💳 _handle_stripe_and_guest_email outer error for %s: %s", booking_ref, outer_err)
@@ -1200,54 +1247,43 @@ class CoalCreekFunctionDispatcher:
 
     def fire_adk_cold_path(self, query: str, session_state: dict | None = None) -> None:
         """
-        Fire-and-forget: POST a booking intent to the ADK Cold Path graph.
+        Fire-and-forget: Pass a booking intent to the ADK Cold Path graph directly.
 
         Schedules as a background asyncio.create_task so it NEVER blocks the
         voice loop. The ADK graph (OvelaManager → BookingWorker/InfoWorker)
         processes the query asynchronously and stores the result in the
         per-call InMemory session.
-
-        Args:
-            query:         User's booking intent text to route through ADK.
-            session_state: Optional caller context (name, dates) to merge into
-                           the ADK session before routing.
         """
         import asyncio
-        import httpx
 
         call_sid = self.call_sid or "unknown"
 
-        async def _post():
+        async def _run_adk():
+            if not self.adk_orchestrator:
+                logger.debug("🤖 ADK cold path skipped (no orchestrator attached)")
+                return
             try:
-                payload = {
-                    "call_sid": call_sid,
-                    "query": query,
-                    "session_state": session_state or {},
-                }
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    resp = await client.post(
-                        "http://localhost:8000/api/adk/query",
-                        json=payload,
+                # Use the injected orchestrator directly to avoid HTTP loopback port/network errors
+                session = await self.adk_orchestrator.get_or_create_session(user_id=call_sid)
+                if session_state:
+                    await self.adk_orchestrator.update_session_state(
+                        user_id=call_sid,
+                        session_id=session.id,
+                        state=session_state,
                     )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    logger.info(
-                        "🤖 ADK cold path OK for %s | response_len=%d",
-                        call_sid[:8],
-                        len(data.get("response", "")),
-                    )
-                else:
-                    logger.warning(
-                        "🤖 ADK cold path non-200 for %s: %d",
-                        call_sid[:8],
-                        resp.status_code,
-                    )
+                
+                response_text = await self.adk_orchestrator.query(
+                    user_id=call_sid,
+                    session_id=session.id,
+                    text=query,
+                )
+                logger.info("🤖 ADK cold path OK for %s | response_len=%d", call_sid[:8], len(response_text))
             except Exception as exc:
                 # Silently swallow — cold path must NEVER crash the voice loop
                 logger.error("🤖 ADK cold path error for %s: %s", call_sid[:8], exc)
 
         try:
-            asyncio.create_task(_post())
+            asyncio.create_task(_run_adk())
         except RuntimeError:
             # No running loop (e.g., test context) — silently skip
             logger.debug("🤖 ADK cold path skipped (no event loop)")
