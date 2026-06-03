@@ -1,7 +1,0 @@
-#!/bin/bash
-# Ovela Log Streamer Shortcut
-cd "$(dirname "$0")"
-if [ -d "venv" ]; then
-    source venv/bin/activate
-fi
-python scripts/stream_logs.py

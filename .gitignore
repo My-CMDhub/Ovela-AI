@@ -23,6 +23,8 @@
 backend/tests/
 backend/scripts/test_email_zoho.py
 backend/redeploy-guide.md
+backend/Procfile
+backend/stream
 
 # Ignore all markdown files except root README.md
 **/*.md
