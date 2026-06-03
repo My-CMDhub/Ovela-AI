@@ -32,6 +32,8 @@ Transitioning Ovela AI from an initial prototype to a production-grade system re
 
 To achieve both sub-second latency and deep reasoning, Ovela utilizes a dual-path architecture powered by **Google's Agent Development Kit (ADK)** and the Gemini ecosystem.
 
+![Ovela AI Architecture Diagram](docs/Googlr%20AI%20Challenge/ovela_architecture_diagram.png)
+
 ### Hot Path (Real-Time Voice, <850ms Latency)
 - **Flow:** Guest Voice → Twilio WebSocket → FastAPI Audio Bridge → Deepgram Voice Agent
 - **Purpose:** Manages the immediate, real-time speech interaction and conversational flow.
