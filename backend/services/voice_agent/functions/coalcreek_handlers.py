@@ -1324,22 +1324,7 @@ class CoalCreekFunctionDispatcher:
              
              call_sid = self.call_sid or "unknown"
 
-             # ── In-process path: use injected ADKOrchestrator (preferred) ──────
-             if self.adk_orchestrator is not None:
-                 try:
-                     # Reuse or create an ADK session for this call
-                     session = await self.adk_orchestrator.get_or_create_session(user_id=call_sid)
-                     response_text = await self.adk_orchestrator.query(
-                         user_id=call_sid,
-                         session_id=session.id,
-                         text=query,
-                     )
-                     return {"success": True, "answer": response_text or "I couldn't find an answer to that right now."}
-                 except Exception as e:
-                     logger.error(f"Live search (in-process) failed: {e}")
-                     return {"success": False, "error": str(e), "message": "My search service is currently unavailable."}
-
-             # ── Fallback: direct Vertex AI call (no adk_orchestrator wired) ────
+             # ── Direct Vertex AI call (Hot Path optimized) ────
              try:
                  from google import genai
                  from google.genai import types as genai_types
@@ -1356,8 +1341,10 @@ class CoalCreekFunctionDispatcher:
                  )
                  return {"success": True, "answer": response.text}
              except Exception as e:
-                 logger.error(f"Live search (fallback) failed: {e}")
+                 logger.error(f"Live search failed: {e}")
                  return {"success": False, "error": str(e), "message": "My search service is currently unavailable."}
+
+
              
         elif function_name == "get_policies":
              return get_policies(args.get("policy_type"))

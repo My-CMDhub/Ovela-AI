@@ -925,6 +925,11 @@ class VoiceAgentHandler:
     async def _send_audio_to_twilio(self, audio_bytes: bytes):
         """Send audio to Twilio Media Stream."""
         try:
+            # Set exact playback start time if not set yet for this utterance
+            if getattr(self, '_ai_is_speaking', False) and not getattr(self, '_tts_playback_started_this_turn', False):
+                self._tts_playback_start = time.time()
+                self._tts_playback_started_this_turn = True
+
             payload = base64.b64encode(audio_bytes).decode("utf-8")
             
             media_message = {
@@ -1142,6 +1147,7 @@ class VoiceAgentHandler:
             # STATE MACHINE: AI is now speaking
             # This replaces AgentStartedSpeaking which Deepgram doesn't send
             self._ai_is_speaking = True
+            self._tts_playback_started_this_turn = False
             
             # During escalation, preserve check ID so hard/abandon checks stay valid
             in_escalation = getattr(self, '_in_silence_escalation', False)
@@ -1297,6 +1303,8 @@ class VoiceAgentHandler:
         # CRITICAL: Force AI speaking state to False immediately
         # Deepgram might skip AgentAudioDone if interrupted, causing state lock
         self._ai_is_speaking = False
+        self._tts_playback_started_this_turn = False
+        self._final_help_offer_active = False
         # NOTE: do NOT call on_ai_finished_speaking() here — it sets silence_check_start_time
         # to the moment user speaks, which races with the 300ms grace in _handle_agent_audio_done
         # and causes abandon-silence to fire even when user has spoken.
