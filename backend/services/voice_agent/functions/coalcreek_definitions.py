@@ -287,7 +287,12 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message": {"type": "string"}
+                    "message": {"type": "string"},
+                    "confidence_level": {
+                        "type": "string",
+                        "enum": ["low", "medium", "high"],
+                        "description": "Your confidence level that the user genuinely wants to end the call right now."
+                    }
                 }
             }
         }

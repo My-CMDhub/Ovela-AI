@@ -322,49 +322,8 @@ class VoiceAgentHandler:
             "ending the call now",
         }
 
-    def _should_offer_one_more_help_before_hangup(self, user_utterance: str) -> bool:
-        """
-        UX gate: intercept the first LLM end_call for genuine callers.
-
-        Rules:
-        - Abusive/flagged callers (violation_count or off_topic_count > 0) → hang up immediately.
-        - Final offer already spoken (loop guard) → hang up immediately.
-        - Otherwise → intercept, offer one last help prompt, set loop guard.
-        """
-        # 1. Skip gate for abusive/flagged callers — hang up without soft offer.
-        if self.abuse_protection and (
-            getattr(self.abuse_protection, 'violation_count', 0) > 0
-            or getattr(self.abuse_protection, 'off_topic_count', 0) > 0
-        ):
-            return False
-
-        # 2. Loop guard — if we already offered, do not intercept a second time.
-        if self._final_help_offer_active:
-            return False
-
-        # 3. Genuine first-close for a non-abusive caller → intercept.
-        return True
 
 
-    def _should_end_call_deterministically(self, user_utterance: str) -> bool:
-        normalized = self._normalize_phrase(user_utterance)
-        if not normalized or getattr(self, '_is_hanging_up', False):
-            return False
-        strongest_terminal_markers = (
-            "bye",
-            "goodbye",
-            "bye bye",
-            "see you",
-            "see ya",
-            "that's all",
-            "that is all",
-            "that's it",
-            "that is it",
-            "that'll be all",
-            "that will be all",
-        )
-        return self._contains_any_phrase(normalized, strongest_terminal_markers)
-    
     # =========================================================================
     # DEEPGRAM SETTINGS
     # =========================================================================
@@ -1114,11 +1073,7 @@ class VoiceAgentHandler:
                 elif spam_result.get("warning"):
                     await self._speak_system_message(spam_result["warning"], clip_key="abuse_warning")
 
-            if self._should_end_call_deterministically(content):
-                farewell = get_random_farewell(self.tenant_id)
-                logger.info("👋 Deterministic end-call for explicit close: '%s'", content)
-                await self._hangup_with_farewell(farewell)
-                return
+
 
         elif role == "assistant":
             # GATING: If we are in the process of hanging up (e.g. end_call triggered),
@@ -1203,32 +1158,16 @@ class VoiceAgentHandler:
             logger.debug("🛡️ Suppressing Twilio clear during function call (TTS guard)")
             return
         
-        # FILLER PROTECTION: Ignore user noise during injected filler playback
-        if getattr(self, '_blocking_interruptions', False):
-            logger.info("🎤 User started speaking during filler - IGNORING (Block Interruptions)")
-            return
-
         # ─────────────────────────────────────────────────────────────────
-        # POST-ACK DEAF WINDOW: After the agent plays an ACK filler
-        # ("One moment, let me check..."), the audio is still playing in
-        # the caller's earpiece for ~2.5s after Twilio's buffer drains.
-        # Short affirmations said during that window ("okay", "sure",
-        # "no worries", "yep") must NOT trigger a full clear-event that
-        # wipes the AI's processing state.
-        #
-        # Gate: suppress Twilio clear if ALL of the following are true:
-        #   1. We are within 2.5s of the last ACK filler TTS completing
-        #   2. The ConversationText word-count gate (≤2 words) will handle
-        #      the transcript-level filtering — we only suppress the clear.
-        # Real interruptions that arrive after the window pass through normally.
+        # SYSTEM AUDIO PROTECTION: If we injected system audio (ACKs, farewells),
+        # keep VAD suppressed until the calculated end-to-end playback duration
+        # (plus a short tail) has completed in the caller's ear.
         # ─────────────────────────────────────────────────────────────────
-        _ack_done = getattr(self, '_ack_tts_done_at', None)
-        _ACK_WINDOW_S = 2.5
-        if _ack_done and (time.time() - _ack_done) < _ACK_WINDOW_S:
+        if getattr(self, '_blocking_interruptions', False) or self._is_system_audio_playing:
+            time_left = getattr(self, '_system_audio_completion_at', 0) - time.time() + 1.0
             logger.info(
-                "🙉 VAD fired within ACK window (%.2fs ago) — suppressing Twilio clear "
-                "(word-count gate in ConversationText will still filter transcript)",
-                time.time() - _ack_done,
+                f"🛡️ VAD suppressed: System audio active/playing (est {time_left:.1f}s remaining). "
+                f"Word-count gate in ConversationText will filter transcript."
             )
             # Still update VAD timing state so latency tracking stays accurate
             self.user_speech_start_time = time.time()
@@ -1512,14 +1451,7 @@ class VoiceAgentHandler:
                     asyncio.create_task(
                         self._speak_system_message(preset, clip_key="filler_short", wait_for_playback=True)
                     )
-                # ── Deaf window tuning per tool ───────────────────────────────
-                # check_availability: PMS round-trip is ~1-2s → unlock after 2.5s
-                # perform_live_search: Vertex grounding is ~3-5s → stay deaf for 9s
-                # (long_wait_filler will play a "still checking" bridge if >5s anyway)
-                if function_name == "perform_live_search":
-                    asyncio.create_task(self._unlock_interruptions(9.0))
-                else:
-                    asyncio.create_task(self._unlock_interruptions(2.5))
+
                 fn_done_event = asyncio.Event()
                 long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event, function_name))
 
@@ -1535,8 +1467,7 @@ class VoiceAgentHandler:
                     filler = get_random_filler_prompt()
                     await self._speak_system_message(filler, clip_key="filler_short")
                     self._filler_played_this_turn = True
-                # Unlock interruptions after filler TTS plays (~2.5s)
-                asyncio.create_task(self._unlock_interruptions(2.5))
+
                 # Schedule progressive "still checking" for very long waits
                 fn_done_event = asyncio.Event()
                 long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event, function_name))
@@ -1664,49 +1595,20 @@ class VoiceAgentHandler:
 
             # Check for end_call signal (LLM explicitly requested call termination)
             if result.get("action") == "end_call":
-                user_utterance = result.get("user_utterance", "")
-                if self._should_offer_one_more_help_before_hangup(user_utterance):
-                    logger.info("↩️ Suppressing premature end_call for soft close: '%s'", user_utterance)
-                    self._final_help_offer_active = True
-                    soft_close_msg = "No problem, if you need anything else just let me know."
-                    # ── Deterministic voice: never rely on LLM to read this back ─
-                    # The LLM is in "shutdown mode" after calling end_call, so it
-                    # won't speak unless we do it from the system audio lane.
-                    await self._speak_system_message(soft_close_msg)
-                    # ── Sync LLM context so it knows the system already spoke ────
-                    if self.deepgram_ws:
-                        try:
-                            inject_msg = {
-                                "type": "InjectUserMessage",
-                                "content": (
-                                    f"[System: end_call intercepted for soft close. "
-                                    f"System already said: '{soft_close_msg}'. "
-                                    f"Do NOT repeat this. Wait for the caller to respond.]"
-                                )
-                            }
-                            await self.deepgram_ws.send(json.dumps(inject_msg))
-                            logger.info("💉 Injected soft-close context tag into Deepgram")
-                        except Exception as e:
-                            logger.warning(f"Failed to inject soft-close tag: {e}")
-                    result = {
-                        "success": True,
-                        "soft_close_redirected": True,
-                        "message": soft_close_msg,
-                    }
-                else:
-                    logger.info("👋 end_call function called - injecting farewell + scheduling hangup")
-                    self._is_hanging_up = True
-                    message = result.get("message")
-                    if not message:
-                        message = get_random_farewell(self.tenant_id)
-                        logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
-                    # Use the pre-recorded farewell clip if available to eliminate Cartesia TTS network latency
-                    # (falls back gracefully to live Cartesia TTS if missing).
-                    await self._speak_system_message(message, clip_key="farewell")
-                    delay = max(4.0, (len(message) * 0.1) + 2.0)
-                    logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
-                    asyncio.create_task(self._scheduled_hangup(delay))
-                    return
+                confidence = result.get("confidence_level", "unknown")
+                logger.info(f"👋 end_call function called - injecting farewell + scheduling hangup (confidence: {confidence})")
+                self._is_hanging_up = True
+                message = result.get("message")
+                if not message:
+                    message = get_random_farewell(self.tenant_id)
+                    logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
+                # Use the pre-recorded farewell clip if available to eliminate Cartesia TTS network latency
+                # (falls back gracefully to live Cartesia TTS if missing).
+                await self._speak_system_message(message, clip_key="farewell")
+                delay = max(4.0, (len(message) * 0.1) + 2.0)
+                logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
+                asyncio.create_task(self._scheduled_hangup(delay))
+                return
 
             # Check for wait_on_request signal
             if result.get("action") == "wait_on_request":
@@ -2036,7 +1938,6 @@ class VoiceAgentHandler:
                         "Still checking live availability now. Thanks for waiting.",
                         clip_key=None,
                     )
-                    asyncio.create_task(self._unlock_interruptions(2.5))
                 return
 
             await asyncio.sleep(8.0)
@@ -2048,17 +1949,10 @@ class VoiceAgentHandler:
                 ]
                 self._blocking_interruptions = True
                 await self._speak_system_message(random.choice(fillers), clip_key="filler_long")
-                asyncio.create_task(self._unlock_interruptions(2.5))
         except asyncio.CancelledError:
             pass
     
-    async def _unlock_interruptions(self, delay: float):
-        """Helper to unlock interruptions after a delay (lets filler TTS play fully)."""
-        try:
-            await asyncio.sleep(delay)
-            self._blocking_interruptions = False
-        except asyncio.CancelledError:
-            pass
+
     
     def _get_cartesia_voice_id(self) -> str:
         voice_settings = self.tenant_config.get("voice_settings", {})
@@ -2180,6 +2074,12 @@ class VoiceAgentHandler:
         logger.info(f"🔊 System audio played ({reason}) bytes={len(audio_bytes)} dur={duration:.2f}s")
         return duration
 
+    @property
+    def _is_system_audio_playing(self) -> bool:
+        """Returns True if injected system audio is actively playing in the user's ear (includes tail buffer)."""
+        # Add 1.0s tail buffer to absorb immediate affirmations ("yep", "okay") right after playback
+        return time.time() < getattr(self, '_system_audio_completion_at', 0) + 1.0
+
     async def _speak_system_message(
         self,
         message: str,
@@ -2205,30 +2105,19 @@ class VoiceAgentHandler:
             self._blocking_interruptions = True
             self.silence_monitor.on_ai_started_speaking(preserve_check_id=True)
             duration = await self._send_system_audio(audio_bytes, reason=source)
+            
+            # Record exactly when this audio will stop playing in the user's ear (duration + network buffer)
+            network_buffer = 0.5
+            self._system_audio_completion_at = time.time() + duration + network_buffer
+            
             if wait_for_playback and duration > 0:
-                await asyncio.sleep(max(0.35, duration + 0.15))
+                await asyncio.sleep(duration + network_buffer)
             return True
         except Exception as e:
             logger.error(f"🔇 System audio send failed: {e}")
             return False
         finally:
             self._blocking_interruptions = False
-            # ─────────────────────────────────────────────────────────────────
-            # ACK SUPPRESSION WINDOW: After a filler/ACK clip is sent to
-            # Twilio's buffer, the audio is still playing in the caller's
-            # earpiece for the next 2-3 seconds.  Stamp the finish time so
-            # _handle_user_started_speaking can gate VAD-triggered Twilio
-            # 'clear' events during that window ("okay", "sure", "no worries"
-            # said right after hearing the ACK must not nuke the AI's state).
-            # Only stamp for filler/ACK clips, not farewell or transfer audio.
-            _is_filler_clip = clip_key and any(
-                tag in clip_key for tag in ("filler", "availability", "checking")
-            )
-            if _is_filler_clip or (clip_key is None and self._is_processing_function):
-                self._ack_tts_done_at = time.time()
-                logger.debug("⏱️ ACK suppression window opened (%.1fs)", self._ack_tts_done_at)
-            # preserve_escalation=True during silence escalation so on_ai_finished_speaking
-            # does NOT reset silence_followup_count (which would break the chain).
             self.silence_monitor.on_ai_finished_speaking(
                 preserve_escalation=getattr(self, '_in_silence_escalation', False)
             )
