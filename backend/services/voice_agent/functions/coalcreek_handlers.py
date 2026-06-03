@@ -676,12 +676,15 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "success": True,
             "booking_reference": booking_ref,
             "guest_name": guest_name,
+            "guest_email": guest_email,
             "check_in_date": check_in,
             "check_out_date": check_out,
             "room_type": room_data["name"],
             "total_amount": total,
             "message": (
-                f"A payment link has been sent to your email — it expires in 30 minutes."
+                f"I've placed a hold on the room and sent the payment link to {guest_email}. "
+                "Just to make sure we got the spelling right, could you check your inbox now "
+                "and confirm if it has arrived? I'll stay on the line with you."
                 if guest_email
                 else "I've placed a hold on your room. Our team will follow up with payment details shortly."
             )
@@ -959,22 +962,57 @@ async def handle_request_human_callback(args: dict, user_phone: str) -> dict:
     }
 
 
-async def handle_update_guest_info(args: dict, db_service) -> dict:
+async def handle_update_guest_info(args: dict, db_service, user_phone: str = None) -> dict:
     """
     Save guest details to CRM for persistent memory.
-    Call this when guest verifies their info.
+    If the caller corrects their email and has a recent active booking (pending/pending_payment),
+    patch the email in Appwrite and resend the Stripe payment link.
     """
     guest_name = args.get("guest_name", "")
-    guest_phone = args.get("guest_phone", "")
+    guest_phone = args.get("guest_phone", "") or user_phone or ""
     guest_email = args.get("guest_email", "")
     
     logger.info(f"Captured Guest Info: {guest_name} - {guest_phone}")
+
+    # ── Email correction path: patch reservation + resend Stripe link ──
+    email_resent = False
+    if guest_email and guest_phone and db_service:
+        try:
+            docs = await db_service.lookup_motel_reservation(
+                phone=guest_phone,
+                tenant_id="coalcreek"
+            )
+            # Find most recent active reservation with incomplete payment
+            active_doc = None
+            for doc in (docs or []):
+                if doc.get("status") in ("pending", "pending_payment") and doc.get("payment_status") not in ("paid",):
+                    active_doc = doc
+                    break
+            if active_doc and active_doc.get("$id"):
+                # PATCH email in Appwrite using generic update
+                await db_service.update_motel_reservation(
+                    booking_id=active_doc["$id"],
+                    data={"guest_email": guest_email},
+                )
+                logger.info("📧 Email corrected in Appwrite for %s", active_doc.get("booking_reference"))
+                # Resend payment link to corrected email (fire-and-forget)
+                asyncio.create_task(_handle_stripe_and_guest_email(
+                    booking_ref=active_doc.get("booking_reference", ""),
+                    room_type=active_doc.get("room_type", ""),
+                    total_amt=float(active_doc.get("total_amount", 0)),
+                    guest_email=guest_email,
+                    guest_name=guest_name or active_doc.get("guest_name", ""),
+                    guest_phone=guest_phone,
+                    check_in=active_doc.get("check_in_date", ""),
+                    check_out=active_doc.get("check_out_date", ""),
+                    db_service=db_service,
+                ))
+                email_resent = True
+        except Exception as resend_err:
+            logger.error("📧 Email correction/resend error: %s", resend_err)
     
     if db_service and hasattr(db_service, "upsert_motel_guest"):
         try:
-            # Save as 'inquiry' since they haven't booked yet (just memory)
-            # If they book later, the booking logic should upgrade this or we can add a 'create_booking' hook.
-            # But upsert is safe.
             db_service.upsert_motel_guest(
                 guest_name=guest_name, 
                 guest_phone=guest_phone, 
@@ -982,14 +1020,20 @@ async def handle_update_guest_info(args: dict, db_service) -> dict:
                 tenant_id="coalcreek",
                 status="inquiry"
             )
-            message = "Details securely saved to guest profile."
+            if email_resent:
+                message = (
+                    f"I've updated your email address to {guest_email} and resent the payment link. "
+                    "Could you check your inbox now to make sure it has arrived?"
+                )
+            else:
+                message = "Details securely saved to guest profile."
         except Exception as e:
             logger.error(f"Failed to save guest info: {e}")
             message = "Details captured."
     else:
         message = "Details captured (temporary)."
         
-    return {"success": True, "message": message}
+    return {"success": True, "message": message, "email_resent": email_resent}
 
 
 # =============================================================================
@@ -1088,13 +1132,14 @@ class CoalCreekFunctionDispatcher:
     Ensures 'coalcreek' context is set for all KB operations.
     """
     
-    def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, caller_memory_bank=None, call_sid: str = ""):
+    def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, caller_memory_bank=None, call_sid: str = "", adk_orchestrator=None):
         self.db_service = db_service
         self.user_phone = user_phone
         self.save_reservation_fn = save_reservation_fn
         self.abuse_protection = abuse_protection
         self.caller_memory_bank = caller_memory_bank  # CallerMemoryBank for persistent profile saves
         self.call_sid = call_sid  # Twilio CallSid for ADK session keying
+        self.adk_orchestrator = adk_orchestrator  # In-process ADKOrchestrator (avoids HTTP loopback)
         # Always set context on init
         set_tenant_context("coalcreek")
 
@@ -1277,26 +1322,41 @@ class CoalCreekFunctionDispatcher:
              if not query:
                  return {"error": "No query provided"}
              
-             import httpx
              call_sid = self.call_sid or "unknown"
+
+             # ── In-process path: use injected ADKOrchestrator (preferred) ──────
+             if self.adk_orchestrator is not None:
+                 try:
+                     # Reuse or create an ADK session for this call
+                     session = await self.adk_orchestrator.get_or_create_session(user_id=call_sid)
+                     response_text = await self.adk_orchestrator.query(
+                         user_id=call_sid,
+                         session_id=session.id,
+                         text=query,
+                     )
+                     return {"success": True, "answer": response_text or "I couldn't find an answer to that right now."}
+                 except Exception as e:
+                     logger.error(f"Live search (in-process) failed: {e}")
+                     return {"success": False, "error": str(e), "message": "My search service is currently unavailable."}
+
+             # ── Fallback: direct Vertex AI call (no adk_orchestrator wired) ────
              try:
-                 payload = {
-                     "call_sid": call_sid,
-                     "query": query,
-                     "session_state": {}
-                 }
-                 # Increase timeout because Google Search via Gemini takes time
-                 adk_url = f"{settings.BACKEND_URL.rstrip('/')}/api/adk/query"
-                 async with httpx.AsyncClient(timeout=45.0) as client:
-                     resp = await client.post(adk_url, json=payload)
-                 if resp.status_code == 200:
-                     data = resp.json()
-                     response_text = data.get("response", "I'm sorry, I couldn't find an answer to that right now.")
-                     return {"success": True, "answer": response_text}
-                 else:
-                     return {"success": False, "error": f"ADK returned status {resp.status_code}", "message": "I'm having trouble connecting to my search service."}
+                 from google import genai
+                 from google.genai import types as genai_types
+                 import os
+                 project = os.getenv("GOOGLE_CLOUD_PROJECT", "project-bd29d7f8-c65f-4597-b7b")
+                 location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+                 client = genai.Client(vertexai=True, project=project, location=location)
+                 response = client.models.generate_content(
+                     model="gemini-2.5-flash",
+                     contents=query,
+                     config=genai_types.GenerateContentConfig(
+                         tools=[{"google_search": {}}]
+                     )
+                 )
+                 return {"success": True, "answer": response.text}
              except Exception as e:
-                 logger.error(f"Live search failed: {e}")
+                 logger.error(f"Live search (fallback) failed: {e}")
                  return {"success": False, "error": str(e), "message": "My search service is currently unavailable."}
              
         elif function_name == "get_policies":
@@ -1310,7 +1370,7 @@ class CoalCreekFunctionDispatcher:
              return await handle_report_missing_booking(args, self.user_phone)
              
         elif function_name == "update_guest_info":
-             result = await handle_update_guest_info(args, self.db_service)
+             result = await handle_update_guest_info(args, self.db_service, user_phone=self.user_phone)
              # Persist profile to CallerMemoryBank on successful guest info capture
              if result.get("success") and self.caller_memory_bank:
                  profile_data = {}

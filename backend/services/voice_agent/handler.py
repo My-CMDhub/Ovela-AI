@@ -323,9 +323,27 @@ class VoiceAgentHandler:
         }
 
     def _should_offer_one_more_help_before_hangup(self, user_utterance: str) -> bool:
-        # P9 UX Optimization: Rely purely on LLM's deep contextual intent detection 
-        # to decide call completion, avoiding accidental keyword triggers or premature close blocks.
-        return False
+        """
+        UX gate: intercept the first LLM end_call for genuine callers.
+
+        Rules:
+        - Abusive/flagged callers (violation_count or off_topic_count > 0) → hang up immediately.
+        - Final offer already spoken (loop guard) → hang up immediately.
+        - Otherwise → intercept, offer one last help prompt, set loop guard.
+        """
+        # 1. Skip gate for abusive/flagged callers — hang up without soft offer.
+        if self.abuse_protection and (
+            getattr(self.abuse_protection, 'violation_count', 0) > 0
+            or getattr(self.abuse_protection, 'off_topic_count', 0) > 0
+        ):
+            return False
+
+        # 2. Loop guard — if we already offered, do not intercept a second time.
+        if self._final_help_offer_active:
+            return False
+
+        # 3. Genuine first-close for a non-abusive caller → intercept.
+        return True
 
 
     def _should_end_call_deterministically(self, user_utterance: str) -> bool:
@@ -739,6 +757,10 @@ class VoiceAgentHandler:
     
         if self.tenant_id == "coalcreek" or pms_provider == "update 247":
             from .functions import CoalCreekFunctionDispatcher
+            # Pass the in-process ADK orchestrator so perform_live_search queries
+            # it directly instead of making a loopback HTTP POST to Cloud Run.
+            _adk_orchestrator = getattr(getattr(self.twilio_ws, 'app', None), 'state', None)
+            _adk_orchestrator = getattr(_adk_orchestrator, 'adk_orchestrator', None)
             self.function_dispatcher = CoalCreekFunctionDispatcher(
                 db_service=db_service,
                 user_phone=self.user_phone,
@@ -746,6 +768,7 @@ class VoiceAgentHandler:
                 abuse_protection=self.abuse_protection,
                 caller_memory_bank=self.caller_memory_bank,
                 call_sid=self.call_sid or "",
+                adk_orchestrator=_adk_orchestrator,
             )
             logger.info("✅ Using Coal Creek/update 247 Dispatcher")
             

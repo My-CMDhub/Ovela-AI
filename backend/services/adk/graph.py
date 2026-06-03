@@ -29,7 +29,6 @@ from typing import Any
 
 from google.adk.agents import LlmAgent
 from google.adk.runners import Runner
-from google.adk.tools import google_search
 from google.genai import types
 
 from services.adk.session_service import AppwriteSessionService

@@ -265,6 +265,29 @@ class BookingsMixin:
             return []
 
 
+    # ==================== MOTEL RESERVATION UPDATES ====================
+
+    async def update_motel_reservation(self, booking_id: str, data: dict) -> dict:
+        """
+        Generic PATCH for a motel reservation document.
+        Merges ``data`` fields into the existing document.
+        """
+        try:
+            from datetime import datetime as _dt
+            update_data = dict(data)
+            update_data.setdefault("updated_at", _dt.now(ZoneInfo("Australia/Melbourne")).isoformat())
+            result = await self._motel_request(
+                "PATCH",
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents/{booking_id}",
+                data={"data": update_data},
+            )
+            if result:
+                logger.info("📝 Reservation %s patched: %s", booking_id, list(data.keys()))
+            return result
+        except Exception as e:
+            logger.error("Error updating motel reservation %s: %s", booking_id, e)
+            return None
+
     # ==================== PAYMENT STATUS TRACKING ====================
     
     async def update_booking_payment_status(
