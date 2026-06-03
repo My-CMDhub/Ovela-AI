@@ -369,7 +369,7 @@ class VoiceAgentHandler:
         voice_settings = self.tenant_config.get("voice_settings", {})
         _stt_model = voice_settings.get("model", "nova-2")
         _endpointing = voice_settings.get("endpointing",
-                        voice_settings.get("utterance_end_ms", 250 if "nova-3" in _stt_model else 300))
+                        voice_settings.get("utterance_end_ms", 300 if "nova-3" in _stt_model else 300))
 
         # ── Domain vocabulary for accent-resilient STT ────────────────────────
         # Nova-2 uses 'keyterms' (flat list of strings).

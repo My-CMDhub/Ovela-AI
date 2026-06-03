@@ -51,7 +51,7 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         },
         {
             "name": "create_booking_request",
-            "description": "Create a provisional soft hold booking request. Tell guest: 'I've placed a temporary hold — staff will send confirmation shortly.'",
+            "description": "Create a booking and instantly send a payment link to the guest's email. DO NOT CALL THIS unless the caller has explicitly confirmed their email spelling.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -206,7 +206,7 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         },
         {
             "name": "update_guest_info",
-            "description": "Save guest name/phone/email to memory context.",
+            "description": "Save guest info. CRITICAL: If fixing a wrong email, this function AUTOMATICALLY RESENDS the payment link. DO NOT call create_booking_request again after using this.",
             "parameters": {
                 "type": "object",
                 "properties": {
