@@ -12,6 +12,8 @@ Key Design:
 import logging
 import time
 import copy
+import random
+import string
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import asyncio
@@ -491,7 +493,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                     if room_name in available_rooms:
                         prices[room_name] = room.get("price_per_night")
             
-            room_list = ", ".join([f"{r} (${prices.get(r)}/night)" for r in available_rooms if r in prices])
+            room_list = ", ".join([f"{r} (${prices.get(r)} per night)" for r in available_rooms if r in prices])
             
             payload = {
                 "available": True,
@@ -613,8 +615,8 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     rate = room_data["price"]
     total = rate * num_nights
     
-    # Booking Ref
-    booking_ref = f"CC-{int(time.time()) % 100000:05d}"
+    # Booking Ref — 36^6 = 2.17B combos, effectively zero collision risk
+    booking_ref = f"CC-{''.join(random.choices(string.ascii_uppercase + string.digits, k=6))}"
     now = datetime.now().isoformat()
     
     reservation_data = {
@@ -639,8 +641,17 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     }
 
     if not settings.USE_LIVE_SCRAPING:
-        # PMS Mode: Try to assign a specific room instantly and confirm the booking
-        avail_res = await _check_appwrite_availability(db_service, check_in, check_out, room_data["name"])
+        # P11-F: Skip redundant Appwrite re-check if availability was already confirmed
+        # in this session (availability_cache passed via args from check_availability call).
+        # Falls back to a fresh check if no cached result available.
+        _avail_cache = args.get("_availability_cache") or {}
+        _cache_key = f"{check_in}|{check_out}|{room_data['name']}"
+        _cached = _avail_cache.get(_cache_key) if isinstance(_avail_cache, dict) else None
+        if _cached and _cached.get("available") is True:
+            avail_res = {"success": True, "available_all_nights": True, "per_night_results": _cached.get("per_night_results", {})}
+            logger.info("♻️ PMS booking: skipping re-check — using session availability cache for %s", _cache_key)
+        else:
+            avail_res = await _check_appwrite_availability(db_service, check_in, check_out, room_data["name"])
         if avail_res.get("success") and avail_res.get("available_all_nights"):
             per_night = avail_res.get("per_night_results", {})
             first_night_date = list(per_night.keys())[0] if per_night else None
@@ -663,15 +674,29 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         # Save to DB (if saving function provided)
         if save_reservation_fn:
             save_res = await save_reservation_fn(reservation_data)
-            if isinstance(save_res, dict) and not save_res.get("success"):
-                logger.error(f"Failed to save reservation: {save_res.get('error')}")
+            
+            if save_res is None or not save_res.get("success"):
+                err_detail = (save_res or {}).get("error", "unknown") if save_res else "None returned"
+                logger.error(f"Failed to save reservation: {err_detail}")
                 return {
                     "success": False,
                     "message": "There was a system error securing your hold. Please try again or contact reception."
                 }
-        
 
-            
+            # P11-C: Capture saved doc $id so cold-path skips race-prone re-fetch
+            saved_doc_id = (save_res.get("document") or {}).get("$id")
+            if saved_doc_id:
+                reservation_data["_saved_doc_id"] = saved_doc_id
+
+        # Speak the booking reference — natural cadence: "CC, AB 1 2 3 4"
+        # Split on dash: "CC-AB1234" → prefix="CC", suffix="AB1234"
+        _parts = booking_ref.split("-", 1)
+        if len(_parts) == 2:
+            _prefix = " ".join(_parts[0])          # "C C"
+            _suffix = " ".join(_parts[1])           # "A B 1 2 3 4"
+            ref_spoken = f"{_prefix}, {_suffix}"   # "C C, A B 1 2 3 4"
+        else:
+            ref_spoken = " ".join(booking_ref)
         return {
             "success": True,
             "booking_reference": booking_ref,
@@ -681,12 +706,16 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "check_out_date": check_out,
             "room_type": room_data["name"],
             "total_amount": total,
+            "_saved_doc_id": reservation_data.get("_saved_doc_id"),
             "message": (
-                f"I've placed a hold on the room and sent the payment link to {guest_email}. "
-                "Just to make sure we got the spelling right, could you check your inbox now "
-                "and confirm if it has arrived? I'll stay on the line with you."
+                f"I've placed a hold and your reference is {ref_spoken}. "
+                f"A payment link has been sent to {guest_email} — "
+                "could you check your inbox now to confirm it arrived? I'll stay on the line."
                 if guest_email
-                else "I've placed a hold on your room. Our team will follow up with payment details shortly."
+                else (
+                    f"I've placed a hold on your room. Your reference is {ref_spoken}. "
+                    "Our team will follow up with payment details shortly."
+                )
             )
         }
 
@@ -1050,11 +1079,16 @@ async def _handle_stripe_and_guest_email(
     check_in: str,
     check_out: str,
     db_service,
+    saved_doc_id: str | None = None,
 ) -> None:
     """
     Cold-path task: creates Stripe checkout session, PATCHes Appwrite reservation
     to pending_payment with expiry, and emails the guest payment link.
     Never raises — all errors are logged and swallowed.
+
+    P11-C: If saved_doc_id is provided (from the save_reservation_fn response),
+    it is used directly to PATCH Appwrite, eliminating the get_booking_by_reference
+    re-fetch and its associated race condition + round-trip latency.
     """
     try:
         from .stripe_handlers import create_checkout_session
@@ -1074,13 +1108,21 @@ async def _handle_stripe_and_guest_email(
             logger.info("💳 Stripe not configured — skipping payment link dispatch for %s", booking_ref)
             return
 
-        # ── 1. PATCH Appwrite reservation to pending_payment ──────────────────
+        # ── 1. PATCH Appwrite reservation to pending_payment ────────────────────
         if db_service:
             try:
-                doc = await db_service.get_booking_by_reference(booking_ref)
-                if doc and doc.get("$id"):
+                if saved_doc_id:
+                    # P11-C: Fast path — no re-fetch, no race condition
+                    doc_id = saved_doc_id
+                    logger.info("💳 Using saved_doc_id for PATCH (skipping re-fetch): %s", doc_id)
+                else:
+                    # Fallback: lookup by reference (for resend paths like update_guest_info)
+                    doc = await db_service.get_booking_by_reference(booking_ref)
+                    doc_id = doc.get("$id") if doc else None
+
+                if doc_id:
                     await db_service.update_booking_payment_status(
-                        booking_id=doc["$id"],
+                        booking_id=doc_id,
                         payment_status="pending_payment",
                         payment_link_url=stripe_url,
                         payment_expires_at=expiry_ts,
@@ -1198,6 +1240,39 @@ class CoalCreekFunctionDispatcher:
             logger.debug("🤖 ADK cold path skipped (no event loop)")
 
     
+    async def _notify_staff_booking_created(
+        self,
+        guest_name: str,
+        guest_phone: str,
+        guest_email: str,
+        check_in: str,
+        check_out: str,
+        room_type: str,
+        total_amount: float,
+        booking_ref: str,
+        num_nights: int,
+    ) -> None:
+        """P11-D: Fire-and-forget staff notification when a voice booking hold is created.
+        Ensures staff are immediately aware of holds, even if the guest never pays.
+        Never raises — cold-path safety contract.
+        """
+        try:
+            from services.staff_notifications import staff_notification_service
+            await staff_notification_service.notify_new_booking_request(
+                guest_name=guest_name,
+                guest_phone=guest_phone,
+                guest_email=guest_email,
+                check_in=check_in,
+                check_out=check_out,
+                room_type=room_type,
+                total_amount=total_amount,
+                booking_reference=booking_ref,
+                num_nights=num_nights,
+            )
+            logger.info("📧 Staff notified of new voice booking hold: %s", booking_ref)
+        except Exception as notify_err:
+            logger.error("📧 Staff notification failed for %s: %s", booking_ref, notify_err)
+
     async def execute(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Execute a function with basic error handling."""
         import asyncio
@@ -1251,6 +1326,11 @@ class CoalCreekFunctionDispatcher:
             return await handle_check_availability(args, self.db_service, context=context)
 
         elif function_name == "create_booking_request":
+            # P11-F: Thread availability_cache into the handler so it can skip re-check
+            if isinstance(context, dict) and "availability_cache" in context:
+                args = dict(args)  # shallow copy — don't mutate caller's dict
+                args["_availability_cache"] = context["availability_cache"]
+
             result = await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn, self.db_service)
 
             if result.get("success"):
@@ -1259,23 +1339,45 @@ class CoalCreekFunctionDispatcher:
                 total_amt   = result.get("total_amount", 0)
                 guest_phone = args.get("guest_phone", "") or self.user_phone
                 guest_name  = args.get("guest_name", "")
+                check_in    = result.get("check_in_date", "")
+                check_out   = result.get("check_out_date", "")
+                guest_email = args.get("guest_email", "")
+                num_nights  = max(1, result.get("num_nights", 1))
 
-                # ── Task 3: Stripe Checkout + Email (Cold Path, fire-and-forget) ──
+                # P11-C: Use saved doc $id to skip race-prone get_booking_by_reference
+                saved_doc_id = result.get("_saved_doc_id")
+
+                # ── Task 1: Stripe Checkout + Email (Cold Path, fire-and-forget) ──
                 asyncio.create_task(_handle_stripe_and_guest_email(
                     booking_ref=booking_ref,
                     room_type=room_type,
                     total_amt=total_amt,
-                    guest_email=args.get("guest_email", ""),
+                    guest_email=guest_email,
                     guest_name=guest_name,
                     guest_phone=guest_phone,
-                    check_in=result.get("check_in_date", ""),
-                    check_out=result.get("check_out_date", ""),
+                    check_in=check_in,
+                    check_out=check_out,
                     db_service=self.db_service,
+                    saved_doc_id=saved_doc_id,
                 ))
 
-                # ── Task 2: ADK Cold Path session state update ─────────────────
+                # ── Task 2: Staff Notification (P11-D, fire-and-forget) ────────
+                asyncio.create_task(
+                    self._notify_staff_booking_created(
+                        guest_name=guest_name,
+                        guest_phone=guest_phone,
+                        guest_email=guest_email,
+                        check_in=check_in,
+                        check_out=check_out,
+                        room_type=room_type,
+                        total_amount=total_amt,
+                        booking_ref=booking_ref,
+                        num_nights=num_nights,
+                    )
+                )
+
+                # ── Task 3: ADK Cold Path session state update ─────────────────
                 if self.call_sid:
-                    check_in = args.get("check_in_date", "")
                     adk_query = f"Booking confirmed for {guest_name}: {room_type} room, check-in {check_in}."
                     self.fire_adk_cold_path(
                         query=adk_query,

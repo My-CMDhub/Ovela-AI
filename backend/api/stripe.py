@@ -1,7 +1,20 @@
 """
-Stripe Webhook API Endpoint
-Handles payment confirmation webhooks from Stripe
+Stripe Webhook API Endpoint — POST /api/stripe/webhook
+Handles payment confirmation webhooks from Stripe.
+
+P11-E AUDIT NOTE (2026-06-03):
+  Two webhook endpoints exist in this codebase:
+    1. POST /api/stripe/webhook          (this file)
+    2. POST /api/motel/payments/webhook  (api/dashboard.py:864)
+
+  Only ONE URL can be registered in the Stripe dashboard at a time.
+  api/dashboard.py handler is MORE COMPLETE: handles checkout.session.expired,
+  setup mode vs payment mode, and uses doc.get("num_nights", 1) from Appwrite.
+  This handler (api/stripe.py) is simpler but now also has correct num_nights
+  derivation. Both are kept live. Check Stripe dashboard to confirm which URL
+  is registered. If switching to the dashboard handler, comment out this route.
 """
+
 import logging
 from fastapi import APIRouter, Request, HTTPException
 from services.stripe_payment import stripe_payment_service
@@ -60,7 +73,17 @@ async def stripe_webhook(request: Request):
             amount_total = session.get("amount_total", 0) / 100  # Convert cents to dollars
             stripe_payment_id = session.get("payment_intent")
 
-            logger.info(f"✅ Payment confirmed for booking {booking_ref}: ${amount_total}")
+            # Derive num_nights from metadata (P11-A fix: was hardcoded to 1)
+            try:
+                from datetime import datetime as _dt
+                _ci = _dt.strptime(check_in, "%Y-%m-%d").date()
+                _co = _dt.strptime(check_out, "%Y-%m-%d").date()
+                num_nights = max(1, (_co - _ci).days)
+            except Exception:
+                num_nights = 1
+                logger.warning("Could not derive num_nights from metadata (%s → %s), defaulting to 1", check_in, check_out)
+
+            logger.info(f"✅ Payment confirmed for booking {booking_ref}: ${amount_total} ({num_nights} nights)")
             logger.info(f"📧 Guest email: {guest_email}, Name: {guest_name}")
 
             # Update booking status in Appwrite motel_reservations
@@ -88,7 +111,7 @@ async def stripe_webhook(request: Request):
                         room_type=room_type,
                         check_in=check_in,
                         check_out=check_out,
-                        num_nights=1,
+                        num_nights=num_nights,
                         total_amount=amount_total,
                         business_name="Coal Creek Motel",
                         tenant_id="coalcreek"
@@ -108,7 +131,7 @@ async def stripe_webhook(request: Request):
                     room_type=room_type,
                     check_in=check_in,
                     check_out=check_out,
-                    num_nights=1,
+                    num_nights=num_nights,
                     amount_paid=amount_total
                 )
                 logger.info(f"📧 Staff payment notification sent to {staff_email}")

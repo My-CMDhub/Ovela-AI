@@ -328,6 +328,10 @@ def clean_tts_output(text: str) -> str:
 
     result = text
 
+    # ── Room type slash normalization (before markdown pass) ────────────────
+    # "Queen/Double" → "Queen and Double" — prevent TTS speaking "slash"
+    result = result.replace("Queen/Double", "Queen and Double")
+
     # Remove control signals
     for signal in CONTROL_SIGNALS:
         result = result.replace(signal, '')

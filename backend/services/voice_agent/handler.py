@@ -2335,7 +2335,13 @@ class VoiceAgentHandler:
     # =========================================================================
     
     async def _save_motel_reservation(self, data: dict) -> dict:
-        """Save reservation to motel_reservations collection using async httpx."""
+        """Save reservation to motel_reservations collection using async httpx.
+
+        Returns a standard wrapper dict so callers can reliably check success:
+            {"success": True, "document": <appwrite_doc>}   on success
+            {"success": False, "error": "<message>"}        on failure
+        Never raises — callers must handle the None/False cases.
+        """
         try:
             doc_id = ID.unique()
             headers = {
@@ -2346,15 +2352,21 @@ class VoiceAgentHandler:
             data["tenant_id"] = self.tenant_id
             url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
             payload = {"documentId": doc_id, "data": data}
-            
+
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
-                return response.json()
-                
+                doc = response.json()
+                logger.info(
+                    "✅ Reservation saved | doc_id=%s | booking_ref=%s",
+                    doc.get("$id", doc_id),
+                    data.get("booking_reference", "?"),
+                )
+                return {"success": True, "document": doc}
+
         except Exception as e:
             logger.error(f"Error saving reservation: {e}")
-            return None
+            return {"success": False, "error": str(e)}
 
 
     async def _cleanup(self):

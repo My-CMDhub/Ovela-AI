@@ -68,7 +68,7 @@ UPDATES/CANCELLATIONS: → TRANSFER TO STAFF. HIGH VALUE (>$1000, 7+ nights, mul
     # Build room types section dynamically
     room_types_text = ""
     for key, room in COALCREEK_DATA["rooms"].items():
-        room_types_text += f"- {room['name']} (${room['price']}/night): {room['features']}\n"
+        room_types_text += f"- {room['name']} (${room['price']} per night): {room['features']}\n"
         room_types_text += f"  Best for: {room['best_for']}\n"
 
     # Build amenities list (first 10)
