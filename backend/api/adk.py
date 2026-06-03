@@ -158,6 +158,6 @@ async def adk_health():
     return {
         "status": "ok",
         "agents": ["OvelaManager", "BookingWorker", "InfoWorker"],
-        "model": "gemini-2.0-flash",
+        "model": "gemini-2.5-flash",
         "session_backend": "InMemorySessionService",
     }

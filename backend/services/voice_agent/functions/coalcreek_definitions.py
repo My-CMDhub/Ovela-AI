@@ -261,7 +261,7 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         },
         {
             "name": "transfer_to_staff",
-            "description": "Transfer the caller to a staff member or receptionist. Use when the caller says 'put me through', 'speak to someone', 'talk to a human', 'transfer me', 'receptionist', 'staff', or any similar phrase requesting a live person. Do NOT confuse with end_call.",
+            "description": "Transfer the caller to a staff member or receptionist. ONLY use when the caller explicitly says YES to a transfer offer, or explicitly asks to be transferred (e.g., 'speak to someone', 'transfer me'). NEVER execute this proactively without explicit permission. If the user interrupts you or does not give clear confirmation, DO NOT transfer them.",
             "parameters": {
                 "type": "object",
                 "properties": {}

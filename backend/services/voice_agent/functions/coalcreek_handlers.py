@@ -1323,7 +1323,7 @@ class CoalCreekFunctionDispatcher:
                  return {"error": "No query provided"}
 
              # ── Direct Vertex AI call (Hot Path optimized) ────────────────────
-             # Uses gemini-2.0-flash (not 2.5-flash) — 40-50% faster for grounding
+             # Uses gemini-2.5-flash — optimized for grounding
              # tasks with no quality loss for weather/news lookups. Thinking is
              # explicitly disabled (budget=0) to cut another 300-500ms per call.
              # ─────────────────────────────────────────────────────────────────
@@ -1335,7 +1335,7 @@ class CoalCreekFunctionDispatcher:
                  location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
                  client = genai.Client(vertexai=True, project=project, location=location)
                  response = client.models.generate_content(
-                     model="gemini-2.0-flash",
+                     model="gemini-2.5-flash",
                      contents=query,
                      config=genai_types.GenerateContentConfig(
                          tools=[{"google_search": {}}],
