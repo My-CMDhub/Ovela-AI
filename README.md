@@ -39,7 +39,7 @@ To achieve both sub-second latency and deep reasoning, Ovela utilizes a dual-pat
 - **Purpose:** Manages the immediate, real-time speech interaction and conversational flow.
 - **Components:** Deepgram Nova-3 (STT) with domain-specific keyterm boosting, Cartesia Sonic-3 (TTS) with cached system voices.
 
-### Cold Path (Async Business Logic, 100% Gemini & ADK)
+### Cold Path (Async Business Logic, Gemini & ADK)
 - **Flow:** Webhook Trigger → FastAPI ADK Router → `OvelaManager` (LlmAgent)
   - ├─ `BookingWorker` (availability, Stripe, email)
   - └─ `InfoWorker` (policies, live search grounding)

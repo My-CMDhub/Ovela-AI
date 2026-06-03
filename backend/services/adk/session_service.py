@@ -150,7 +150,7 @@ class AppwriteSessionService(BaseSessionService):
         """Create and persist a new session."""
         import uuid
 
-        sid = session_id or f"sess_{uuid.uuid4().hex}"
+        sid = session_id or f"s_{uuid.uuid4().hex}"
         now = time.time()
 
         doc_data = {

@@ -389,7 +389,10 @@ class ADKOrchestrator:
             ADK Session object with a stable `.id` attribute.
         """
         # Deterministic session_id derived from user_id so re-entry returns same session
-        session_id = f"sess_{user_id}"
+        # Twilio Call SIDs are 34 chars. With "sess_" prefix, it's 39 chars. Appwrite limits doc IDs to 36 chars.
+        # Let's use MD5 hash to guarantee a safe 34-char ID.
+        import hashlib
+        session_id = "s_" + hashlib.md5(user_id.encode("utf-8")).hexdigest()
 
         try:
             existing = await self._session_service.get_session(

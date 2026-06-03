@@ -456,7 +456,7 @@ class VoiceAgentHandler:
                 },
                 "think": self._get_llm_config(),
                 "speak": self._get_tts_config(),
-                "greeting": "Sorry about that, it looks like no one is available. How can I help you instead?" if transfer_failed else self._get_active_greeting()
+                "greeting": ""
             }
         }
     
@@ -602,14 +602,17 @@ class VoiceAgentHandler:
             logger.warning(f"⚠️ Invalid Voice ID format: {voice_id} - falling back to default")
             voice_id = CARTESIA_VOICE_ID
             
-        # Get dynamic speed (multiplier: 1.0 is default, 0.8 is slower) - isn't supported natively by deepgram currently
-        speed = voice_settings.get("speed", 1.0)
+        # Get dynamic speed and volume parameters for Cartesia provider
+        speed = voice_settings.get("speed", 0.8)
+        volume = voice_settings.get("volume", 0.8)
         
-        logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id}) | Speed: {speed}")
+        logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
         return {
             "provider": {
                 "type": "cartesia",
                 "model_id": "sonic-3",
+                "speed": speed,
+                "volume": volume,
                 "voice": {
                     "mode": "id",
                     "id": voice_id
@@ -682,6 +685,25 @@ class VoiceAgentHandler:
         self.tenant_id = explicit_tenant if explicit_tenant else (settings.TENANT_ID or "coalcreek")
 
         # =====================================================================
+        # PLAY GREETING INSTANTLY: Stream pre-recorded greeting mulaw bytes 
+        # from memory cache immediately to Twilio. While it plays, the async
+        # database loading and Deepgram connection setup proceed in parallel.
+        # =====================================================================
+        transfer_failed = self.custom_params.get("transfer_failed") == "true"
+        if transfer_failed:
+            logger.info("🔊 Playing transfer_failed greeting instantly from cache")
+            asyncio.create_task(self._speak_system_message(
+                "Sorry about that, it looks like no one is available. How can I help you instead?",
+                clip_key="transfer_failed"
+            ))
+        else:
+            logger.info("🔊 Playing smart_greeting instantly from cache")
+            asyncio.create_task(self._speak_system_message(
+                self._get_active_greeting(),
+                clip_key="smart_greeting"
+            ))
+
+        # =====================================================================
         # ASYNC INIT: Fetch profile and tenant config concurrently
         # Reduces cold start TTFT latency by not blocking sequentially.
         # =====================================================================
@@ -725,10 +747,6 @@ class VoiceAgentHandler:
         if self.demo_type == "brand_rep":
             self.MAX_DEMO_DURATION_SECONDS = 300  # 5 minutes
             logger.info("🕒 Extended duration for Brand Rep demo (5 mins)")
-            
-        # START SENTINEL: Smart Greeting (only for demo calls)
-        if self.is_demo_call:
-             self.smart_greeting_task = asyncio.create_task(self._smart_greeting_logic())
             
         call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
             
