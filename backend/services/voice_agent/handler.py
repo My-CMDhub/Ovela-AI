@@ -427,11 +427,8 @@ class VoiceAgentHandler:
             "type": "deepgram",
             "model": _stt_model,
             "endpointing": _endpointing,
+            "keyterms": _domain_terms,
         }
-        if "nova-3" in _stt_model:
-            _stt_provider["vocabulary"] = [{"word": t} for t in _domain_terms]
-        else:
-            _stt_provider["keyterms"] = _domain_terms
 
         return {
             "type": "Settings",
