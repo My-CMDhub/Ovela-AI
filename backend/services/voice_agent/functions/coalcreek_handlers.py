@@ -794,8 +794,16 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
     def _build_confirmation_prompt(result: dict, found_by: str, name_mismatch: bool = False) -> str:
         guest = result.get("guest_name") or "that guest"
         details = _booking_detail_tail(result)
+        
+        # Real-world security verification: don't give away the name immediately if we just matched the phone
         if found_by == "caller_phone":
-            opener = f"I found a booking on this number under {guest}"
+            opener = "I see a booking linked to this phone number"
+            if details:
+                opener = f"{opener} {details}"
+            if name_mismatch:
+                return f"{opener}. I have a different name on file though — what name is it under?"
+            return f"{opener}. could you just verify the first name on the reservation?"
+            
         elif found_by == "phone":
             opener = f"I found a booking on that number under {guest}"
         elif found_by == "reference":
@@ -803,7 +811,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         else:
             opener = f"I found a booking under {guest}"
 
-        if details:
+        if details and found_by != "caller_phone":
             opener = f"{opener} {details}"
 
         if name_mismatch:
@@ -812,16 +820,21 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
 
     def _format_doc(doc, total_docs, found_by: str = "", name_mismatch: bool = False):
         result = {
-            "found":             True,
-            "booking_reference": doc.get("booking_reference", ""),
-            "guest_name":        doc.get("guest_name", ""),
-            "room_type":         doc.get("room_type", ""),
-            "check_in_date":     doc.get("check_in_date", ""),
-            "check_out_date":    doc.get("check_out_date", ""),
-            "num_nights":        doc.get("num_nights", ""),
-            "status":            doc.get("status", ""),
-            "total_amount":      doc.get("total_amount", ""),
-            "other_bookings":    total_docs - 1,
+            "found":                  True,
+            "booking_reference":      doc.get("booking_reference", ""),
+            "guest_name":             doc.get("guest_name", ""),
+            "guest_phone":            doc.get("guest_phone", ""),
+            "guest_email":            doc.get("guest_email", ""),
+            "room_type":              doc.get("room_type", ""),
+            "check_in_date":          doc.get("check_in_date", ""),
+            "check_out_date":         doc.get("check_out_date", ""),
+            "num_nights":             doc.get("num_nights", ""),
+            "status":                 doc.get("status", ""),
+            "payment_status":         doc.get("payment_status", "pending"),
+            "payment_link_sent":      bool(doc.get("payment_link_url") or doc.get("payment_link_sent_at")),
+            "payment_link_url":       doc.get("payment_link_url", ""),
+            "total_amount":           doc.get("total_amount", ""),
+            "other_bookings":         total_docs - 1,
         }
         if found_by:
             result["found_by"] = found_by
