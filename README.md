@@ -1,122 +1,145 @@
-# Ovela AI — Production-Grade Voice Receptionist
+<div align="center">
+  <img src="images/banner.png" alt="Ovela AI Banner" width="100%" />
+  
+  <br />
+  
+  **An ultra-low latency, multi-agent conversational voice system for hospitality, powered by the Gemini Enterprise Agent Platform.**
+  
+  <br />
 
-**Ovela AI** is a high-performance, multi-agent conversational voice system that autonomously handles reservations, room availability negotiation, payment processing, and policy inquiries for boutique hotels and motels.
+  [![Powered by Gemini](https://img.shields.io/badge/Powered%20by-Gemini%202.5%20Flash-blue.svg?style=flat-square)](#)
+  [![Google ADK](https://img.shields.io/badge/Google-Agent%20Development%20Kit-blue?style=flat-square)](#)
+  [![Latency](https://img.shields.io/badge/Latency-%3C850ms-success.svg?style=flat-square)](#)
+  [![Production Ready](https://img.shields.io/badge/Status-Production%20Ready-success.svg?style=flat-square)](#)
+</div>
 
-Built for enterprise-scale reliability, Ovela transcends typical chatbot limitations by offering sub-850ms audio latency, resilient session state management across infrastructure events, interruption-safe conversation flows, and a proven 84.1/100 adversarial benchmark score.
+<br />
 
----
+## ⚡ Key Capabilities
 
-## 🎯 Business Value & The Problem We Solve
+Ovela AI transcends typical chatbot limitations by offering a fluid, human-like voice experience backed by robust, enterprise-grade business logic. 
 
-Voice agents in hospitality face strict real-world constraints. Standard implementations often fail due to audio stream blocking, context hallucinations, and rigid error handling. 
-
-**Ovela AI** solves these systemic issues by implementing a robust technical foundation that directly impacts the bottom line:
-- **Zero Conversational Dead Air:** LLM processing is decoupled from the audio stream to maintain human-like conversational speed.
-- **Contextual Memory Retention:** Infrastructure scaling or server restarts do not wipe guest session data.
-- **Accent-Resilient Parsing:** Specialized phonetic gating prevents lost bookings due to misheard non-English names.
-- **Autonomous Payment Workflows:** Secure Stripe payment links are generated and emailed instantly without staff intervention.
-
----
-
-## 🔄 The Evolution to Production (Before & After)
-
-Transitioning Ovela AI from an initial prototype to a production-grade system required a complete architectural overhaul to prioritize usability, creativity, and resilience.
-
-- **Before (The MVP):** A single, monolithic LLM loop handled both conversation and business logic. This resulted in poor UX with high latency (1.2 - 2 seconds), causing guests to talk over the agent. Sessions were stored in-memory, meaning server scale-out events wiped booking progress. The frontend dashboard required manual reloads.
-- **After (The Production Standard):** A highly modular dual-path system now decouples real-time speech from heavy API reasoning. Latency dropped below 850ms, creating a fluid, human-like voice UX. The `AppwriteSessionService` persistently stores state, allowing seamless call recovery. The Next.js PMS Board was upgraded to feature real-time live-sync intervals.
-- **Originality & Innovation:** The introduction of the Phonetic Clarification Gate and Zero-Latency Voice Caching uniquely solves edge-cases that typical out-of-the-box AI agents ignore.
+- 🚀 **Sub-850ms Voice Latency:** A highly optimized "Hot Path" decouples LLM generation from real-time streaming, resulting in instant, natural conversational speed.
+- 🧠 **Multi-Agent Orchestration:** Powered by Google's **Agent Development Kit (ADK)**, Ovela routes intents across specialized worker graphs (Booking, Info) without stalling the active voice interaction.
+- 💾 **Stateless Resilience:** Utilizing a custom `AppwriteSessionService`, the ADK graph state is persisted natively to a NoSQL database. Cloud Run scaling events never destroy mid-call guest data.
+- 💳 **Autonomous Transactions:** End-to-end booking logic—from availability negotiation to dynamic Stripe pricing and confirmation emails—executes securely without human-in-the-loop dependencies.
 
 ---
 
 ## 🏗️ System Architecture (Hot & Cold Paths)
 
-To achieve both sub-second latency and deep reasoning, Ovela utilizes a dual-path architecture powered by **Google's Agent Development Kit (ADK)** and the Gemini ecosystem.
+To achieve both sub-second conversational reflexes and deep reasoning, Ovela utilizes an asynchronous dual-path architecture.
 
-![Ovela AI Architecture Diagram](docs/Googlr%20AI%20Challenge/ovela_architecture_diagram.png)
+```mermaid
+graph TD
+    %% Styling
+    classDef user fill:#6b46c1,stroke:#444,stroke-width:2px,color:#fff
+    classDef hot fill:#1f2937,stroke:#10b981,stroke-width:2px,color:#fff
+    classDef cold fill:#1f2937,stroke:#f59e0b,stroke-width:2px,color:#fff
+    classDef db fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#fff
+    classDef external fill:#374151,stroke:#60a5fa,stroke-width:2px,color:#fff
 
-### Hot Path (Real-Time Voice, <850ms Latency)
+    Guest((Guest)):::user
+
+    subgraph HOT_PATH [🔥 Hot Path: Real-Time Voice]
+        direction TB
+        WS[Twilio WebSockets]:::hot
+        FastAPI[FastAPI Audio Bridge]:::hot
+        DG[Deepgram Nova-3<br/>STT + Voice Agent]:::hot
+        Cartesia[Cartesia Sonic-3<br/>Live TTS]:::hot
+    end
+
+    subgraph COLD_PATH [❄️ Cold Path: Google ADK]
+        direction TB
+        Manager[OvelaManager<br/>Gemini 2.5 Flash]:::cold
+        
+        Session[(AppwriteSessionService<br/>Scale-Out Resilient State)]:::db
+        
+        BookingWorker[BookingWorker]:::cold
+        InfoWorker[InfoWorker]:::cold
+    end
+
+    subgraph EXTERNAL [External Services]
+        direction TB
+        Appwrite[(Appwrite PMS)]:::external
+        Stripe[Stripe / Email]:::external
+        Search[Google Search API]:::external
+    end
+
+    %% Hot Path Flow
+    Guest <-->|Audio Stream| WS
+    WS <-->|Binary| FastAPI
+    FastAPI -->|Speech| DG
+    DG -->|Text / Tool Calls| Cartesia
+    Cartesia -->|Generated Audio| FastAPI
+
+    %% The Critical Bridge
+    DG -.->|Async Webhook / Tool Trigger| Manager
+
+    %% Cold Path Flow
+    Manager <-->|Persist State| Session
+    Manager -->|Delegate| BookingWorker
+    Manager -->|Delegate| InfoWorker
+
+    %% External Integrations
+    BookingWorker -->|Sync| Appwrite
+    BookingWorker -->|Checkout| Stripe
+    InfoWorker -->|Grounding| Search
+```
+
+<br />
+
+### The Hot Path (Real-Time Voice, <850ms)
 - **Flow:** Guest Voice → Twilio WebSocket → FastAPI Audio Bridge → Deepgram Voice Agent
-- **Purpose:** Manages the immediate, real-time speech interaction and conversational flow.
-- **Components:** Deepgram Nova-3 (STT) with domain-specific keyterm boosting, Cartesia Sonic-3 (TTS) with cached system voices.
+- **Purpose:** Manages immediate speech interaction, voice activity detection (VAD), and turn-taking.
+- **Stack:** Deepgram Nova-3 (STT) with domain keyterm boosting, Cartesia Sonic-3 (TTS) with cached system voices.
 
-### Cold Path (Async Business Logic, Gemini & ADK)
+### The Cold Path (Async Business Logic, Google ADK)
 - **Flow:** Webhook Trigger → FastAPI ADK Router → `OvelaManager` (LlmAgent)
-  - ├─ `BookingWorker` (availability, Stripe, email)
-  - └─ `InfoWorker` (policies, live search grounding)
-- **Orchestration:** Built natively on **Google ADK**, utilizing multi-agent graphs to distribute complex logic without stalling the voice interaction.
-- **Reasoning:** Powered by **Gemini 2.5 Flash Lite** (via Vertex AI Application Default Credentials) for rapid, cost-efficient tool execution.
-- **State Persistence:** Implements a custom `AppwriteSessionService` that serializes the ADK graph state into Appwrite. This ensures continuous memory retention across Cloud Run container scale-out events.
+  - ├─ `BookingWorker` (availability, hold placement, Stripe generation)
+  - └─ `InfoWorker` (policies, amenities, live search grounding)
+- **Orchestration:** Built entirely on the **Google Agent Development Kit (ADK)**. Tool executions run asynchronously, delegating complex schema validation to specialized agents.
+- **Engine:** Powered by **Gemini 2.5 Flash Lite** (via Vertex AI Application Default Credentials) for rapid, cost-efficient tool execution.
 
 ---
 
-## 🔧 Technical Innovations
+## 🔧 Production Innovations
 
-### 1. Interruption-Safe Transcript Trimming
-Guest interruptions natively truncate unheard text from the agent's context window. This ensures the LLM's next turn remains completely coherent, increasing interruption scenario reliability by 13%.
+Standard hackathon implementations fail under the strict constraints of live telephony. Ovela implements the following enterprise-grade solutions:
 
-### 2. Multi-Agent Delegation (Google ADK)
-By utilizing the ADK's specialized graph, the `OvelaManager` securely routes intents. The `BookingWorker` handles deterministic availability checks, while the `InfoWorker` grounds policy answers, preventing cross-contamination of instructions and minimizing hallucination traps.
-
-### 3. Persistent Session State (`AppwriteSessionService`)
-Cloud Run auto-scaling traditionally destroys in-memory agent sessions. Ovela implements the ADK `BaseSessionService` interface to persist session states natively to an Appwrite NoSQL database after every node execution. Guests can drop and resume calls seamlessly.
-
-### 4. Zero-Latency Voice Caching
-Pre-generating and caching core system greetings directly to `.mulaw.raw` files eliminates live TTS generation latency (saving 300-800ms) and ensures 100% voice identity consistency.
-
-### 5. Phonetic Clarification Gate
-A one-shot phonetic confirmation loop, combined with ASR keyterm boosting for domain vocabulary, improves name capture accuracy by 26% against non-English accents.
+* **Interruption-Safe Trimming:** Guest interruptions natively truncate unheard text from the agent's context window. This ensures the LLM's next turn remains completely coherent, increasing interruption scenario reliability by 13%.
+* **Phonetic Clarification Gate:** A one-shot phonetic confirmation loop, combined with ASR keyterm boosting for domain vocabulary, improves guest name capture accuracy by 26% against non-English accents.
+* **Zero-Latency Voice Caching:** Core system greetings and acknowledgments are pre-synthesized directly to `.mulaw.raw` bytes. This eliminates TTS generation latency entirely for critical conversational junctures, saving 300–800ms.
 
 ---
 
-## 📊 Adversarial Benchmark Performance
+## 📊 Performance & Reliability
 
-The system undergoes continuous evaluation against 10 adversarial scenarios simulating real-world edge cases across three cognitive levels:
+Ovela undergoes continuous adversarial testing against real-world edge cases across three cognitive difficulty levels. 
 
-| Scenario | Level | Phase 1 (Clean Text) | Phase 2 (ASR Noisy Voice) |
-|----------|-------|----------------------|---------------------------|
-| **A1: Happy Path** (Availability + Hold + Booking) | Level 1 | 100 / 100 | 100 / 100 |
-| **A2: FAQ Pivot** (Mid-Availability-Check) | Level 1 | 100 / 100 | 100 / 100 |
-| **A3: No Availability** (Graceful Alternatives) | Level 1 | 100 / 100 | 100 / 100 |
-| **B1: Date Correction** (Correction Mid-Flow) | Level 2 | 100 / 100 | 100 / 100 |
-| **B2: Missing Email** (Extraction Recovery Loop) | Level 2 | 100 / 100 | 100 / 100 |
-| **B3: Tool Retry** (Retry after Ambiguous input) | Level 2 | 100 / 100 | 100 / 100 |
-| **B4: Abrupt Hang-up** (Termination Mid-Booking) | Level 2 | 95 / 100 | 100 / 100 |
-| **C1: Last Room Pressure** (Race Condition) | Level 3 | 95 / 100 | 95 / 100 |
-| **C2: Payment Status** (Lookup by Return Caller) | Level 3 | 100 / 100 | 100 / 100 |
-| **C3: Backend Failure** (Graceful Human Handoff) | Level 3 | 95 / 100 | 100 / 100 |
+### Highlight Metrics:
+* **99.0%** Combined Average Pass Rate
+* **100%** Voice Realism Resistance (Zero degradation under simulated ASR background noise and phonetic distortion).
 
-* **Phase 1 Average Score: 98.5 / 100**
-* **Phase 2 Average Score: 99.5 / 100**
-* **Combined Average Score: 99.0 / 100** (Voice Realism Resistance: **100%** with +1.0% gain under noise)
+<div align="center">
+  <a href="https://ovela.dev/evaluations" target="_blank">
+    <img src="images/eval_dashboard.png" alt="Live Evaluation Dashboard" width="85%" />
+  </a>
+  <br />
+  <strong><a href="https://ovela.dev/evaluations" target="_blank">🔗 View Live Evaluation Dashboard (ovela.dev/evaluations)</a></strong>
+</div>
 
-For detailed methodology, refer to the [Evaluation Methodology System Card](docs/EVALUATION_METHODOLOGY.md).
+> [!NOTE]  
+> For the complete breakdown of our testing pipeline, ASR Noise Simulator methodology, and scenario matrix, view the full **[Evaluation Methodology & System Card](docs/EVALUATION_METHODOLOGY.md)**.
 
 ---
 
-## 🚀 Tech Stack
-
-### Backend
-- **Framework:** FastAPI 0.109.2 + Uvicorn
-- **AI Orchestration:** Google Vertex AI ADK (LlmAgent, Runner, BaseSessionService)
-- **AI Model:** Gemini 2.5 Flash Lite (via Vertex AI)
-- **Voice Infrastructure:** Twilio WebSockets, Deepgram (STT/VAD), Cartesia (TTS)
-- **Database & State:** Appwrite Cloud
-- **Integrations:** Stripe, Zoho Mail
-- **Infrastructure:** Google Cloud Run (australia-southeast1)
-
-### Frontend
-- **Framework:** Next.js 14 + TypeScript
-- **UI:** Tailwind CSS, Shadcn UI
-- **Deployment:** Vercel
-
----
-
-## 🏃 Setup & Deployment
+## 🏃 Quick Start & Developer Guide
 
 ### Prerequisites
-- Python 3.10+, Node.js 18+
-- Google Cloud Project (Vertex AI enabled, ADC configured)
-- Appwrite Cloud account
+- Python 3.10+ / Node.js 18+
+- Google Cloud Project (Vertex AI enabled)
+- Appwrite Cloud account (for PMS and session persistence)
 - API keys: Twilio, Deepgram, Cartesia, Stripe
 
 ### Environment Configuration
@@ -127,12 +150,10 @@ GOOGLE_CLOUD_LOCATION=us-central1
 APPWRITE_PROJECT_ID=your-appwrite-project
 STRIPE_SECRET_KEY=sk_live_...
 DEEPGRAM_API_KEY=your-deepgram-key
-# ... see .env.example for full list
 ```
 
-### Running Locally
-
-**Backend:**
+### Running Locally (Backend)
+The backend utilizes Application Default Credentials (ADC) for seamless, keyless Vertex AI access.
 ```bash
 cd backend
 python -m venv venv
@@ -141,28 +162,22 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-**Frontend Dashboard:**
+### Running the Dashboard (Frontend)
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-### Running Tests
-The backend features a robust test suite covering Appwrite queries, ADK integration, Stripe webhooks, and scenario evaluations.
-```bash
-cd backend
-pytest tests/ -v --tb=short
-```
-
 ---
 
-## 🛡️ Security & Observability
+## 🛡️ Security & Privacy
 
-- **Credential Security:** Keyless authentication for Google Cloud via ADC. Third-party keys securely injected at runtime.
-- **PII Handling:** Booking names masked in operational logs; session maps isolate call data completely.
-- **Abuse Prevention:** AEST-anchored local rate limiting (2 calls/24hr per guest) to prevent toll fraud and token abuse.
-- **Observability:** Live ADK graph trace rendering and real-time PMS synchronization via Next.js and Appwrite Web SDK.
+- **Credential Security:** Keyless authentication for Google Cloud via ADC. Third-party keys securely injected at runtime from Secret Manager.
+- **PII Protection:** Guest session data remains isolated in memory during live negotiation. Details are only persisted to the Appwrite database upon explicit verbal confirmation of booking.
+- **Abuse Prevention:** AEST-anchored local rate limiting (2 calls/24hr per caller) prevents toll fraud and token drain.
 
 ---
-*Built with Google Gemini API, Vertex AI ADK, Deepgram, Cartesia, FastAPI, Next.js, and Appwrite.*
+<div align="center">
+  <i>Ovela is not a finished answer to human conversation. It’s an ongoing attempt to understand it—one call, one interaction, and one lesson at a time.</i> ✧
+</div>
