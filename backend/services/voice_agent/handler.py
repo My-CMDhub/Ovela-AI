@@ -373,8 +373,8 @@ class VoiceAgentHandler:
         # Extract voice settings from DB config
         voice_settings = self.tenant_config.get("voice_settings", {})
         _stt_model = voice_settings.get("model", "nova-2")
-        _endpointing = voice_settings.get("endpointing",
-                        voice_settings.get("utterance_end_ms", 300 if "nova-3" in _stt_model else 300))
+        _endpointing = voice_settings.get("endpointing", 300)
+        _utterance_end_ms = voice_settings.get("utterance_end_ms", 1000)
 
         # ── Domain vocabulary for accent-resilient STT ────────────────────────
         # Nova-2 uses 'keyterms' (flat list of strings).
@@ -390,7 +390,6 @@ class VoiceAgentHandler:
         _stt_provider: dict = {
             "type": "deepgram",
             "model": _stt_model,
-            "endpointing": _endpointing,
             "keyterms": _domain_terms,
         }
 
@@ -410,7 +409,10 @@ class VoiceAgentHandler:
             "agent": {
                 "language": "en",
                 "listen": {
-                    "provider": _stt_provider
+                    "provider": _stt_provider,
+                    "endpointing": _endpointing,
+                    "interim_results": True,
+                    "utterance_end_ms": _utterance_end_ms
                 },
                 "think": self._get_llm_config(),
                 "speak": self._get_tts_config(),
