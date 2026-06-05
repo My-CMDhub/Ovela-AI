@@ -839,6 +839,27 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         return f"{opener} - is that yours?"
 
     def _format_doc(doc, total_docs, found_by: str = "", name_mismatch: bool = False):
+        # Strict Caller-Phone Lock verification (Approach 1)
+        if found_by != "caller_phone":
+            doc_phone = doc.get("guest_phone", "")
+            normalized_doc_phone = None
+            if doc_phone:
+                try:
+                    normalized_doc_phone = normalize_phone_number(doc_phone)
+                except Exception:
+                    normalized_doc_phone = doc_phone
+            
+            if not caller_phone or normalized_doc_phone != caller_phone:
+                logger.warning(
+                    "🔒 Privacy boundary triggered: Caller phone '%s' attempted to access booking for '%s' (phone: '%s'). Refusing access.",
+                    caller_phone, doc.get("guest_name"), doc_phone
+                )
+                return {
+                    "found": False,
+                    "privacy_refusal": True,
+                    "message": "For security reasons, I can only look up bookings matching your calling phone number. For anything else, staff contact needed. Do you want me to transfer you?"
+                }
+
         result = {
             "found":                  True,
             "booking_reference":      doc.get("booking_reference", ""),
@@ -1031,7 +1052,8 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
     patch the email in Appwrite and resend the Stripe payment link.
     """
     guest_name = args.get("guest_name", "")
-    guest_phone = args.get("guest_phone", "") or user_phone or ""
+    # Force guest_phone to be the calling phone number to prevent cross-caller updates (Approach 1)
+    guest_phone = user_phone or args.get("guest_phone", "") or ""
     guest_email = args.get("guest_email", "")
     
     logger.info(f"Captured Guest Info: {guest_name} - {guest_phone}")
@@ -1107,7 +1129,7 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
     return {"success": True, "message": message, "email_resent": email_resent}
 
 
-async def handle_resend_payment_confirmation(args: dict, db_service) -> dict:
+async def handle_resend_payment_confirmation(args: dict, db_service, user_phone: str = None) -> dict:
     """
     Manually resend the payment confirmation or receipt email.
     """
@@ -1120,6 +1142,15 @@ async def handle_resend_payment_confirmation(args: dict, db_service) -> dict:
         }
         
     try:
+        # Normalize caller phone
+        from services.voice_agent.text_utils import normalize_phone_number
+        caller_phone = None
+        if user_phone:
+            try:
+                caller_phone = normalize_phone_number(user_phone)
+            except Exception:
+                caller_phone = user_phone
+
         # Find their active booking
         # Note: We rely on the db_service lookup to find their most recent booking by email
         # If we have their phone number we could use that, but usually email is what they give
@@ -1138,6 +1169,26 @@ async def handle_resend_payment_confirmation(args: dict, db_service) -> dict:
             return {
                 "success": False,
                 "message": "I couldn't find a recent booking for that email address. Would you like to use a different email or your phone number?"
+            }
+
+        # Strict Caller-Phone Lock verification (Approach 1)
+        doc_phone = active_doc.get("guest_phone", "")
+        normalized_doc_phone = None
+        if doc_phone:
+            try:
+                normalized_doc_phone = normalize_phone_number(doc_phone)
+            except Exception:
+                normalized_doc_phone = doc_phone
+
+        if not caller_phone or normalized_doc_phone != caller_phone:
+            logger.warning(
+                "🔒 Privacy boundary triggered: Caller phone '%s' attempted to resend receipt for '%s' (phone: '%s'). Refusing access.",
+                caller_phone, active_doc.get("guest_name"), doc_phone
+            )
+            return {
+                "success": False,
+                "privacy_refusal": True,
+                "message": "For security reasons, I can only resend booking confirmations matching your calling phone number. Please contact reception for support."
             }
             
         # Resend Email (Fire and forget)
@@ -1514,7 +1565,7 @@ class CoalCreekFunctionDispatcher:
             return await handle_lookup_booking(args, self.db_service, self.user_phone)
         
         elif function_name == "resend_payment_confirmation":
-            return await handle_resend_payment_confirmation(args, self.db_service)
+            return await handle_resend_payment_confirmation(args, self.db_service, self.user_phone)
 
         # Knowledge Base (Direct calls to motel_knowledge_base service)
         elif function_name == "get_room_pricing":
