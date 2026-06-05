@@ -328,10 +328,18 @@ def clean_tts_output(text: str) -> str:
 
     result = text
 
-    # ── Room type slash normalization (before markdown pass) ────────────────
-    # "Queen/Double" → "Queen and Double" — prevent TTS speaking "slash"
-    import re
-    result = re.sub(r'(?i)queen/double', 'Queen and Double', result)
+    # ── Date ordinal: zero-padded day → spoken ordinal (M1)
+    # "June 06" → "June 6th", "July 01" → "July 1st" — prevents TTS reading "zero six"
+    import re as _re
+    def _to_ordinal(n: int) -> str:
+        suf = {1: 'st', 2: 'nd', 3: 'rd'}
+        return f"{n}{'th' if 11 <= n <= 13 else suf.get(n % 10, 'th')}"
+    result = _re.sub(r'\b0(\d)\b', lambda m: _to_ordinal(int(m.group(1))), result)
+
+    # ── Room type slash normalization (M1 extended: any letter/slash/letter combo)
+    # "Queen/Double" → "Queen and Double", "Family/Spa" → "Family and Spa"
+    # Prevents TTS speaking "slash" for any room type or combo string
+    result = re.sub(r'(?<=[A-Za-z])/(?=[A-Za-z])', ' and ', result)
 
     # Remove control signals
     for signal in CONTROL_SIGNALS:

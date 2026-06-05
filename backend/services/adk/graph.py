@@ -377,6 +377,9 @@ class ADKOrchestrator:
             "🤖 ADKOrchestrator initialised | workers=%s",
             [self.booking_worker.name, self.info_worker.name],
         )
+        # BS1: In-process session cache — avoids Appwrite GET round-trip on repeated tool calls
+        # Key: session_id (deterministic MD5), Value: (session_obj, expires_at_unix)
+        self._session_cache: dict[str, tuple[Any, float]] = {}
 
     async def get_or_create_session(self, user_id: str) -> Any:
         """
@@ -395,6 +398,15 @@ class ADKOrchestrator:
         session_id = "s_" + hashlib.md5(user_id.encode("utf-8")).hexdigest()
 
         try:
+            # BS1: Check in-process cache first — avoids Appwrite GET on repeated cold-path fires
+            import time as _time
+            cached = self._session_cache.get(session_id)
+            if cached:
+                cached_session, expires_at = cached
+                if _time.time() < expires_at:
+                    logger.debug("🤖 ADK: Cache HIT for session %s (user %s)", session_id, user_id[:8])
+                    return cached_session
+
             existing = await self._session_service.get_session(
                 app_name=self._APP_NAME,
                 user_id=user_id,
@@ -402,6 +414,7 @@ class ADKOrchestrator:
             )
             if existing:
                 logger.debug("🤖 ADK: Reusing session %s for user %s", session_id, user_id[:8])
+                self._session_cache[session_id] = (existing, _time.time() + 3600)
                 return existing
         except Exception:
             pass  # Session not found — create fresh below
@@ -413,6 +426,8 @@ class ADKOrchestrator:
             state={},
         )
         logger.info("🤖 ADK: Created new session %s for user %s", session_id, user_id[:8])
+        # BS1: Populate cache on create
+        self._session_cache[session_id] = (session, _time.time() + 3600)
         return session
 
     async def query(self, user_id: str, session_id: str, text: str) -> str:

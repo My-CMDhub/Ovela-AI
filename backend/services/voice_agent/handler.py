@@ -1451,6 +1451,7 @@ class VoiceAgentHandler:
                     asyncio.create_task(
                         self._speak_system_message(preset, clip_key="filler_short", wait_for_playback=True)
                     )
+                    self._filler_played_this_turn = True  # I2: prevent duplicate filler if SLOW_TOOLS also fires this turn
 
                 fn_done_event = asyncio.Event()
                 long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event, function_name))
@@ -1658,6 +1659,7 @@ class VoiceAgentHandler:
         finally:
             # Release Go Deaf AFTER all post-function speech & transfers are done
             self._is_processing_function = False
+            self._filler_played_this_turn = False  # BS3: reset on error path so next turn is not locked
     
     async def _send_function_response(self, call_id: str, function_name: str, result: dict):
         """Send function result back to Deepgram (V1 API format).
@@ -2078,7 +2080,7 @@ class VoiceAgentHandler:
     def _is_system_audio_playing(self) -> bool:
         """Returns True if injected system audio is actively playing in the user's ear (includes tail buffer)."""
         # Add 1.0s tail buffer to absorb immediate affirmations ("yep", "okay") right after playback
-        return time.time() < getattr(self, '_system_audio_completion_at', 0) + 1.0
+        return time.time() < getattr(self, '_system_audio_completion_at', 0)  # BS2: removed stacked +1.0 (network_buffer already in _system_audio_completion_at)
 
     async def _speak_system_message(
         self,

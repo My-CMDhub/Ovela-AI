@@ -157,12 +157,14 @@ class EmailService:
                     html = html.replace(f"{{{{{key}}}}}", str(val))
                 return html
         
-        # FATAL FALLBACK (Shouldn't happen in prod if tenants are onboarded properly)
+        # M2: Use full motel business name from data config — prevents "Motel" branding leak
+        from services.knowledge_base.coalcreek import COALCREEK_DATA as _CC_DATA
+        _default_biz_name = _CC_DATA["info"]["name"]
         return self._base_template(
             badge="Booking Confirmed" if not payment_link else "Action Required",
             title=f"Hi {ctx['guest_name']}",
             content=ctx['email_content'],
-            business_name=context.get("business_name", "Motel"),
+            business_name=context.get("business_name", _default_biz_name),
             steps=[
                 f"<strong>Booking Ref:</strong> {ctx['booking_ref']}",
                 f"<strong>Room:</strong> {ctx['room_type']}",
@@ -748,7 +750,7 @@ class EmailService:
         check_out: str,
         num_nights: int,
         total_amount: float,
-        business_name: str = "Motel",
+        business_name: str = "Coal Creek Motel",  # M2: was "Motel" — now correct full brand name
         business_phone: str = "",
         business_location: str = "",
         tenant_id: str = "coalcreek"

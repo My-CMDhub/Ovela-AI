@@ -86,22 +86,36 @@ async def stripe_webhook(request: Request):
             logger.info(f"✅ Payment confirmed for booking {booking_ref}: ${amount_total} ({num_nights} nights)")
             logger.info(f"📧 Guest email: {guest_email}, Name: {guest_name}")
 
+            stripe_session_id = session.get("id", "")  # I3/C3: capture Stripe session ID for fallback lookup
+
             # Update booking status in Appwrite motel_reservations
+            # I3/C3: DB failure is isolated — never kills the email send below
+            booking_doc_id = None
             if booking_ref:
                 try:
-                    # Get booking doc by reference
+                    # Primary: query by booking_ref (written in Stripe metadata at checkout creation)
                     booking_doc = await db_service.get_booking_by_reference(booking_ref)
+                    if not booking_doc and stripe_session_id:
+                        # C3 Fallback: query by stripe_session_id field if ref lookup misses
+                        logger.warning("⚠️ I3: booking_ref lookup missed — falling back to stripe_session_id query")
+                        booking_doc = await db_service.get_booking_by_stripe_session(stripe_session_id)
                     if booking_doc and booking_doc.get("$id"):
+                        booking_doc_id = booking_doc["$id"]
                         await db_service.update_booking_payment_status(
-                            booking_id=booking_doc["$id"],
+                            booking_id=booking_doc_id,
                             payment_status="paid",
                             stripe_payment_id=stripe_payment_id,
                         )
-                        logger.info(f"� Booking {booking_ref} marked as paid in Appwrite")
+                        logger.info(f"✅ Booking {booking_ref} marked as paid in Appwrite")
+                    else:
+                        logger.error(f"❌ I3: Could not find booking doc for ref={booking_ref} / session={stripe_session_id}")
                 except Exception as e:
-                    logger.warning(f"Could not update DB status: {e}")
+                    logger.warning(f"⚠️ I3: DB update failed (non-fatal, email will still send): {e}")
+            else:
+                logger.error("❌ I3: Stripe webhook missing booking_ref in metadata — cannot update DB")
 
             # Send confirmation email to guest (via Gmail / Coal Creek SMTP)
+            # C3: Fully isolated — DB failure above CANNOT prevent this from running
             if guest_email:
                 try:
                     await email_service.send_guest_booking_confirmation(
@@ -118,7 +132,7 @@ async def stripe_webhook(request: Request):
                     )
                     logger.info(f"📧 Confirmation email sent to {guest_email}")
                 except Exception as e:
-                    logger.error(f"❌ Failed to send confirmation email: {e}")
+                    logger.error(f"❌ I3: Failed to send confirmation email: {e}")
 
             # Notify staff via Ovela SMTP (notifications@ovela.dev)
             try:
