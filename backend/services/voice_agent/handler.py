@@ -181,6 +181,11 @@ class VoiceAgentHandler:
         self._transfer_tts_done = asyncio.Event()
         self._transfer_target = None
         self._tts_lock = asyncio.Lock()
+
+        # I1: InjectAgentMessage ack state
+        # Set by _handle_function_call before injection; cleared by AgentAudioDone
+        self._pending_injection_event: asyncio.Event | None = None
+        self._injection_refused = False  # Set True if Deepgram sends InjectionRefused
         
         # Latency tracking (for debugging/analytics)
         self.user_speech_start_time = None
@@ -947,7 +952,13 @@ class VoiceAgentHandler:
             asyncio.create_task(self._handle_function_call(event))
             
         elif event_type == "InjectionRefused":
-            logger.debug("ℹ️ InjectionRefused received (system lane no longer depends on it)")
+            # I1: Deepgram refused our InjectAgentMessage (LLM was already mid-response)
+            # Unblock the injection_event so _handle_function_call doesn't hang on wait()
+            logger.info("💉 I1: InjectionRefused — unblocking injection event")
+            self._injection_refused = True
+            if self._pending_injection_event is not None:
+                self._pending_injection_event.set()
+                self._pending_injection_event = None
             
         elif event_type == "Error":
             logger.error(f"❌ Deepgram Agent error: {event}")
@@ -1290,6 +1301,14 @@ class VoiceAgentHandler:
         if getattr(self, '_in_silence_escalation', False):
             logger.debug("⏱️ Skipping new silence cycle - in escalation mode")
             return
+
+        # I1: Release pending injection event (InjectAgentMessage ack finished playing)
+        # This allows _handle_function_call to send the function result to Deepgram.
+        if self._pending_injection_event is not None:
+            logger.info("💉 I1: AgentAudioDone — releasing injection event (ack finished playing)")
+            self._pending_injection_event.set()
+            self._pending_injection_event = None
+            return  # Don't start silence monitoring — function result is about to arrive
         
         # Short grace period to allow for streaming chunks
         await asyncio.sleep(0.3)  # 300ms grace period
@@ -1427,52 +1446,64 @@ class VoiceAgentHandler:
         # OTHER SLOW TOOLS: keep a reduced 0.3s grace period so the LLM's
         # own brief filler can flush before the system fallback fires.
         # ─────────────────────────────────────────────────────────────────
-        FAST_TOOLS = {"check_availability", "perform_live_search"}
-        SLOW_TOOLS = [
-            "report_missing_booking",
-            "create_booking",
-            "request_human_callback",
-            "lookup_booking",
-            "create_booking_request",
-            "submit_order",
-            "get_menu_info"
-        ]
-        
+        # ─────────────────────────────────────────────────────────────────
+        # I1: INJECT-ACK ARCHITECTURE (replaces FAST_TOOLS/SLOW_TOOLS filler)
+        #
+        # Design:
+        #   1. Send InjectAgentMessage with context-aware ack text
+        #      (Deepgram is in function-wait state — valid injection window)
+        #   2. Execute the function concurrently (no user hears dead air)
+        #   3. Wait for BOTH: AgentAudioDone (ack finished) AND function done
+        #   4. Send function result → LLM speaks result naturally
+        #
+        # InjectionRefused fallback: if Deepgram refuses injection (LLM already
+        # mid-response), fall back to _speak_system_message (existing behaviour).
+        # _filler_played_this_turn guard prevents double-ack when LLM also fires.
+        # ─────────────────────────────────────────────────────────────────
+
+        # Context-aware ack map (I1 spec)
+        ACK_MAP = {
+            "check_availability":           "Got it, one moment.",
+            "create_booking_request":       "Sure, placing that hold now.",
+            "lookup_booking":               "Let me check that.",
+            "resend_payment_confirmation":  "On it.",
+            "wait_on_request":              "Of course.",
+            "perform_live_search":          "Let me look that up.",
+            "transfer_to_staff":            "Sure, one moment.",
+            "update_guest_info":            "Got it.",
+            "request_human_callback":       "Sure, I'll arrange that.",
+            "report_missing_booking":       "On it, I'll flag that now.",
+        }
+        ack_text = ACK_MAP.get(function_name, "One moment.")
+
+        # Block interruptions for the entire ack+function window
+        self._blocking_interruptions = True
+
+        # Only inject if LLM hasn't already played an ack this turn
+        injection_event = None
+        if not getattr(self, '_filler_played_this_turn', False) and self.deepgram_ws:
+            try:
+                injection_event = asyncio.Event()
+                self._pending_injection_event = injection_event
+                self._injection_refused = False
+
+                inject_msg = {
+                    "type": "InjectAgentMessage",
+                    "behavior": "default",
+                    "message": ack_text,
+                }
+                await self.deepgram_ws.send(json.dumps(inject_msg))
+                logger.info("💉 I1: InjectAgentMessage sent | fn=%s | ack='%s'", function_name, ack_text)
+                self._filler_played_this_turn = True
+            except Exception as inj_err:
+                logger.warning("💉 I1: InjectAgentMessage send failed (%s) — fallback to clip", inj_err)
+                injection_event = None
+                self._pending_injection_event = None
+
+        long_wait_task = None
+        fn_done_event = None
+
         try:
-            long_wait_task = None
-            fn_done_event = None
-
-            if function_name in FAST_TOOLS:
-                # Block interruptions and fire deterministic filler immediately.
-                # Use asyncio.create_task so function execution starts right away.
-                self._blocking_interruptions = True
-                preset = get_preset_phrase(self.tenant_id, "availability_checking")
-                if preset:
-                    asyncio.create_task(
-                        self._speak_system_message(preset, clip_key="filler_short", wait_for_playback=True)
-                    )
-                    self._filler_played_this_turn = True  # I2: prevent duplicate filler if SLOW_TOOLS also fires this turn
-
-                fn_done_event = asyncio.Event()
-                long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event, function_name))
-
-            elif function_name in SLOW_TOOLS:
-                # Block interruptions so filler isn't cut off by user noise/"mhm"
-                self._blocking_interruptions = True
-                # Let the LLM's filler TTS audio flush to Twilio (reduced from 0.5s)
-                await asyncio.sleep(0.3)
-                # Safety net: inject filler ONLY if LLM didn't speak one AND we haven't
-                # already played one this user turn (prevents double-filler on multi-step
-                # LLM tool calls within the same user utterance, e.g. lookup by ref then by email)
-                if not getattr(self, '_ai_is_speaking', False) and not getattr(self, '_filler_played_this_turn', False):
-                    filler = get_random_filler_prompt()
-                    await self._speak_system_message(filler, clip_key="filler_short")
-                    self._filler_played_this_turn = True
-
-                # Schedule progressive "still checking" for very long waits
-                fn_done_event = asyncio.Event()
-                long_wait_task = asyncio.create_task(self._long_wait_filler(fn_done_event, function_name))
-            
             # ── Execute via dispatcher ──────────────────────────────────────
             ctx = {
                 "pending_order": self.pending_order,
@@ -1653,8 +1684,21 @@ class VoiceAgentHandler:
                 self.customer_id = result.get("customer_id")
                 logger.info(f"🆔 Captured Customer ID: {self.customer_id}")
 
+            # I1: Wait for injection ack audio to finish before sending result
+            # This creates the natural "Got it. [pause] Here's what I found..." gap.
+            # 3s timeout ensures we never block indefinitely if AgentAudioDone is delayed.
+            if injection_event is not None and not self._injection_refused:
+                try:
+                    await asyncio.wait_for(injection_event.wait(), timeout=3.0)
+                    logger.info("💉 I1: Injection ack confirmed done — sending function result")
+                except asyncio.TimeoutError:
+                    logger.warning("💉 I1: Injection event timed out (3s) — sending result anyway")
+                    # Clear the pending event so AgentAudioDone handler doesn't double-fire
+                    self._pending_injection_event = None
+
             # Send response back to Deepgram
             await self._send_function_response(call_id, function_name, result)
+
         
         finally:
             # Release Go Deaf AFTER all post-function speech & transfers are done
