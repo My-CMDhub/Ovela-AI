@@ -28,7 +28,8 @@ SPEAKING RULE: Say ONE of these:
 CRITICAL: If user asks "what's available?" or "other options" → use room_type='any' to check ALL rooms in ONE call. NEVER call this multiple times for different room types.
 
 Multi-night stays validate EACH night. May take 3-10 seconds.
-If availability cannot be verified, apologize briefly and transfer to staff.""",
+Returns a concise, token-efficient string of available rooms (e.g., 'Available: Queen, Twin. Unavailable: Family'). 
+If availability cannot be verified, apologize briefly and transfer to staff (between 8:00 AM – 8:00 PM AEST and after confirming with user only).""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -51,7 +52,16 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         },
         {
             "name": "create_booking_request",
-            "description": "Create a booking and instantly send a payment link to the guest's email. DO NOT CALL THIS unless the caller has explicitly confirmed their email spelling.",
+            "description": """Create a booking and instantly send a payment link to the guest's email.
+
+MANDATORY GATE — you MUST complete ALL 3 steps before calling this function:
+  STEP 1: Collected first name + last name (confirmed spelling if unusual).
+  STEP 2: Spelled out the email character by character AND received a verbal YES/confirmation.
+  STEP 3: Read back the FULL one-line summary: '[Name], checking in [date], checking out [date], [room] at $[price] per night' — and received a verbal YES.
+
+If ANY step is incomplete — DO NOT call this function. Complete the missing step first.
+Set has_user_confirmed_summary=true ONLY after the caller said YES to the STEP 3 summary.
+If this tool fails validation, it will return a natural language error (e.g., 'Email invalid'). You MUST read this error, inform the user, and ask for the specific correction required.""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -82,14 +92,18 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
                     },
                     "guest_email": {
                         "type": "string",
-                        "description": "Guest email address for confirmation (optional)"
+                        "description": "Guest email address for confirmation. REQUIRED — must be spelled and confirmed by caller first."
                     },
                     "notes": {
                         "type": "string",
                         "description": "Any special requests or notes"
+                    },
+                    "has_user_confirmed_summary": {
+                        "type": "boolean",
+                        "description": "MANDATORY: Set to true ONLY if the caller explicitly said YES after you read back the full booking summary (name, dates, room, price). If false or omitted, the backend will reject this call."
                     }
                 },
-                "required": ["guest_name", "check_in_date", "room_type"]
+                "required": ["guest_name", "check_in_date", "room_type", "guest_email", "has_user_confirmed_summary"]
             }
         },
         
@@ -192,7 +206,11 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         # =================================================================
         {
             "name": "lookup_booking",
-            "description": "Look up an existing booking. Call this as soon as the guest mentions their name or booking reference — DON'T ask for phone number first, the system auto-uses the caller's Twilio number. If the result returns found=true, use the surfaced booking details to confirm naturally like a receptionist. If found_by=caller_phone is returned, confirm the likely booking instead of asking for brittle identifiers. Only pass email or reference if a previous call returned found=false.",
+            "description": """Look up an existing booking. Call this as soon as the guest mentions their name or booking reference. The system auto-uses the caller's Twilio number; DO NOT ask for phone number first. 
+If found=true, use the surfaced semantic booking details (e.g., semantic booking_id like CC-123, NOT uuids) to confirm naturally. 
+If found_by=caller_phone is returned, confirm the likely booking instead of asking for brittle identifiers. 
+Only pass email or reference if a previous call returned found=false.
+Return Schema: This tool returns concise, high-signal context (status, dates, semantic IDs).""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -258,7 +276,8 @@ If availability cannot be verified, apologize briefly and transfer to staff.""",
         },
         {
             "name": "wait_on_request",
-            "description": "CRITICAL: Call this function IMMEDIATELY if the user says 'give me a sec', 'hold on', 'one moment', 'wait a minute', 'wait a while', 'let me check', or asks you to wait or hold for any reason. Starts passive wait mode.",
+            "description": """CRITICAL: Call this function IMMEDIATELY if the user uses WAIT SIGNALS (e.g., 'give me a sec', 'hold on', 'one moment', 'wait a minute', 'wait a while', 'let me check', 'I'll do that', 'let me pay', 'processing it', 'bear with me'). 
+Starts passive wait mode. Say ONE word ('Sure.' or 'Of course.') and call this tool. No questions, no continuation.""",
             "parameters": {
                 "type": "object",
                 "properties": {

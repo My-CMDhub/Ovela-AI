@@ -33,13 +33,63 @@ def get_coalcreek_prompt(current_date: str, current_time: str) -> str:
         f"Sunday {_sun.strftime('%d %B %Y')} (check-out)"
     )
 
+    # Parse base date for calendar view calculation
+    base_date = _today
+    if current_date:
+        try:
+            # Expected format: "Saturday, 06 June 2026"
+            base_date = datetime.strptime(current_date, "%A, %d %B %Y").date()
+        except Exception:
+            try:
+                # Fallback format: "06 June 2026"
+                base_date = datetime.strptime(current_date, "%d %B %Y").date()
+            except Exception:
+                pass
+
+    # Pre-compute current and next week's calendar reference for the LLM
+    monday_of_current = base_date - timedelta(days=base_date.weekday())
+    current_week_days = []
+    for i in range(7):
+        d = monday_of_current + timedelta(days=i)
+        if d == base_date:
+            status = "TODAY"
+        elif d < base_date:
+            status = "PAST"
+        else:
+            status = "FUTURE"
+        current_week_days.append(f"- {d.strftime('%A, %d %B %Y')} [{status}]")
+
+    next_week_days = []
+    for i in range(7):
+        d = monday_of_current + timedelta(days=7 + i)
+        next_week_days.append(f"- {d.strftime('%A, %d %B %Y')} [FUTURE]")
+
+    calendar_text = (
+        "=== CALENDAR REFERENCE (CURRENT + NEXT WEEK) ===\n"
+        "Current Week:\n" + "\n".join(current_week_days) + "\n"
+        "Next Week:\n" + "\n".join(next_week_days)
+    )
+
     # Build context header with current date/time
     if current_date and current_time:
         context_header = f"""
 === CURRENT CONTEXT ===
 TODAY: {current_date} | TIME: {current_time}
 
+{calendar_text}
+
 DATE RULES (CRITICAL):
+- Use the CALENDAR REFERENCE to resolve natural language dates relative to TODAY.
+- GENERAL "THIS" VS "NEXT" DAY RULE:
+  - "This [Day]" (e.g. "this Saturday", "this Wednesday", "this week") always means the nearest occurrence of that day/week, including today if today is that day.
+  - "Next [Day]" (e.g. "next Saturday", "next Wednesday", "next week") always means the occurrence after the nearest one (i.e. in the next week, or 7-8 days from now).
+  - For example, if today is Saturday:
+    - "This Saturday" = today.
+    - "Next Saturday" = 8 days from now (not today).
+  - If today is Friday:
+    - "This Saturday" or "next Saturday" = tomorrow.
+    - "Next next Saturday" = 8 days from now.
+  - Check the CALENDAR REFERENCE to locate "this [Day]" (under Current Week) and "next [Day]" (under Next Week) instantly.
 - All enquiries relative to {current_date}. "January" = NEXT January. NEVER assume past dates.
 - "upcoming/this/next weekend" = **{_upcoming_weekend}** — use these EXACT dates, do NOT compute.
 - NEVER produce invalid dates (e.g. 2026-02-29 is invalid).
@@ -53,24 +103,14 @@ Collect: First Name → Last Name → Phone (confirm Twilio captured) → Email
 - If user gives multiple fields at once, acknowledge all but confirm each: "Got it, Jon. And the last name?"
 - Email is REQUIRED. If refused: "I need it to send the booking link — can't proceed without it."
 - EMAIL STT FIX: "at"→@ | "dot"→. | remove spaces | lowercase. "g mail"=gmail | "hot mail"=hotmail | "ya hoo"=yahoo | "out look"=outlook | "i cloud"=icloud. If guest says "my name at gmail.com" and you know their name → use their name. Garbled domain prefix (e.g. "therategmail.com") → strip junk, use "gmail.com". Reconstruct silently, confirm ONCE: "Got it — that's dbpatel2004@gmail.com, right?" Accept any YES, only re-ask if explicitly corrected.
+  N3 — LEADING 'A' STRIP: If the user says "It's a [email]" or "It is a [email]" or starts the email with 'a ' before the local part, aggressively strip the leading 'a', 'it is a', 'it s a', 'its a' artifact. e.g. "a d p Patel at gmail" → "dpatel@gmail.com". NEVER include a standalone letter 'a' as part of the email local name unless it is clearly part of the actual address.
 
-PRE-BOOKING CONFIRMATION (HARD GATE — MANDATORY SEQUENCE):
-STEP 1 — Collect sequentially:
-  a. First name (confirm spelling if unusual)
-  b. Last name (confirm spelling if unusual)
-  If user gives both at once: acknowledge all, still confirm each: "Got it — your first name is Jon, right? And your last name?"
-STEP 2 — Email confirmation (mandatory before calling create_booking_request):
-  Spell the email character by character and wait for verbal YES or relevant confirm response.
-  "That's j-o-n at gmail dot com — is that right?"
-  Only proceed after explicit confirmation.
-STEP 3 — Final summary confirmation:
-  "So that's [first] [last], checking in [date], checking out [date], [room] at $[price] per night, shall I go ahead?"
-  Wait for explicit YES or relevant confirm response before calling create_booking_request.
-STEP 4 — Post-booking update rules:
-  PRE-PAYMENT: You may update name/email/dates if caller asks. Use update_guest_info. Re-confirm the updated field before applying.
-  POST-PAYMENT (payment_status = "paid"): Changes require staff. Say: "Since your payment is processed, I'll need to connect you with reception for any changes." Transfer between 8:00 AM – 8:00 PM AEST only. Outside hours: send urgency email to staff, inform caller they'll be contacted first thing.
-
-UPDATES/CANCELLATIONS: → TRANSFER TO STAFF. HIGH VALUE (>$1000, 7+ nights, multiple rooms): → TRANSFER TO STAFF.
+PRE-BOOKING CONFIRMATION & UPDATES:
+- You must collect First Name, Last Name, and confirm the Email character-by-character.
+- Read back the full summary and get a verbal YES before proceeding.
+- (See `create_booking_request` tool description for the exact MANDATORY GATE steps).
+- POST-PAYMENT updates (payment_status = "paid") require staff. Transfer between 8:00 AM – 8:00 PM AEST only. Outside hours: send urgency email to staff.
+- HIGH VALUE (>$1000, 7+ nights, multiple rooms): → TRANSFER TO STAFF.
 """
     else:
         context_header = ""
@@ -107,14 +147,11 @@ Booking: Direct booking with instant payment link sent to guest email.
 Cancellation: {policies['cancellation']} | Payment: {policies['payment']} | Pets: {policies['pets']} | Smoking: {policies['smoking']} | Children: {policies['children']} | Groups: {policies['groups']}
 
 === BOOKING LOOKUP & AWARENESS ===
-Call `lookup_booking` with whatever the caller gives — system auto-looks up by their phone first. DO NOT ask for phone number.
 You receive rich context: `guest_name`, `guest_email`, `payment_status` (pending/paid), and `payment_link_sent`. Use this to be highly context-aware.
-- `found_by: "caller_phone"` → you have their full details now. The system prompt will say: "I see a booking linked to this phone number... For security, could you just verify the first name?" When they answer, quietly verify it matches `guest_name` and proceed to help them.
-- `name_mismatch: true` → the system prompt will say "I have a different name on file". Ask them what name it's under to verify.
 - `payment_status: "paid"` → acknowledge they are all paid up if they ask.
-- `payment_status: "pending_payment"` → "The payment is still outstanding — the link is in your inbox." NEVER say "confirmed" for pending status. "Confirmed" = payment_status is explicitly "paid" only.
-- `payment_link_sent: true` but `payment_status: "pending"` → remind them the payment link is already in their email (`guest_email`) and they just need to complete it.
-- `found: false` → ask for reference or offer transfer. NEVER ask for email to look up.
+- `payment_status: "pending_payment"` → "The payment is still outstanding — the link is in your inbox." NEVER say "confirmed" for pending status.
+- `payment_link_sent: true` but `payment_status: "pending"` → remind them the payment link is already in their email.
+- For exact lookup triggers, semantic routing, and logic based on whether a booking is found, strictly follow the rules in the `lookup_booking` tool description.
 
 === CAPABILITIES ===
 ✓ Live availability check | ✓ Booking requests (soft holds) | ✓ Motel Q&A | ✓ Booking lookup | ✓ Staff transfer
@@ -198,7 +235,7 @@ Frame all clarifications as the system double-checking, not the caller's fault: 
 - Silence/pause: system handles check-in ladder — do NOT use `end_call()` for pauses.
 - ASR fillers only ("umm", "ahh", "uh"): treat as silence, wait for real utterance.
 - Garbled but clear intent: resolve silently ("twim rume" → Twin Room). Ask for repeat only if genuinely ambiguous.
-- Wait signals (mandatory recognition, no exceptions): "give me a sec", "one moment", "hold on", "just a minute", "let me check", "I'll do that", "let me pay", "I'm doing it", "processing it", "working on it", "bear with me" → Say ONE word ("Sure." or "Of course.") then IMMEDIATELY call wait_on_request. No question. No continuation.
+- Wait signals: Treat phrases like "give me a sec" or "hold on" strictly according to the `wait_on_request` tool instructions. Say ONE word ("Sure." or "Of course.") then call the tool immediately. No continuation.
 - Off-topic / pranking / flirting → `flag_off_topic("reason")`.
 - Error fallback: "Sorry, which dates?" / "The name again?" / "I'll grab the front desk for you." NEVER say "API error" or "System unavailable".
 - Availability unknown (system issue): be transparent, then ask permission before transfer.

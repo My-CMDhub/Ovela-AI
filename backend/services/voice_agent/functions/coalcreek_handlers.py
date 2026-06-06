@@ -583,27 +583,45 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
 
     guest_phone = args.get("guest_phone", "") or user_phone
 
+    # N1: System-level pre-booking gate — reject the call if the AI hasn't confirmed
+    # the full booking summary with the caller yet.  This is the irrefutable backend
+    # enforcement that makes prompt drift impossible to bypass.
+    has_confirmed = args.get("has_user_confirmed_summary", False)
+    if not has_confirmed:
+        logger.warning(
+            "N1 gate: create_booking_request called WITHOUT caller summary confirmation — rejecting. "
+            "guest=%s email=%s check_in=%s room=%s",
+            guest_name, guest_email, check_in, room_type
+        )
+        return {
+            "success": False,
+            "error": (
+                "SYSTEM RULE VIOLATION: You must complete the mandatory 3-step pre-booking gate before calling this function.\n"
+                "STEP 3 is MISSING: You have not read back the full booking summary "
+                "('[Name], checking in [date], checking out [date], [room] at $[price] per night') "
+                "and received an explicit YES from the caller.\n"
+                "Go back and read the full summary now, then wait for their confirmation before retrying."
+            ),
+        }
+
     if not guest_name:
         return {
             "success": False,
-            "message": "I need your name and check-in date to place the hold."
+            "error": "guest_name is missing. You must ask the user for their name before creating a booking."
         }
 
     check_in_date, check_out_date, resolution_source = _resolve_relative_dates(check_in, check_out, user_utterance)
     if not check_in_date:
         return {
             "success": False,
-            "message": "I need a valid check-in date to place the hold."
+            "error": "check_in_date is invalid or missing. Ask the user for their specific check-in date."
         }
 
     if check_in_date < _today_melbourne_date():
         today_formatted = _today_melbourne_date().strftime("%A, %d %B %Y")
         return {
             "success": False,
-            "message": (
-                f"Oh, just to let you know, today is {today_formatted}, so that date has already passed. "
-                "Did you want to place a hold for a future date instead?"
-            )
+            "error": f"check_in_date is in the past. Today is {today_formatted}. Tell the user the date has passed and ask for a future date."
         }
 
     if not check_out_date or check_out_date <= check_in_date:
@@ -1132,6 +1150,10 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
 async def handle_resend_payment_confirmation(args: dict, db_service, user_phone: str = None) -> dict:
     """
     Manually resend the payment confirmation or receipt email.
+
+    N6 GUARD: If payment_status is still pending_payment this tool MUST NOT send
+    a confirmation receipt — only the payment link flow applies.  Return a hard
+    system error so the AI is forced to correct the caller immediately.
     """
     guest_email = args.get("guest_email", "")
     
@@ -1169,6 +1191,19 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
             return {
                 "success": False,
                 "message": "I couldn't find a recent booking for that email address. Would you like to use a different email or your phone number?"
+            }
+
+        # N6: Hard guard — block confirmation email when payment is still pending
+        if active_doc.get("payment_status") in ("pending_payment", "pending", None) \
+                and active_doc.get("status") not in ("paid", "confirmed"):
+            logger.warning(
+                "🔒 N6 guard: resend_payment_confirmation blocked for %s — payment_status='%s' (still pending).",
+                active_doc.get("booking_reference"), active_doc.get("payment_status")
+            )
+            return {
+                "success": False,
+                "error": "SYSTEM RULE: You cannot send a confirmation email because payment is still PENDING. "
+                         "Tell the user the payment is still pending and you can only resend the payment LINK if they need it.",
             }
 
         # Strict Caller-Phone Lock verification (Approach 1)
@@ -1257,11 +1292,17 @@ async def _handle_stripe_and_guest_email(
     check_out: str,
     db_service,
     saved_doc_id: str | None = None,
+    notify_event: asyncio.Event | None = None,
+    notify_result: list | None = None,
 ) -> None:
     """
     Cold-path task: creates Stripe checkout session, PATCHes Appwrite reservation
     to pending_payment with expiry, and emails the guest payment link.
     Never raises — all errors are logged and swallowed.
+
+    N2 SMTP feedback: If notify_event and notify_result are provided, sets
+    notify_result[0] to the email send status (True/False) and fires notify_event
+    so the caller can synchronously inform the AI of SMTP failures.
 
     P11-C: If saved_doc_id is provided (from the save_reservation_fn response),
     it is used directly to PATCH Appwrite, eliminating the get_booking_by_reference
@@ -1332,6 +1373,7 @@ async def _handle_stripe_and_guest_email(
                     check_in=check_in,
                     check_out=check_out,
                     amount=int(total_amt),
+                    business_name="Coal Creek Motel",  # M2: explicit brand name — never falls through to "Motel" default
                     tenant_id="coalcreek",
                     message_context=(
                         "Your room hold is confirmed. Please complete your payment via "
@@ -1341,12 +1383,22 @@ async def _handle_stripe_and_guest_email(
                 if not success:
                     raise Exception("SMTP Provider failed to send email (bounce simulated).")
                 logger.info("💳 Payment link emailed to guest for %s", booking_ref)
+                # N2: Signal success to waiting caller
+                if notify_result is not None:
+                    notify_result[0] = True
+                if notify_event is not None:
+                    notify_event.set()
             except Exception as email_err:
                 logger.error("💳 Guest email failed for %s: %s", booking_ref, email_err)
                 if doc_id and db_service:
                     await db_service.update_booking_payment_status(
                         booking_id=doc_id, payment_status="email_failed"
                     )
+                # N2: Signal failure to waiting caller
+                if notify_result is not None:
+                    notify_result[0] = False
+                if notify_event is not None:
+                    notify_event.set()
         else:
             logger.info("💳 Invalid or missing guest email — skipping dispatch for %s", booking_ref)
             if doc_id and db_service and guest_email:
@@ -1354,6 +1406,11 @@ async def _handle_stripe_and_guest_email(
                 await db_service.update_booking_payment_status(
                     booking_id=doc_id, payment_status="email_failed"
                 )
+            # N2: Signal format failure to waiting caller
+            if notify_result is not None:
+                notify_result[0] = False
+            if notify_event is not None:
+                notify_event.set()
 
     except Exception as outer_err:
         logger.error("💳 _handle_stripe_and_guest_email outer error for %s: %s", booking_ref, outer_err)
@@ -1531,7 +1588,13 @@ class CoalCreekFunctionDispatcher:
                 # P11-C: Use saved doc $id to skip race-prone get_booking_by_reference
                 saved_doc_id = result.get("_saved_doc_id")
 
-                # ── Task 1: Stripe Checkout + Email (Cold Path, fire-and-forget) ──
+                # ── Task 1: Stripe Checkout + Email (N2: await email status) ──────
+                # N2: We wait up to 6s for the email dispatch to complete so the AI
+                # can immediately correct the caller if SMTP bounces.  After the timeout
+                # we fall through and let the fire-and-forget path finish in the background.
+                email_notify_event: asyncio.Event = asyncio.Event()
+                email_notify_result: list = [None]  # [True=ok, False=failed, None=unknown]
+
                 asyncio.create_task(_handle_stripe_and_guest_email(
                     booking_ref=booking_ref,
                     room_type=room_type,
@@ -1543,8 +1606,28 @@ class CoalCreekFunctionDispatcher:
                     check_out=check_out,
                     db_service=self.db_service,
                     saved_doc_id=saved_doc_id,
+                    notify_event=email_notify_event,
+                    notify_result=email_notify_result,
                 ))
 
+                try:
+                    await asyncio.wait_for(email_notify_event.wait(), timeout=6.0)
+                except asyncio.TimeoutError:
+                    logger.warning("N2: Email dispatch timeout (6s) for %s — continuing", booking_ref)
+
+                # N2: If email failed propagate the error into the function result
+                # so the AI is forced to tell the caller immediately.
+                if email_notify_result[0] is False:
+                    result = {
+                        "success": False,
+                        "error": (
+                            f"Email bounced. The payment link could not be delivered to {guest_email}. "
+                            "Tell the user their email address bounced and ask them to spell it again."
+                        ),
+                        "booking_reference": booking_ref,
+                        "_email_bounce": True,
+                    }
+                    logger.warning("N2: SMTP bounce injected into function result for %s", booking_ref)
 
                 # ── Task 3: ADK Cold Path session state update ─────────────────
                 if self.call_sid:

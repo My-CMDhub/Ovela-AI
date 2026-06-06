@@ -327,6 +327,53 @@ class VoiceAgentHandler:
             "ending the call now",
         }
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # N4: GLOBAL MEANINGLESS INTERRUPTION FILTER
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # ── Single-word affirmations (checked word-by-word after split) ───────────
+    _MEANINGLESS_SINGLE_WORDS = frozenset([
+        "sure", "okay", "ok", "yep", "yes", "right",
+        "cool", "perfect", "alright", "yeah",
+        "mhm", "mm", "mmm", "gotcha",
+    ])
+
+    # ── Multi-word / hyphenated phrases (checked as whole normalized phrase) ──
+    _MEANINGLESS_PHRASES = frozenset([
+        "uh huh", "uh-huh", "go ahead", "all right",
+    ])
+
+    def _is_meaningless_interruption(self, text: str) -> bool:
+        """
+        N4: Returns True when the utterance is a short affirmation-only noise
+        that should be silently discarded while the system is busy.
+
+        Two-stage check:
+          Stage 1 — direct whole-phrase match for multi-word affirmations
+                     ("uh huh", "go ahead", etc. won't survive word-splitting)
+          Stage 2 — word-by-word check for single-word combos (≤ 3 words)
+
+        Applied globally whenever:
+          - A tool is executing  (_is_processing_function)
+          - System audio is playing (_is_system_audio_playing)
+          - An injection ack is pending (_pending_injection_event is not None)
+        """
+        if not text or not text.strip():
+            return False
+        normalized = self._normalize_phrase(text)
+        if not normalized:
+            return False
+
+        # Stage 1: direct whole-phrase match (handles multi-word affirmations)
+        if normalized in self._MEANINGLESS_PHRASES:
+            return True
+
+        # Stage 2: word-by-word check (≤ 3 words, all single-word fillers)
+        words = normalized.split()
+        if len(words) > 3:
+            return False
+        return all(w in self._MEANINGLESS_SINGLE_WORDS for w in words)
+
 
 
     # =========================================================================
@@ -1014,6 +1061,17 @@ class VoiceAgentHandler:
                     "timestamp": time.strftime("%H:%M:%S")
                 })
                 return
+
+            # N4: Global meaningless interruption filter — applied whenever the
+            # system is busy (audio playing or injection pending) regardless of
+            # whether a function is actively executing.
+            if (self._is_system_audio_playing or self._pending_injection_event is not None) \
+                    and self._is_meaningless_interruption(content):
+                logger.info(
+                    "🙉 N4: Meaningless affirmation '%s' discarded while system busy (audio/injection active)",
+                    content[:40]
+                )
+                return
             
             # ─────────────────────────────────────────────────────────────────
             # SMART HANGUP LOGIC:
@@ -1083,6 +1141,20 @@ class VoiceAgentHandler:
                     return
                 elif spam_result.get("warning"):
                     await self._speak_system_message(spam_result["warning"], clip_key="abuse_warning")
+
+            # I5: Wait-signal safety net — if the user uses wait keywords while no
+            # function is executing, proactively extend the silence pause by 30s so
+            # the soft prompt doesn't fire while they search for their card/wallet.
+            _WAIT_KEYWORDS = (
+                "sec", "moment", "hold", "paying", "checking",
+                "minute", "doing", "processing", "just a", "bear with",
+                "one sec", "hang on",
+            )
+            if not self._is_processing_function:
+                _lower = content.lower()
+                if any(kw in _lower for kw in _WAIT_KEYWORDS):
+                    logger.info("I5: Wait-signal detected in user utterance — extending silence pause +30s")
+                    self.silence_monitor.pause_silence(30)
 
 
 
