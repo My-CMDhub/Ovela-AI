@@ -337,6 +337,7 @@ class VoiceAgentHandler:
         "cool", "perfect", "alright", "yeah",
         "mhm", "mm", "mmm", "gotcha", "yea", "yup",
         "uh", "um", "ah", "oh", "okey", "okey-dokey",
+        "hhmm", "hmm", "ahh",
     ])
 
     # ── Multi-word / hyphenated phrases (checked as whole normalized phrase) ──
@@ -347,6 +348,7 @@ class VoiceAgentHandler:
         "sure okay", "right okay", "yep okay", "yeah ok",
         "oh okay", "oh ok", "ah okay", "ah ok",
         "yep sure", "yes sure", "yes okay", "yes ok",
+        "i see", "got it",
     ])
 
     # ── Wait keywords for safety-net silence pause extension (C2/I5) ──────────
