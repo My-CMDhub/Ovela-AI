@@ -335,13 +335,27 @@ class VoiceAgentHandler:
     _MEANINGLESS_SINGLE_WORDS = frozenset([
         "sure", "okay", "ok", "yep", "yes", "right",
         "cool", "perfect", "alright", "yeah",
-        "mhm", "mm", "mmm", "gotcha",
+        "mhm", "mm", "mmm", "gotcha", "yea", "yup",
+        "uh", "um", "ah", "oh", "okey", "okey-dokey",
     ])
 
     # ── Multi-word / hyphenated phrases (checked as whole normalized phrase) ──
     _MEANINGLESS_PHRASES = frozenset([
         "uh huh", "uh-huh", "go ahead", "all right",
+        "yeah okay", "yeah sure", "okay sure", "ok sure",
+        "uh yeah", "hmm okay", "yeah yeah", "ok ok",
+        "sure okay", "right okay", "yep okay", "yeah ok",
+        "oh okay", "oh ok", "ah okay", "ah ok",
+        "yep sure", "yes sure", "yes okay", "yes ok",
     ])
+
+    # ── Wait keywords for safety-net silence pause extension (C2/I5) ──────────
+    _WAIT_KEYWORDS_EXTENDED = (
+        "sec", "moment", "hold", "paying", "checking", "minute", "doing",
+        "processing", "just a", "bear with", "one sec", "hang on",
+        "let me", "i'm looking", "i have", "yeah i", "give me", "finding",
+        "wait", "hang tight",
+    )
 
     def _is_meaningless_interruption(self, text: str) -> bool:
         """
@@ -351,12 +365,8 @@ class VoiceAgentHandler:
         Two-stage check:
           Stage 1 — direct whole-phrase match for multi-word affirmations
                      ("uh huh", "go ahead", etc. won't survive word-splitting)
-          Stage 2 — word-by-word check for single-word combos (≤ 3 words)
-
-        Applied globally whenever:
-          - A tool is executing  (_is_processing_function)
-          - System audio is playing (_is_system_audio_playing)
-          - An injection ack is pending (_pending_injection_event is not None)
+          Stage 2 — word-by-word check. If ALL words in the utterance are
+                     single-word fillers, it is discarded.
         """
         if not text or not text.strip():
             return False
@@ -368,9 +378,9 @@ class VoiceAgentHandler:
         if normalized in self._MEANINGLESS_PHRASES:
             return True
 
-        # Stage 2: word-by-word check (≤ 3 words, all single-word fillers)
+        # Stage 2: word-by-word check (entirely composed of fillers)
         words = normalized.split()
-        if len(words) > 3:
+        if not words:
             return False
         return all(w in self._MEANINGLESS_SINGLE_WORDS for w in words)
 
@@ -1036,20 +1046,49 @@ class VoiceAgentHandler:
                 logger.info(f"[User]: {content}")
             
             # ─────────────────────────────────────────────────────────────────
-            # HEURISTIC FILTER DURING FUNCTION CALLS:
-            # Audio now flows to Deepgram while a tool is executing so that
-            # genuine corrections ("wait, I meant next week") are transcribed
-            # and land in the LLM context before the function result arrives.
-            #
-            # Filter rules:
-            #  ≤ 2 words → filler noise ("okay", "uh huh", "yeah") → discard
-            #  > 2 words → meaningful correction → let Deepgram context carry
-            #              it; the LLM will address it when responding to the
-            #              function result.  Add to local transcript for analytics.
+            # N4 & C2/I5: GLOBAL MEANINGLESS INTERRUPTION FILTER & WAIT SIGNAL
             # ─────────────────────────────────────────────────────────────────
+            # N4: Global meaningless interruption filter — applied whenever the
+            # system is busy (audio playing, injection pending, silence wait
+            # active via wait_on_request, OR a tool is executing). This prevents
+            # short affirmations from breaking states or triggering response cycles.
+            _silence_paused = (
+                self.silence_monitor.silence_pause_end_time is not None
+                and time.time() < self.silence_monitor.silence_pause_end_time
+            )
+            is_busy = (
+                self._is_system_audio_playing
+                or self._pending_injection_event is not None
+                or _silence_paused
+                or self._is_processing_function
+            )
+            if is_busy and self._is_meaningless_interruption(content):
+                logger.info(
+                    "🙉 N4: Meaningless affirmation '%s' discarded while system busy "
+                    "(audio=%s / injection=%s / wait_pause=%s / processing=%s)",
+                    content[:40],
+                    self._is_system_audio_playing,
+                    self._pending_injection_event is not None,
+                    _silence_paused,
+                    self._is_processing_function,
+                )
+                return
+
+            # C2/I5: Wait-signal safety net — if the user uses wait keywords,
+            # proactively extend the silence pause by 30s so the soft prompt
+            # doesn't fire while they search for their card/wallet/inbox.
+            _lower = content.lower()
+            is_wait_signal = any(kw in _lower for kw in self._WAIT_KEYWORDS_EXTENDED)
+            if is_wait_signal:
+                logger.info(f"I5: Wait-signal detected in user utterance ('{content}') — extending silence pause +30s")
+                self.silence_monitor.pause_silence(30)
+
+            # HEURISTIC FILTER DURING FUNCTION CALLS:
+            # If a tool is executing, let meaningful corrections flow through.
+            # Short noise <= 2 words is discarded unless it contains a wait signal.
             if self._is_processing_function:
                 word_count = len(content.strip().split())
-                if word_count <= 2:
+                if word_count <= 2 and not is_wait_signal:
                     logger.debug(f"🙉 Short noise during function call ({word_count}w) — discarded")
                     return
                 # Meaningful correction: record locally but skip all state
@@ -1060,17 +1099,6 @@ class VoiceAgentHandler:
                     "text": content,
                     "timestamp": time.strftime("%H:%M:%S")
                 })
-                return
-
-            # N4: Global meaningless interruption filter — applied whenever the
-            # system is busy (audio playing or injection pending) regardless of
-            # whether a function is actively executing.
-            if (self._is_system_audio_playing or self._pending_injection_event is not None) \
-                    and self._is_meaningless_interruption(content):
-                logger.info(
-                    "🙉 N4: Meaningless affirmation '%s' discarded while system busy (audio/injection active)",
-                    content[:40]
-                )
                 return
             
             # ─────────────────────────────────────────────────────────────────
@@ -1142,19 +1170,7 @@ class VoiceAgentHandler:
                 elif spam_result.get("warning"):
                     await self._speak_system_message(spam_result["warning"], clip_key="abuse_warning")
 
-            # I5: Wait-signal safety net — if the user uses wait keywords while no
-            # function is executing, proactively extend the silence pause by 30s so
-            # the soft prompt doesn't fire while they search for their card/wallet.
-            _WAIT_KEYWORDS = (
-                "sec", "moment", "hold", "paying", "checking",
-                "minute", "doing", "processing", "just a", "bear with",
-                "one sec", "hang on",
-            )
-            if not self._is_processing_function:
-                _lower = content.lower()
-                if any(kw in _lower for kw in _WAIT_KEYWORDS):
-                    logger.info("I5: Wait-signal detected in user utterance — extending silence pause +30s")
-                    self.silence_monitor.pause_silence(30)
+            # I5: Wait-signal safety net check moved to top of user block.
 
 
 
