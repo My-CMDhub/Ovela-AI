@@ -60,7 +60,7 @@ MANDATORY GATE — you MUST complete ALL 3 steps before calling this function:
   STEP 3: Read back the FULL one-line summary: '[Name], checking in [date], checking out [date], [room] at $[price] per night' — and received a verbal YES.
 
 If ANY step is incomplete — DO NOT call this function. Complete the missing step first.
-Set has_user_confirmed_summary=true ONLY after the caller said YES to the STEP 3 summary.
+Set has_user_confirmed_summary="YES" ONLY after the caller said YES to the STEP 3 summary.
 If this tool fails validation, it will return a natural language error (e.g., 'Email invalid'). You MUST read this error, inform the user, and ask for the specific correction required.""",
             "parameters": {
                 "type": "object",
@@ -99,8 +99,8 @@ If this tool fails validation, it will return a natural language error (e.g., 'E
                         "description": "Any special requests or notes"
                     },
                     "has_user_confirmed_summary": {
-                        "type": "boolean",
-                        "description": "MANDATORY: Set to true ONLY if the caller explicitly said YES after you read back the full booking summary (name, dates, room, price). If false or omitted, the backend will reject this call."
+                        "type": "string",
+                        "description": "CRITICAL STATE FLAG: You MUST pass the string 'YES' here if the caller has explicitly said 'YES' (or agreed) after you read back the full booking summary. Pass the string 'NO' if they haven't confirmed it yet. If you omit this or pass 'NO', the booking will instantly fail. Do not drop this flag."
                     }
                 },
                 "required": ["guest_name", "check_in_date", "room_type", "guest_email", "has_user_confirmed_summary"]
@@ -342,20 +342,16 @@ Starts passive wait mode. Say ONE word ('Sure.' or 'Of course.') and call this t
             }
         },
         {
-            "name": "end_call",
-            "description": "End the call by saying goodbye. ONLY use when the caller explicitly wants to finish the conversation, such as 'bye', 'goodbye', 'see you', 'that's all', or when they clearly confirm they are done after your final help-offer. If they only say thanks, appreciation, or a polite wrap-up, do ONE final natural help-offer first instead of ending immediately. NEVER use this when they want to speak to staff or be transferred. You must supply a confidence_score.",
+            "name": "hang_up_call",
+            "description": "End the call and gracefully disconnect the phone line. ONLY use this when the caller explicitly says goodbye, bye, or indicates they are completely finished and no longer need assistance. Do NOT use this if the caller is just pausing or if you are transferring them.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "message": {"type": "string"},
-                    "confidence_score": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Your confidence score (1-100) that the user genuinely wants to end the call right now."
+                    "farewell_message": {
+                        "type": "string",
+                        "description": "A short, polite goodbye message to say before hanging up (e.g. 'Thanks for calling, goodbye.')."
                     }
-                },
-                "required": ["confidence_score"]
+                }
             }
         }
     ]

@@ -425,7 +425,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                         logger.info(f"✅ Scraping success on attempt {attempt}")
                         break
                     else:
-                        logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
+                        logger.warning("ARGS DUMP: %s", args); logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
                         
                 except Exception as scrape_err:
                     logger.error(f"⚠️ Scraping exception on attempt {attempt}: {scrape_err}")
@@ -608,11 +608,11 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
 
 
     # N1: System-level pre-booking gate — reject the call if the AI hasn't confirmed
-    # the full booking summary with the caller yet.  This is the irrefutable backend
-    # enforcement that makes prompt drift impossible to bypass.
-    has_confirmed = args.get("has_user_confirmed_summary", False)
+    # the full booking summary with the caller yet.
+    has_confirmed_val = args.get("has_user_confirmed_summary", "NO")
+    has_confirmed = (str(has_confirmed_val).upper() == "YES" or has_confirmed_val is True)
     if not has_confirmed:
-        logger.warning(
+        logger.warning("ARGS DUMP: %s", args); logger.warning(
             "N1 gate: create_booking_request called WITHOUT caller summary confirmation — rejecting. "
             "guest=%s email=%s check_in=%s room=%s",
             guest_name, guest_email, check_in, room_type
@@ -892,7 +892,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                     normalized_doc_phone = doc_phone
             
             if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
-                logger.warning(
+                logger.warning("ARGS DUMP: %s", args); logger.warning(
                     "🔒 Privacy boundary triggered: Caller phone '%s' attempted to access booking for '%s' (phone: '%s'). Refusing access.",
                     caller_phone, doc.get("guest_name"), doc_phone
                 )
@@ -1221,7 +1221,7 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
         # N6: Hard guard — block confirmation email when payment is still pending
         if active_doc.get("payment_status") in ("pending_payment", "pending", None) \
                 and active_doc.get("status") not in ("paid", "confirmed"):
-            logger.warning(
+            logger.warning("ARGS DUMP: %s", args); logger.warning(
                 "🔒 N6 guard: resend_payment_confirmation blocked for %s — payment_status='%s' (still pending).",
                 active_doc.get("booking_reference"), active_doc.get("payment_status")
             )
@@ -1241,7 +1241,7 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
                 normalized_doc_phone = doc_phone
 
         if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
-            logger.warning(
+            logger.warning("ARGS DUMP: %s", args); logger.warning(
                 "🔒 Privacy boundary triggered: Caller phone '%s' attempted to resend receipt for '%s' (phone: '%s'). Refusing access.",
                 caller_phone, active_doc.get("guest_name"), doc_phone
             )
@@ -1709,7 +1709,7 @@ class CoalCreekFunctionDispatcher:
                 try:
                     await asyncio.wait_for(email_notify_event.wait(), timeout=6.0)
                 except asyncio.TimeoutError:
-                    logger.warning("N2: Email dispatch timeout (6s) for %s — continuing", booking_ref)
+                    logger.warning("ARGS DUMP: %s", args); logger.warning("N2: Email dispatch timeout (6s) for %s — continuing", booking_ref)
 
                 # N2: If email failed propagate the error into the function result
                 # so the AI is forced to tell the caller immediately.
@@ -1723,7 +1723,7 @@ class CoalCreekFunctionDispatcher:
                         "booking_reference": booking_ref,
                         "_email_bounce": True,
                     }
-                    logger.warning("N2: SMTP bounce injected into function result for %s", booking_ref)
+                    logger.warning("ARGS DUMP: %s", args); logger.warning("N2: SMTP bounce injected into function result for %s", booking_ref)
 
                 # ── Task 3: ADK Cold Path session state update ─────────────────
                 if self.call_sid:
@@ -1836,13 +1836,10 @@ class CoalCreekFunctionDispatcher:
              return result
              
         # Common controls
-        elif function_name == "end_call":
-             return {
-                "action": "end_call",
-                "success": True,
-                "message": args.get("message", ""),
-                "user_utterance": args.get("_user_utterance", ""),
-                "ai_should_say": "Thanks for calling Coal Creek Motel, goodbye.",
+        elif function_name == "hang_up_call":
+            return {
+                "action": "hangup",
+                "message": args.get("farewell_message", "Goodbye. Have a great day!")
             }
              
         elif function_name == "transfer_to_staff":
@@ -1850,7 +1847,7 @@ class CoalCreekFunctionDispatcher:
              negation_words = {"no", "dont", "don't", "stop", "never", "cancel"}
              words = set(re.sub(r'[^\w\s]', '', user_utt).split())
              if negation_words & words or user_utt in ("no", "no no", "no thanks", "no thank you"):
-                 logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
+                 logger.warning("ARGS DUMP: %s", args); logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
                  return {
                      "success": False,
                      "error": "The user explicitly said NO to the transfer. Do not transfer them. Ask how else you can help.",

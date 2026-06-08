@@ -465,7 +465,7 @@ function ScenarioAccordion({ scenario }: { scenario: ScenarioResult }) {
                             ADK Runtime Trace — Phase 1 (Clean Input)
                         </p>
                         <div className="space-y-2">
-                            {scenario.phase_1.transcript.map((item, i) => (
+                            {(scenario.phase_1?.transcript || []).map((item, i) => (
                                 <TraceItem key={i} item={item} />
                             ))}
                         </div>

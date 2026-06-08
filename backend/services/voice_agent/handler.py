@@ -1766,10 +1766,10 @@ class VoiceAgentHandler:
                 await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
                 return
 
-            # Check for end_call signal (LLM explicitly requested call termination)
-            if result.get("action") == "end_call":
-                confidence = result.get("confidence_score", result.get("confidence_level", "unknown"))
-                logger.info(f"👋 end_call function called - injecting farewell + instant hangup (confidence: {confidence})")
+            # Check for hangup signal (LLM explicitly requested call termination)
+            if result.get("action") == "hangup":
+                confidence = 100
+                logger.info(f"👋 hang_up_call function called - injecting farewell + instant hangup")
                 self._is_hanging_up = True
                 self.silence_monitor.stop()
                 message = result.get("message")
