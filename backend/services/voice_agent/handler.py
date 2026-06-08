@@ -559,32 +559,31 @@ class VoiceAgentHandler:
         )
         
         # Smart Memory Injection
-        memory_context = ""
-        _cc_booking = (
-            self.tenant_id == "coalcreek" and
-            any(self.memory[k] for k in ("check_in", "check_out", "room_type", "num_guests", "notes"))
-        )
-        if self.memory["name"] or self.memory["order_summary"] or _cc_booking:
-            memory_context = f"\n\n=== CURRENT MEMORY (DO NOT FORGET) ===\n"
-            if self.memory["name"]:
-                memory_context += f"• Guest Name: {self.memory['name']}\n"
-            if self.memory["order_summary"]:
+        memory_context = f"\n\n=== CURRENT MEMORY (DO NOT FORGET) ===\n"
+        memory_context += f"• Caller Phone: {self.user_phone}\n"
+        if self.memory.get("name"):
+            memory_context += f"• Guest Name: {self.memory['name']}\n"
+        
+        # Tenant-Specific Memory Injection
+        if self.tenant_id == "coalcreek":
+            if self.memory.get("check_in"):
+                memory_context += f"• Preferred Check-in: {self.memory['check_in']}\n"
+            if self.memory.get("check_out"):
+                memory_context += f"• Preferred Check-out: {self.memory['check_out']}\n"
+            if self.memory.get("room_type"):
+                memory_context += f"• Preferred Room Type: {self.memory['room_type']}\n"
+            if self.memory.get("num_guests"):
+                memory_context += f"• Number of Guests: {self.memory['num_guests']}\n"
+            if self.memory.get("notes"):
+                memory_context += f"• Special Requests / Notes: {self.memory['notes']}\n"
+        else:
+            # Saranda Cafe (or generic food/pickup order)
+            if self.memory.get("order_summary"):
                 memory_context += f"• Current Order: {self.memory['order_summary']}\n"
-            if self.memory["pickup_time"]:
+            if self.memory.get("pickup_time"):
                 memory_context += f"• Desired Pickup: {self.memory['pickup_time']}\n"
-            # Coal Creek booking details
-            if self.tenant_id == "coalcreek":
-                if self.memory["check_in"]:
-                    memory_context += f"• Preferred Check-in: {self.memory['check_in']}\n"
-                if self.memory["check_out"]:
-                    memory_context += f"• Preferred Check-out: {self.memory['check_out']}\n"
-                if self.memory["room_type"]:
-                    memory_context += f"• Preferred Room Type: {self.memory['room_type']}\n"
-                if self.memory["num_guests"]:
-                    memory_context += f"• Number of Guests: {self.memory['num_guests']}\n"
-                if self.memory["notes"]:
-                    memory_context += f"• Special Requests / Notes: {self.memory['notes']}\n"
-            memory_context += "========================================\n"
+        memory_context += "========================================\n"
+
         
         # Append function-call speaking rules to the prompt.
         # These go into agent.think.prompt (the ONLY valid place for 
@@ -1794,6 +1793,7 @@ class VoiceAgentHandler:
             # Release Go Deaf AFTER all post-function speech & transfers are done
             self._is_processing_function = False
             self._filler_played_this_turn = False  # BS3: reset on error path so next turn is not locked
+            self._blocking_interruptions = False
     
     async def _send_function_response(self, call_id: str, function_name: str, result: dict):
         """Send function result back to Deepgram (V1 API format).
@@ -2023,11 +2023,23 @@ class VoiceAgentHandler:
                         logger.info("📨 Sending Hard Cap Summary SMS (Blocking)...")
                         
                         # Build context
-                        intent = self.memory.get("order_summary") or "Customer Inquiry"
+                        intent = "Customer Inquiry"
                         sms_context = ""
-                        if self.pending_order:
-                             items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
-                             sms_context = f" | DRAFT: {items}"
+                        if self.tenant_id == "coalcreek":
+                            booking_details = []
+                            if self.memory.get("check_in"):
+                                booking_details.append(f"In: {self.memory['check_in']}")
+                            if self.memory.get("room_type"):
+                                booking_details.append(f"Room: {self.memory['room_type']}")
+                            if booking_details:
+                                intent = "Motel Booking Request"
+                                sms_context = f" | Details: {', '.join(booking_details)}"
+                        else:
+                            if self.memory.get("order_summary"):
+                                intent = self.memory["order_summary"]
+                            if self.pending_order:
+                                 items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
+                                 sms_context = f" | DRAFT: {items}"
                         
                         summary_msg = f"⏱️ HARD CAP TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
                         
@@ -2391,14 +2403,24 @@ class VoiceAgentHandler:
         # [NEW] SEND TRANSFER SUMMARY SMS (Non-blocking)
         if not skip_summary_sms:
             try:
-                # Check for pending order to include context
+                # Check for pending order/booking to include context
                 sms_context = ""
-                if self.pending_order:
-                    items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
-                    sms_context = f" | DRAFT ORDER: {items}"
-                
-                # Default intent if none
-                intent = self.memory.get("order_summary") or "Customer Inquiry"
+                intent = "Customer Inquiry"
+                if self.tenant_id == "coalcreek":
+                    booking_details = []
+                    if self.memory.get("check_in"):
+                        booking_details.append(f"In: {self.memory['check_in']}")
+                    if self.memory.get("room_type"):
+                        booking_details.append(f"Room: {self.memory['room_type']}")
+                    if booking_details:
+                        intent = "Motel Booking Request"
+                        sms_context = f" | Details: {', '.join(booking_details)}"
+                else:
+                    if self.memory.get("order_summary"):
+                        intent = self.memory["order_summary"]
+                    if self.pending_order:
+                        items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
+                        sms_context = f" | DRAFT ORDER: {items}"
                 
                 from services.sms import sms_service
                 summary_msg = f"📞 INCALL TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"

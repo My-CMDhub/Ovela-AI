@@ -48,6 +48,23 @@ def _today_melbourne_date():
     return datetime.now(MELBOURNE_TZ).date()
 
 
+def phone_numbers_match(p1: str, p2: str) -> bool:
+    """
+    Check if two phone numbers match (by comparing their last 9 digits).
+    This handles country code prefixes (+61 vs 0) and formatting differences.
+    """
+    if not p1 or not p2:
+        return False
+    d1 = "".join(c for c in p1 if c.isdigit())
+    d2 = "".join(c for c in p2 if c.isdigit())
+    if not d1 or not d2:
+        return False
+    if len(d1) >= 9 and len(d2) >= 9:
+        return d1[-9:] == d2[-9:]
+    return d1 == d2
+
+
+
 # Common STT mishearings for email domains
 _EMAIL_DOMAIN_FIXES = [
     (r'g[\s\-]?mail', 'gmail'),
@@ -581,7 +598,14 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     guest_email = _normalize_email(args.get("guest_email", ""), guest_name)
     notes = args.get("notes", "")
 
-    guest_phone = args.get("guest_phone", "") or user_phone
+    from services.voice_agent.text_utils import normalize_phone_number
+    raw_guest_phone = args.get("guest_phone", "")
+    normalized_guest = normalize_phone_number(raw_guest_phone) if raw_guest_phone else ""
+    if len(normalized_guest) >= 5:
+        guest_phone = normalized_guest
+    else:
+        guest_phone = user_phone
+
 
     # N1: System-level pre-booking gate — reject the call if the AI hasn't confirmed
     # the full booking summary with the caller yet.  This is the irrefutable backend
@@ -867,7 +891,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 except Exception:
                     normalized_doc_phone = doc_phone
             
-            if not caller_phone or normalized_doc_phone != caller_phone:
+            if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
                 logger.warning(
                     "🔒 Privacy boundary triggered: Caller phone '%s' attempted to access booking for '%s' (phone: '%s'). Refusing access.",
                     caller_phone, doc.get("guest_name"), doc_phone
@@ -1183,7 +1207,7 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
         
         active_doc = None
         for doc in (docs or []):
-            if doc.get("status") in ("paid", "confirmed", "link_sent", "pending_payment"):
+            if doc.get("status") in ("paid", "confirmed", "link_sent", "pending_payment", "pending"):
                 active_doc = doc
                 break
                 
@@ -1215,7 +1239,7 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
             except Exception:
                 normalized_doc_phone = doc_phone
 
-        if not caller_phone or normalized_doc_phone != caller_phone:
+        if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
             logger.warning(
                 "🔒 Privacy boundary triggered: Caller phone '%s' attempted to resend receipt for '%s' (phone: '%s'). Refusing access.",
                 caller_phone, active_doc.get("guest_name"), doc_phone
@@ -1747,6 +1771,16 @@ class CoalCreekFunctionDispatcher:
             }
              
         elif function_name == "transfer_to_staff":
+             user_utt = (args.get("_user_utterance") or "").lower().strip()
+             negation_words = {"no", "dont", "don't", "stop", "never", "cancel"}
+             words = set(re.sub(r'[^\w\s]', '', user_utt).split())
+             if negation_words & words or user_utt in ("no", "no no", "no thanks", "no thank you"):
+                 logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
+                 return {
+                     "success": False,
+                     "error": "The user explicitly said NO to the transfer. Do not transfer them. Ask how else you can help.",
+                     "message": "Sorry about that. How else can I help you today?"
+                 }
              from core.config import settings
              return {
                 "action": "transfer",
