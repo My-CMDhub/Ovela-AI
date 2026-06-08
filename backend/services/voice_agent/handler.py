@@ -582,6 +582,10 @@ class VoiceAgentHandler:
                 memory_context += f"• Current Order: {self.memory['order_summary']}\n"
             if self.memory.get("pickup_time"):
                 memory_context += f"• Desired Pickup: {self.memory['pickup_time']}\n"
+        
+        if self.custom_params.get("transfer_failed") == "true":
+            memory_context += "• CRITICAL: You just attempted to transfer the user to staff, but NO ONE ANSWERED. The user has been returned to you. Apologize that the front desk is busy right now, and ask if there's anything else you can help them with directly or if they want to leave a message. DO NOT attempt to transfer them  until user explicitly ask for it again.\n"
+            
         memory_context += "========================================\n"
 
         
@@ -725,11 +729,19 @@ class VoiceAgentHandler:
         # =====================================================================
         try:
             logger.info(f"📥 Loading config for tenant: {self.tenant_id} and profile for {self.user_phone[:4]}****")
-            caller_profile, tenant_config = await asyncio.gather(
+            caller_profile, tenant_config, cached_memory = await asyncio.gather(
                 self.caller_memory_bank.get_profile(self.user_phone),
                 db_service.get_tenant_config(self.tenant_id),
+                db_service.get_hot_path_state(self.call_sid),
                 return_exceptions=True
             )
+            
+            # Handle cached memory
+            if isinstance(cached_memory, Exception):
+                logger.error("Failed to load cached memory: %s", cached_memory)
+            elif cached_memory:
+                self.memory.update(cached_memory)
+                logger.info("💾 Hot path state rehydrated for %s", self.call_sid)
             
             # Handle profile result
             if isinstance(caller_profile, Exception):
@@ -958,6 +970,7 @@ class VoiceAgentHandler:
             
             await self.twilio_ws.send_json(media_message)
             self._twilio_audio_frames_sent += 1
+            self._twilio_audio_bytes_sent = getattr(self, '_twilio_audio_bytes_sent', 0) + len(audio_bytes)
             self.latency.mark_first_audio_out()  # no-op after first frame per turn
             
         except Exception as e:
@@ -1075,6 +1088,52 @@ class VoiceAgentHandler:
                 )
                 return
 
+            # If we survived the meaningless filter, it's a MEANINGFUL interruption!
+            # If the AI was actively speaking, we must now fire the deferred `clear` 
+            # event and trim the transcript.
+            if getattr(self, '_ai_is_speaking', False):
+                logger.info(f"🛑 Meaningful interruption confirmed ('{content}'). Firing clear event.")
+                
+                # Send clear event to Twilio to stop agent audio
+                clear_message = {
+                    "event": "clear",
+                    "streamSid": self.stream_sid
+                }
+                asyncio.create_task(self.twilio_ws.send_json(clear_message))
+                
+                # INTERRUPTION TRIM
+                tts_start = getattr(self, '_tts_playback_start', None)
+                if tts_start and self.transcript and self.transcript[-1].get('role') == 'ai':
+                    elapsed = time.time() - tts_start
+                    original_text = self.transcript[-1].get('text', '')
+                    trimmed = trim_assistant_transcript(original_text, elapsed)
+                    if trimmed != original_text:
+                        self.transcript[-1]['text'] = trimmed
+                        logger.info(
+                            "✂️ Interruption trim (Sync Layer): %.1fs elapsed → %d→%d words | '%s…'",
+                            elapsed,
+                            len(original_text.split()),
+                            len(trimmed.split()) if trimmed else 0,
+                            trimmed[:40] if trimmed else "(empty)",
+                        )
+                        
+                        # INJECT SYSTEM TAG
+                        if self.deepgram_ws:
+                            try:
+                                inject_msg = {
+                                    "type": "InjectUserMessage",
+                                    "content": "[System Note: Caller interrupted. Continue from last confirmed point.]"
+                                }
+                                asyncio.create_task(self.deepgram_ws.send(json.dumps(inject_msg)))
+                                logger.info("💉 Injected interruption system tag into Deepgram context")
+                            except Exception as e:
+                                logger.warning(f"Failed to inject system tag: {e}")
+
+                # Force AI speaking state to False now that it's truly interrupted
+                self._ai_is_speaking = False
+                self._tts_playback_started_this_turn = False
+                self._final_help_offer_active = False
+
             # C2/I5: Wait-signal safety net — if the user uses wait keywords,
             # proactively extend the silence pause by 30s so the soft prompt
             # doesn't fire while they search for their card/wallet/inbox.
@@ -1156,6 +1215,9 @@ class VoiceAgentHandler:
             _words = content.split()
             if self._is_explicit_terminal_goodbye(content) or self._is_soft_close_only(content):
                 self.latency.set_turn_type("goodbye")
+                if self._is_explicit_terminal_goodbye(content):
+                    self.silence_monitor.stop()
+                    logger.info("👋 Explicit goodbye detected - stopping silence monitor to prevent 'still there?' prompts")
             elif len(_words) <= 7:
                 self.latency.set_turn_type("short_answer")
             else:
@@ -1254,9 +1316,31 @@ class VoiceAgentHandler:
         # 'clear' event so injected TTS audio (filler phrases) cannot be wiped.
         # Audio still flows to Deepgram — see _handle_twilio_media.
         # Meaningful corrections are filtered in _handle_conversation_text.
-        if self._is_processing_function:
+        if getattr(self, '_is_processing_function', False):
             logger.debug("🛡️ Suppressing Twilio clear during function call (TTS guard)")
             return
+        
+        # ─────────────────────────────────────────────────────────────────
+        # TTS SYNC LAYER: Check if AI audio is actually still playing in the
+        # user's ear based on bytes sent vs elapsed time.
+        # If it's still playing, suppress immediate `clear` to prevent "mmhmm"
+        # from cutting off the AI prematurely.
+        # ─────────────────────────────────────────────────────────────────
+        if getattr(self, '_ai_is_speaking', False) and hasattr(self, '_tts_playback_start'):
+            bytes_sent = getattr(self, '_twilio_audio_bytes_sent', 0)
+            elapsed_time = time.time() - self._tts_playback_start
+            expected_duration = bytes_sent / 8000.0  # 8000 bytes/sec for 8kHz mulaw
+            
+            if elapsed_time < expected_duration + 0.3:  # 300ms grace period
+                logger.debug(f"🛡️ Sync Layer: Suppressing clear. AI audio still playing ({elapsed_time:.2f}s / {expected_duration:.2f}s)")
+                # Don't clear Twilio audio buffer yet. `_handle_conversation_text` will
+                # clear it if the text proves to be a meaningful interruption.
+                
+                # Still track latency and VAD
+                self.user_speech_start_time = time.time()
+                self.latency.mark_user_vad()
+                self.has_user_spoken = True
+                return
         
         # ─────────────────────────────────────────────────────────────────
         # SYSTEM AUDIO PROTECTION: If we injected system audio (ACKs, farewells),
@@ -1296,48 +1380,12 @@ class VoiceAgentHandler:
         # Notify silence monitor
         self.silence_monitor.on_user_speech()
         
-        # Send clear event to Twilio to stop agent audio immediately
-        clear_message = {
-            "event": "clear",
-            "streamSid": self.stream_sid
-        }
-        await self.twilio_ws.send_json(clear_message)
-
-        # INTERRUPTION TRIM: Prune last AI transcript entry to only include
-        # words actually spoken before the interruption, keeping LLM context
-        # coherent with what the caller heard. Pure math — zero I/O.
-        tts_start = getattr(self, '_tts_playback_start', None)
-        if tts_start and self.transcript and self.transcript[-1].get('role') == 'ai':
-            elapsed = time.time() - tts_start
-            original_text = self.transcript[-1].get('text', '')
-            trimmed = trim_assistant_transcript(original_text, elapsed)
-            if trimmed != original_text:
-                self.transcript[-1]['text'] = trimmed
-                logger.info(
-                    "✂️ Interruption trim: %.1fs elapsed → %d→%d words | '%s…'",
-                    elapsed,
-                    len(original_text.split()),
-                    len(trimmed.split()) if trimmed else 0,
-                    trimmed[:40] if trimmed else "(empty)",
-                )
-                
-                # INJECT SYSTEM TAG
-                if self.deepgram_ws:
-                    try:
-                        inject_msg = {
-                            "type": "InjectUserMessage",
-                            "content": "[System Note: Caller interrupted. Continue from last confirmed point.]"
-                        }
-                        await self.deepgram_ws.send(json.dumps(inject_msg))
-                        logger.info("💉 Injected interruption system tag into Deepgram context")
-                    except Exception as e:
-                        logger.warning(f"Failed to inject system tag: {e}")
-
-        # CRITICAL: Force AI speaking state to False immediately
-        # Deepgram might skip AgentAudioDone if interrupted, causing state lock
-        self._ai_is_speaking = False
-        self._tts_playback_started_this_turn = False
-        self._final_help_offer_active = False
+        # We NO LONGER clear the Twilio audio buffer here.
+        # It is deferred to `_handle_conversation_text` (Sync Layer) which verifies
+        # the text is a meaningful interruption before stopping the AI's speech.
+        
+        # CRITICAL: Do NOT force AI speaking state to False yet!
+        # If it was a false interruption, the AI is actually still speaking.
         # NOTE: do NOT call on_ai_finished_speaking() here — it sets silence_check_start_time
         # to the moment user speaks, which races with the 300ms grace in _handle_agent_audio_done
         # and causes abandon-silence to fire even when user has spoken.
@@ -1365,6 +1413,7 @@ class VoiceAgentHandler:
         
         # Cancel any silence escalation - AI is responding
         self._in_silence_escalation = False
+        self._twilio_audio_bytes_sent = 0
     
     async def _handle_agent_audio_done(self):
         """
@@ -1524,6 +1573,9 @@ class VoiceAgentHandler:
             if function_args.get("notes"):
                 self.memory["notes"] = function_args["notes"]
                 logger.info(f"🧠 Memory Updated: notes = {self.memory['notes']}")
+                
+        # Background save of the hot path state so it survives reconnects
+        asyncio.create_task(db_service.save_hot_path_state(self.call_sid, self.memory))
         
         # ─────────────────────────────────────────────────────────────────
         # FAST-START PATH: For check_availability we always need a filler
@@ -1716,19 +1768,20 @@ class VoiceAgentHandler:
 
             # Check for end_call signal (LLM explicitly requested call termination)
             if result.get("action") == "end_call":
-                confidence = result.get("confidence_level", "unknown")
-                logger.info(f"👋 end_call function called - injecting farewell + scheduling hangup (confidence: {confidence})")
+                confidence = result.get("confidence_score", result.get("confidence_level", "unknown"))
+                logger.info(f"👋 end_call function called - injecting farewell + instant hangup (confidence: {confidence})")
                 self._is_hanging_up = True
+                self.silence_monitor.stop()
                 message = result.get("message")
                 if not message:
                     message = get_random_farewell(self.tenant_id)
                     logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
                 # Use the pre-recorded farewell clip if available to eliminate Cartesia TTS network latency
                 # (falls back gracefully to live Cartesia TTS if missing).
-                await self._speak_system_message(message, clip_key="farewell")
-                delay = max(4.0, (len(message) * 0.1) + 2.0)
-                logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
-                asyncio.create_task(self._scheduled_hangup(delay))
+                # Play farewell and wait for playback to finish, then hang up instantly.
+                await self._speak_system_message(message, clip_key="farewell", wait_for_playback=True)
+                logger.info("👋 Farewell finished playing — hanging up call instantly.")
+                await self._hangup_call()
                 return
 
             # Check for wait_on_request signal

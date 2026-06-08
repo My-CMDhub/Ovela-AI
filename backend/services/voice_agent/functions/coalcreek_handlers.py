@@ -1141,6 +1141,7 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                     check_in=active_doc.get("check_in_date", ""),
                     check_out=active_doc.get("check_out_date", ""),
                     db_service=db_service,
+                    existing_stripe_url=active_doc.get("payment_link_url")
                 ))
                 email_resent = True
         except Exception as resend_err:
@@ -1301,6 +1302,70 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
         }
 
 
+async def handle_resend_payment_link(args: dict, db_service, user_phone: str) -> dict:
+    """
+    Resend payment link email for an unpaid/pending booking.
+    """
+    guest_email = args.get("guest_email", "")
+    
+    if not guest_email or not db_service:
+        return {
+            "success": False,
+            "message": "I need your email address to resend the payment link."
+        }
+        
+    try:
+        docs = await db_service.lookup_motel_reservation(
+            email=guest_email,
+            tenant_id="coalcreek"
+        )
+        
+        active_doc = None
+        for doc in (docs or []):
+            if doc.get("status") in ("pending_payment", "pending", "link_sent") or doc.get("payment_status") in ("pending_payment", "pending"):
+                active_doc = doc
+                break
+                
+        if not active_doc:
+            return {
+                "success": False,
+                "message": "I couldn't find a pending booking for that email address. Do you have a different email or your phone number?"
+            }
+            
+        if active_doc.get("status") in ("paid", "confirmed") and active_doc.get("payment_status") == "paid":
+            return {
+                "success": False,
+                "error": "Booking is already paid. Use resend_payment_confirmation instead to send a receipt."
+            }
+            
+        # Re-use existing link if possible to avoid double payment race condition
+        existing_url = active_doc.get("payment_link_url")
+        
+        asyncio.create_task(_handle_stripe_and_guest_email(
+            booking_ref=active_doc.get("booking_reference", ""),
+            room_type=active_doc.get("room_type", ""),
+            total_amt=float(active_doc.get("total_amount", 0)),
+            guest_email=guest_email,
+            guest_name=active_doc.get("guest_name", ""),
+            guest_phone=active_doc.get("guest_phone", ""),
+            check_in=active_doc.get("check_in_date", ""),
+            check_out=active_doc.get("check_out_date", ""),
+            db_service=db_service,
+            existing_stripe_url=existing_url
+        ))
+        
+        return {
+            "success": True,
+            "message": f"I've resent the payment link to {guest_email}. Please check your inbox."
+        }
+    except Exception as e:
+        logger.error(f"Error resending payment link: {e}")
+        return {
+            "success": False,
+            "message": "I had a bit of trouble sending that email right now. I can ask reception to follow up with you."
+        }
+
+
 # =============================================================================
 # STRIPE + EMAIL COLD PATH HELPER
 # =============================================================================
@@ -1318,6 +1383,7 @@ async def _handle_stripe_and_guest_email(
     saved_doc_id: str | None = None,
     notify_event: asyncio.Event | None = None,
     notify_result: list | None = None,
+    existing_stripe_url: str | None = None,
 ) -> None:
     """
     Cold-path task: creates Stripe checkout session, PATCHes Appwrite reservation
@@ -1335,23 +1401,29 @@ async def _handle_stripe_and_guest_email(
     try:
         from .stripe_handlers import create_checkout_session
         expiry_ts = int(time.time()) + 1800
-        stripe_url = create_checkout_session(
-            amount_aud=int(total_amt),
-            room_type=room_type,
-            booking_ref=booking_ref,
-            guest_email=guest_email or None,
-            guest_name=guest_name or None,
-            check_in=check_in or None,
-            check_out=check_out or None,
-            expires_at=expiry_ts,
-        )
+        
+        if existing_stripe_url:
+            stripe_url = existing_stripe_url
+            logger.info("💳 Reusing existing Stripe URL to prevent double-payment race conditions for %s", booking_ref)
+            doc_id = saved_doc_id
+        else:
+            stripe_url = create_checkout_session(
+                amount_aud=int(total_amt),
+                room_type=room_type,
+                booking_ref=booking_ref,
+                guest_email=guest_email or None,
+                guest_name=guest_name or None,
+                check_in=check_in or None,
+                check_out=check_out or None,
+                expires_at=expiry_ts,
+            )
 
         if not stripe_url:
             logger.info("💳 Stripe not configured — skipping payment link dispatch for %s", booking_ref)
             return
 
         # ── 1. PATCH Appwrite reservation to pending_payment ────────────────────
-        if db_service:
+        if db_service and not existing_stripe_url:
             try:
                 if saved_doc_id:
                     # P11-C: Fast path — no re-fetch, no race condition
@@ -1673,6 +1745,9 @@ class CoalCreekFunctionDispatcher:
         
         elif function_name == "resend_payment_confirmation":
             return await handle_resend_payment_confirmation(args, self.db_service, self.user_phone)
+            
+        elif function_name == "resend_payment_link":
+            return await handle_resend_payment_link(args, self.db_service, self.user_phone)
 
         # Knowledge Base (Direct calls to motel_knowledge_base service)
         elif function_name == "get_room_pricing":

@@ -6,6 +6,7 @@ from services.db.leads import LeadsMixin
 from services.db.conversations import ConversationsMixin
 from services.db.notifications import NotificationsMixin
 from services.db.transcripts import TranscriptsMixin
+from services.db.sessions import SessionsMixin
 import logging
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,8 @@ class AppwriteService(
     LeadsMixin,
     ConversationsMixin,
     NotificationsMixin,
-    TranscriptsMixin
+    TranscriptsMixin,
+    SessionsMixin
 ):
     """
     Main Service Facade.

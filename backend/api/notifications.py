@@ -84,7 +84,7 @@ async def create_notification(data: NotificationCreate):
         raise HTTPException(status_code=400, detail="Urgency must be 'low', 'medium', or 'high'")
     
     try:
-        result = db_service.create_staff_notification(
+        result = await db_service.create_staff_notification(
             notification_type=data.notification_type,
             customer_name=data.customer_name.strip(),
             customer_phone=data.customer_phone.strip(),
@@ -112,7 +112,7 @@ async def get_notification_counts(tenant_id: str = "coalcreek"):
     Returns: {pending: N, in_progress: N, completed: N, dismissed: N, total: N}
     """
     try:
-        notifications = db_service.get_staff_notifications(limit=500, tenant_id=tenant_id)
+        notifications = await db_service.get_staff_notifications(limit=500, tenant_id=tenant_id)
         
         # Filter out archived
         active = [n for n in notifications if n.get("status") != "archived"]
@@ -143,7 +143,7 @@ async def list_notifications(
     By default, excludes archived (soft-deleted) notifications.
     """
     try:
-        notifications = db_service.get_staff_notifications(
+        notifications = await db_service.get_staff_notifications(
             status=status,
             notification_type=type,
             limit=limit,
@@ -164,7 +164,7 @@ async def list_notifications(
 async def get_notification(notification_id: str, tenant_id: str = "coalcreek"):
     """Get a single notification by ID."""
     try:
-        notifications = db_service.get_staff_notifications(tenant_id=tenant_id)
+        notifications = await db_service.get_staff_notifications(tenant_id=tenant_id)
         notification = next((n for n in notifications if n.get("$id") == notification_id), None)
         
         if not notification:
@@ -187,7 +187,7 @@ async def update_notification(notification_id: str, update: NotificationUpdate, 
     """
     try:
         # Get current notification to check status transition
-        notifications = db_service.get_staff_notifications(tenant_id=tenant_id)
+        notifications = await db_service.get_staff_notifications(tenant_id=tenant_id)
         current = next((n for n in notifications if n.get("$id") == notification_id), None)
         
         if not current:
@@ -212,7 +212,7 @@ async def update_notification(notification_id: str, update: NotificationUpdate, 
         if not data:
             raise HTTPException(status_code=400, detail="No updates provided. Please specify status or notes to update.")
         
-        result = db_service.update_staff_notification(notification_id, data)
+        result = await db_service.update_staff_notification(notification_id, data)
         
         if not result:
             raise HTTPException(status_code=500, detail="Update failed. Please try again.")
@@ -269,7 +269,7 @@ async def update_notification(notification_id: str, update: NotificationUpdate, 
             if guest_email and is_first_completion:
                 # Mark that email was sent
                 extra_data["email_sent_via_dashboard"] = True
-                db_service.update_staff_notification(notification_id, {
+                await db_service.update_staff_notification(notification_id, {
                     "extra_data": json.dumps(extra_data)
                 })
                 
@@ -306,7 +306,7 @@ async def delete_notification(notification_id: str, tenant_id: str = "coalcreek"
     """
     try:
         # Get current notification
-        notifications = db_service.get_staff_notifications(tenant_id=tenant_id)
+        notifications = await db_service.get_staff_notifications(tenant_id=tenant_id)
         current = next((n for n in notifications if n.get("$id") == notification_id), None)
         
         if not current:
@@ -317,7 +317,7 @@ async def delete_notification(notification_id: str, tenant_id: str = "coalcreek"
             raise HTTPException(status_code=400, detail="This notification is already archived.")
         
         # Soft delete: mark as archived instead of hard delete
-        result = db_service.update_staff_notification(notification_id, {
+        result = await db_service.update_staff_notification(notification_id, {
             "status": "archived",
             "staff_notes": f"{current.get('staff_notes', '')}\n[Archived by staff]".strip()
         })
@@ -340,7 +340,7 @@ async def restore_notification(notification_id: str, tenant_id: str = "coalcreek
     Restore an archived notification back to pending status.
     """
     try:
-        notifications = db_service.get_staff_notifications(tenant_id=tenant_id)
+        notifications = await db_service.get_staff_notifications(tenant_id=tenant_id)
         current = next((n for n in notifications if n.get("$id") == notification_id), None)
         
         if not current:
@@ -349,7 +349,7 @@ async def restore_notification(notification_id: str, tenant_id: str = "coalcreek
         if current.get("status") != "archived":
             raise HTTPException(status_code=400, detail="This notification is not archived.")
         
-        result = db_service.update_staff_notification(notification_id, {
+        result = await db_service.update_staff_notification(notification_id, {
             "status": "pending",
             "staff_notes": f"{current.get('staff_notes', '')}\n[Restored by staff]".strip()
         })

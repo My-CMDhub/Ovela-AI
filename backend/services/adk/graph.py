@@ -459,26 +459,27 @@ async def transfer_to_staff(tool_context: ToolContext = None) -> str:
       - There is an unrecoverable system error or availability calendar timeout.
       - A privacy block occurs and the caller needs manual assistance.
       - The caller has a complex request (e.g., modifying a booking that has already been paid).
+      - CRITICAL: If you just attempted a transfer and NO ONE ANSWERED (fallback flow), DO NOT call this again in the same turn until explicitly asked by user again to do so.
 
     Returns JSON string:
         {"action": "transfer_to_staff", "message": "Sure, I'll transfer you to reception now."}
     """
     return json.dumps({"action": "transfer_to_staff", "message": "Sure, I'll transfer you to reception now."})
 
-async def end_call(message: str = "", tool_context: ToolContext = None) -> str:
+async def end_call(message: str = "", confidence_score: int = 100, tool_context: ToolContext = None) -> str:
     """
     End the active phone call by playing a farewell message and disconnecting.
 
-    Use when the caller says goodbye, indicates they have no further questions, or the transaction/inquiry is fully complete.
-    Do NOT say goodbye without calling this tool, otherwise the line stays active and wastes resources.
+    ONLY use when the caller explicitly wants to finish the conversation, such as 'bye', 'goodbye', 'see you', 'that's all', or when they clearly confirm they are done after your final help-offer. If they only say thanks, appreciation, or a polite wrap-up, do ONE final natural help-offer first instead of ending immediately. NEVER use this when they want to speak to staff or be transferred.
 
     Args:
         message: Goodbye/farewell message to read to the caller.
+        confidence_score: Your confidence score (1-100) that the user genuinely wants to end the call right now. Must be >= 80 to use this tool.
 
     Returns JSON string:
-        {"action": "end_call", "message": message or "Thanks for calling Coal Creek Motel, goodbye."}
+        {"action": "end_call", "message": message or "Thanks for calling Coal Creek Motel, goodbye.", "confidence_score": confidence_score}
     """
-    return json.dumps({"action": "end_call", "message": message or "Thanks for calling Coal Creek Motel, goodbye."})
+    return json.dumps({"action": "end_call", "message": message or "Thanks for calling Coal Creek Motel, goodbye.", "confidence_score": confidence_score})
 
 async def perform_live_search(query: str, tool_context: ToolContext = None) -> str:
     """

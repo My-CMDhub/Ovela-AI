@@ -125,7 +125,7 @@ class TranscriptsMixin:
         try:
             MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
             collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
-            doc_id = ID.unique()
+            doc_id = call_sid if (call_sid and len(call_sid) <= 36) else ID.unique()
             now = datetime.now(MELBOURNE_TZ).isoformat()
 
             if tenant_id == "coalcreek":
@@ -140,6 +140,8 @@ class TranscriptsMixin:
                     "transcript": (transcript[:10000] if transcript else ""),
                     "metadata_json": json.dumps(metadata) if metadata else "{}",
                     "created_at": now,
+                    "call_summary": call_summary or "",
+                    "customer_name": customer_name or "Not provided",
                 }
             else:
                 data = {
@@ -155,12 +157,31 @@ class TranscriptsMixin:
                     "created_at": now,
                 }
 
+            # Try to create the document
             result = await self._make_request(
                 "POST",
                 f"/databases/{self.motel_db_id}/collections/{collection_id}/documents",
                 data={"documentId": doc_id, "data": data}
             )
-            logger.info(f"✅ Saved transcript for {tenant_id}: {doc_id} {mask_phone(caller_phone)}")
+            
+            # If the creation fails (e.g. document already exists, 409 Conflict), try to update it
+            if not result:
+                logger.info(f"Document {doc_id} may already exist, attempting update via PATCH...")
+                update_data = data.copy()
+                if "created_at" in update_data:
+                    del update_data["created_at"]
+                
+                result = await self._make_request(
+                    "PATCH",
+                    f"/databases/{self.motel_db_id}/collections/{collection_id}/documents/{doc_id}",
+                    data={"data": update_data}
+                )
+                if result:
+                    logger.info(f"✅ Updated existing transcript for {tenant_id}: {doc_id}")
+                else:
+                    logger.error(f"❌ Failed to create or update transcript for {tenant_id}: {doc_id}")
+            else:
+                logger.info(f"✅ Saved transcript for {tenant_id}: {doc_id} {mask_phone(caller_phone)}")
             return result
         except Exception as e:
             logger.error(f"❌ Error saving transcript for {tenant_id}: {e}")

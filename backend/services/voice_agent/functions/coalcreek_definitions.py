@@ -250,17 +250,44 @@ Return Schema: This tool returns concise, high-signal context (status, dates, se
             }
         },
         {
-            "name": "request_human_callback",
-            "description": "Request staff callback for complex issues or group bookings.",
+            "name": "resend_payment_link",
+            "description": "Resend the payment link email. ONLY use this when the user has an unpaid or pending booking and explicitly says they haven't received the payment link, or they ask you to send it again.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "customer_name": {"type": "string"},
-                    "customer_phone": {"type": "string"},
-                    "reason": {"type": "string"},
-                    "urgency": {"type": "string", "enum": ["low", "medium", "high"]}
+                    "guest_email": {
+                        "type": "string",
+                        "description": "Guest email address to send the payment link to"
+                    }
                 },
-                "required": ["customer_name", "customer_phone", "reason"]
+                "required": ["guest_email"]
+            }
+        },
+        {
+            "name": "request_human_callback",
+            "description": "Request staff callback for complex issues or group bookings. MANDATORY GATE: You MUST ask the customer for their name before invoking this tool if it is not already in memory (e.g., 'Sure, could I please get your name so I can arrange that callback?'). Do NOT invent placeholders or generic names. Only call this tool after receiving their name.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_name": {
+                        "type": "string",
+                        "description": "The customer's name (MUST ask the caller for this first if not already known)"
+                    },
+                    "customer_phone": {
+                        "type": "string",
+                        "description": "The customer's phone number for callback"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief reason for callback"
+                    },
+                    "urgency": {
+                        "type": "string", 
+                        "enum": ["low", "medium", "high"],
+                        "description": "Urgency level"
+                    }
+                },
+                "required": ["reason"]
             }
         },
         {
@@ -294,7 +321,7 @@ Starts passive wait mode. Say ONE word ('Sure.' or 'Of course.') and call this t
         },
         {
             "name": "transfer_to_staff",
-            "description": "Transfer the caller to a staff member or receptionist. ONLY use when the caller explicitly says YES to a transfer offer, or explicitly asks to be transferred (e.g., 'speak to someone', 'transfer me'). NEVER execute this proactively without explicit permission. If the user interrupts you or does not give clear confirmation, DO NOT transfer them.",
+            "description": "Transfer the caller to a staff member or receptionist. ONLY use when the caller explicitly says YES to a transfer offer, or explicitly asks to be transferred (e.g., 'speak to someone', 'transfer me'). NEVER execute this proactively without explicit permission. If the user interrupts you or does not give clear confirmation, DO NOT transfer them. CRITICAL: If you just attempted a transfer and NO ONE ANSWERED (you are in the fallback flow), DO NOT call this again in the same turn.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -316,17 +343,19 @@ Starts passive wait mode. Say ONE word ('Sure.' or 'Of course.') and call this t
         },
         {
             "name": "end_call",
-            "description": "End the call by saying goodbye. ONLY use when the caller explicitly wants to finish the conversation, such as 'bye', 'goodbye', 'see you', 'that's all', or when they clearly confirm they are done after your final help-offer. If they only say thanks, appreciation, or a polite wrap-up, do ONE final natural help-offer first instead of ending immediately. NEVER use this when they want to speak to staff or be transferred.",
+            "description": "End the call by saying goodbye. ONLY use when the caller explicitly wants to finish the conversation, such as 'bye', 'goodbye', 'see you', 'that's all', or when they clearly confirm they are done after your final help-offer. If they only say thanks, appreciation, or a polite wrap-up, do ONE final natural help-offer first instead of ending immediately. NEVER use this when they want to speak to staff or be transferred. You must supply a confidence_score.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "message": {"type": "string"},
-                    "confidence_level": {
-                        "type": "string",
-                        "enum": ["low", "medium", "high"],
-                        "description": "Your confidence level that the user genuinely wants to end the call right now."
+                    "confidence_score": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Your confidence score (1-100) that the user genuinely wants to end the call right now."
                     }
-                }
+                },
+                "required": ["confidence_score"]
             }
         }
     ]

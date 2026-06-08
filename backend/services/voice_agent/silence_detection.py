@@ -202,3 +202,10 @@ class SilenceMonitor:
     def get_abandon_threshold(self) -> float:
         """Get abandon threshold."""
         return ABANDON_THRESHOLD
+
+    def stop(self):
+        """Stop silence monitoring permanently for this call."""
+        self.silence_check_start_time = None
+        self.silence_check_id += 1  # Invalidate any running checks
+        self.silence_pause_end_time = float('inf')  # Pause forever
+
