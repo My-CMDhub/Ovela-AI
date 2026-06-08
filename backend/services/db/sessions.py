@@ -43,3 +43,14 @@ class SessionsMixin(AppwriteBase):
         except Exception as e:
             logger.debug(f"No hot path state found for {call_sid} (or error: {e})")
         return {}
+
+    async def delete_hot_path_state(self, call_sid: str) -> None:
+        """Delete the ephemeral hot-path state from adk_sessions upon call termination."""
+        try:
+            doc_id = f"hp_{call_sid}"
+            path = f"/collections/adk_sessions/documents/{doc_id}"
+            await self._motel_request("DELETE", path)
+            logger.debug(f"🧹 Hot path state cleaned up for {call_sid}")
+        except Exception as e:
+            # We don't error loudly on a 404 if it was already deleted or didn't exist
+            logger.debug(f"Failed to delete hot path state for {call_sid} (likely not found): {e}")

@@ -2356,6 +2356,10 @@ class VoiceAgentHandler:
                 response.raise_for_status()
             
             logger.info("✅ Call terminated successfully")
+            
+            # Clean up ephemeral hot path cache
+            asyncio.create_task(db_service.delete_hot_path_state(self.call_sid))
+            
             self.is_running = False
         except Exception as e:
             logger.error(f"Failed to hangup call: {e}")
