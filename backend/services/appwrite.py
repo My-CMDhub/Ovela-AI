@@ -12,7 +12,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 class AppwriteService(
-    AppwriteBase,
     BookingsMixin,
     CustomersMixin,
     SettingsMixin,
@@ -20,7 +19,8 @@ class AppwriteService(
     ConversationsMixin,
     NotificationsMixin,
     TranscriptsMixin,
-    SessionsMixin
+    SessionsMixin,
+    AppwriteBase
 ):
     """
     Main Service Facade.
