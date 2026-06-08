@@ -458,18 +458,7 @@ function ScenarioAccordion({ scenario }: { scenario: ScenarioResult }) {
                         </div>
                     )}
 
-                    {/* Turn-by-turn trace */}
-                    <div>
-                        <p className="mb-3 flex items-center gap-2 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                            <Brain className="h-3.5 w-3.5 text-violet-400" />
-                            ADK Runtime Trace — Phase 1 (Clean Input)
-                        </p>
-                        <div className="space-y-2">
-                            {(scenario.phase_1?.transcript || []).map((item, i) => (
-                                <TraceItem key={i} item={item} />
-                            ))}
-                        </div>
-                    </div>
+
 
                     {/* Judge reasoning */}
                     {scenario.phase_1.evaluation_report?.detailed_reasoning && (
