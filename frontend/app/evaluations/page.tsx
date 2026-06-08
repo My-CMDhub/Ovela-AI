@@ -214,7 +214,7 @@ function HeroHeader({ run }: { run: EvaluationRun }) {
                         <div className="mt-2 flex items-center gap-3 text-xs">
                             <span className="flex items-center gap-1 text-slate-400">
                                 <Zap className="h-3 w-3 text-amber-400" />
-                                Avg voice latency: &lt;850ms
+                                Avg voice latency: ~ 850ms
                             </span>
                             <span className="flex items-center gap-1 text-slate-400">
                                 <Activity className="h-3 w-3 text-violet-400" />
@@ -380,13 +380,12 @@ function ScenarioAccordion({ scenario }: { scenario: ScenarioResult }) {
                         <p className="text-[11px] text-slate-600 mb-0.5">Delta</p>
                         {delta !== null ? (
                             <span
-                                className={`inline-flex items-center gap-0.5 text-xs font-bold ${
-                                    delta > 0
-                                        ? "text-emerald-400"
-                                        : delta < 0
+                                className={`inline-flex items-center gap-0.5 text-xs font-bold ${delta > 0
+                                    ? "text-emerald-400"
+                                    : delta < 0
                                         ? "text-red-400"
                                         : "text-slate-400"
-                                }`}
+                                    }`}
                             >
                                 {delta > 0 ? (
                                     <TrendingUp className="h-3 w-3" />
@@ -442,13 +441,12 @@ function ScenarioAccordion({ scenario }: { scenario: ScenarioResult }) {
                                         </p>
                                         <div className="mt-1.5 h-1 w-full rounded-full bg-slate-800">
                                             <div
-                                                className={`h-1 rounded-full transition-all ${
-                                                    pct >= 80
-                                                        ? "bg-emerald-500"
-                                                        : pct >= 60
+                                                className={`h-1 rounded-full transition-all ${pct >= 80
+                                                    ? "bg-emerald-500"
+                                                    : pct >= 60
                                                         ? "bg-amber-500"
                                                         : "bg-red-500"
-                                                }`}
+                                                    }`}
                                                 style={{ width: `${pct}%` }}
                                             />
                                         </div>
