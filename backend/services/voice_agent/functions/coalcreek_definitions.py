@@ -57,10 +57,13 @@ If availability cannot be verified, apologize briefly and transfer to staff (bet
 MANDATORY GATE — you MUST complete ALL 3 steps before calling this function:
   STEP 1: Collected first name + last name (confirmed spelling if unusual).
   STEP 2: Spelled out the email character by character AND received a verbal YES/confirmation.
-  STEP 3: Read back the FULL one-line summary: '[Name], checking in [date], checking out [date], [room] at $[price] per night' — and received a verbal YES.
+  STEP 3: Read back the FULL one-line summary IN ONE SENTENCE and received a verbal YES:
+    "Just to confirm — [First Name Last Name], checking in [spoken date], checking out [spoken date], [Room Type] at $[price] per night, total $[total]. That email is [spell email letter by letter]. Is all of that correct?"
+    The STEP 3 summary MUST include: full name, check-in, check-out, room type, price per night, total, AND email.
+    A "Yep" confirming only the email address is NOT sufficient — the full summary must be read and confirmed.
 
 If ANY step is incomplete — DO NOT call this function. Complete the missing step first.
-Set has_user_confirmed_summary="YES" ONLY after the caller said YES to the STEP 3 summary.
+Set has_user_confirmed_summary="YES" ONLY after the caller said YES to the complete STEP 3 summary above.
 If this tool fails validation, it will return a natural language error (e.g., 'Email invalid'). You MUST read this error, inform the user, and ask for the specific correction required.""",
             "parameters": {
                 "type": "object",
@@ -80,7 +83,7 @@ If this tool fails validation, it will return a natural language error (e.g., 'E
                     "room_type": {
                         "type": "string",
                         "enum": ["queen", "twin", "family", "suite"],
-                        "description": "Room type to book"
+                        "description": "Room type to book. CRITICAL MAPPING: 'double' or 'double room' ALWAYS maps to 'queen'. 'twin' is ONLY used when caller explicitly says 'twin' or 'two single beds'. Never use 'twin' for a 'double' request."
                     },
                     "num_guests": {
                         "type": "integer",

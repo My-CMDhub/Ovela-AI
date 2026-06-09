@@ -5,12 +5,22 @@ import time
 
 logger = logging.getLogger(__name__)
 
+def _hp_doc_id(call_sid: str) -> str:
+    """
+    Appwrite document IDs must be ≤36 chars and match [a-zA-Z0-9._-].
+    Twilio call SIDs (e.g. CAd0efd670f5213e4bcbd338261fcd2c34) are 34 chars,
+    so 'hp_' + 34 = 37 — one over the limit.
+    We take the first 33 chars of the call_sid to guarantee hp_<33> = 36 max.
+    """
+    return f"hp_{call_sid[:33]}"
+
+
 class SessionsMixin(AppwriteBase):
     async def save_hot_path_state(self, call_sid: str, memory_dict: dict) -> None:
         """Save ephemeral hot-path state to adk_sessions to survive Twilio reconnects."""
         try:
             # We prefix the call_sid with 'hp_' to distinguish from ADK sessions
-            doc_id = f"hp_{call_sid}"
+            doc_id = _hp_doc_id(call_sid)
             now = int(time.time() * 1000)
             data = {
                 "app_name": "ovela_hot_path",
@@ -35,7 +45,7 @@ class SessionsMixin(AppwriteBase):
     async def get_hot_path_state(self, call_sid: str) -> dict:
         """Fetch ephemeral hot-path state from adk_sessions."""
         try:
-            doc_id = f"hp_{call_sid}"
+            doc_id = _hp_doc_id(call_sid)
             path = f"/collections/adk_sessions/documents/{doc_id}"
             doc = await self._motel_request("GET", path)
             if doc and "state_json" in doc:
@@ -47,7 +57,7 @@ class SessionsMixin(AppwriteBase):
     async def delete_hot_path_state(self, call_sid: str) -> None:
         """Delete the ephemeral hot-path state from adk_sessions upon call termination."""
         try:
-            doc_id = f"hp_{call_sid}"
+            doc_id = _hp_doc_id(call_sid)
             path = f"/collections/adk_sessions/documents/{doc_id}"
             await self._motel_request("DELETE", path)
             logger.debug(f"🧹 Hot path state cleaned up for {call_sid}")
