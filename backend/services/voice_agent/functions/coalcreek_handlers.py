@@ -1135,9 +1135,9 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
     
     logger.info(f"Captured Guest Info: {guest_name} - {guest_phone}")
 
-    # ── Email correction path: patch reservation + resend Stripe link ──
+    # ── Correction path: patch reservation + resend Stripe link ──
     email_resent = False
-    if guest_email and guest_phone and db_service:
+    if (guest_email or guest_name) and guest_phone and db_service:
         try:
             docs = await db_service.lookup_motel_reservation(
                 phone=guest_phone,
@@ -1178,27 +1178,29 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                     data=patch_data,
                 )
                 logger.info("📝 Details corrected in Appwrite for %s", active_doc.get("booking_reference"))
-                # Resend payment link to corrected email (fire-and-forget)
-                asyncio.create_task(_handle_stripe_and_guest_email(
-                    booking_ref=active_doc.get("booking_reference", ""),
-                    room_type=active_doc.get("room_type", ""),
-                    total_amt=float(active_doc.get("total_amount", 0)),
-                    guest_email=guest_email,
-                    guest_name=guest_name or active_doc.get("guest_name", ""),
-                    guest_phone=guest_phone,
-                    check_in=active_doc.get("check_in_date", ""),
-                    check_out=active_doc.get("check_out_date", ""),
-                    db_service=db_service,
-                    existing_stripe_url=active_doc.get("payment_link_url"),
-                    existing_expires_at=active_doc.get("payment_expires_at", 0)
-                ))
-                email_resent = True
+                final_email = guest_email or active_doc.get("guest_email")
+                if final_email:
+                    # Resend payment link to corrected email (fire-and-forget)
+                    asyncio.create_task(_handle_stripe_and_guest_email(
+                        booking_ref=active_doc.get("booking_reference", ""),
+                        room_type=active_doc.get("room_type", ""),
+                        total_amt=float(active_doc.get("total_amount", 0)),
+                        guest_email=final_email,
+                        guest_name=guest_name or active_doc.get("guest_name", ""),
+                        guest_phone=guest_phone,
+                        check_in=active_doc.get("check_in_date", ""),
+                        check_out=active_doc.get("check_out_date", ""),
+                        db_service=db_service,
+                        existing_stripe_url=active_doc.get("payment_link_url"),
+                        existing_expires_at=active_doc.get("payment_expires_at", 0)
+                    ))
+                    email_resent = True
         except Exception as resend_err:
-            logger.error("📧 Email correction/resend error: %s", resend_err)
+            logger.error("📧 Details correction/resend error: %s", resend_err)
     
     if email_resent:
         message = (
-            f"I've updated your details and resent the payment link to {guest_email}. "
+            f"I've updated your details and resent the payment link. "
             "Could you check your inbox now to make sure it has arrived?"
         )
     else:
