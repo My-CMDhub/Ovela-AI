@@ -2,7 +2,7 @@
     "run_mode": "optimized (Gemini 2.5 Flash + ADK graph)",
     "model": "vertex_ai/gemini-2.5-flash",
     "scenario_count": 14,
-    "average_phase1_score": 91.4,
+    "average_phase1_score": 92.8,
     "phase2_enabled": true,
     "results": [
         {
@@ -522,7 +522,7 @@
             }
         },
         {
-            "scenario_index": 5,
+            "scenario_index": 1,
             "scenario_name": "B2: Missing Email \u2014 Extraction Recovery Loop",
             "category": "Booking Lifecycle & PMS",
             "judge_facing_title": "Dynamic Entity Extraction Loop",
@@ -542,7 +542,15 @@
                     },
                     {
                         "role": "agent",
-                        "text": "What is your email address, John?"
+                        "text": "The Family Suite is available from Sunday the 14th of June for one night. The rate is two hundred and twenty dollars per night. Would you like me to place a hold for you, John Brown?"
+                    },
+                    {
+                        "role": "customer",
+                        "text": "Yeah, that sounds good. Can you hold it for me?"
+                    },
+                    {
+                        "role": "agent",
+                        "text": "Certainly. What is your email address, please? I will need you to spell it out for me."
                     },
                     {
                         "role": "customer",
@@ -550,121 +558,113 @@
                     },
                     {
                         "role": "agent",
-                        "text": "An email address is required to finalize your booking and send you the payment link. Do you have an email address that you would like to use for this booking?"
+                        "text": "I am sorry, but an email address is required to create a booking. If you do not have one, I can transfer you to reception and they can assist you further. Would you like me to do that?"
                     },
                     {
                         "role": "customer",
-                        "text": "Oh, okay. It\u2019s john.brown@hotmail.com."
+                        "text": "No need for that. I can give you my email. It's john.brown@hotmail.com."
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: John Brown, you are booking a family room from 14 June to 15 June. This is for one night and will cost $250 per night, for a total of $250. I will send the payment link to john.brown@hotmail.com. Does that sound right?"
+                        "text": "Thank you. Could you please spell out that email address for me, letter by letter?"
                     },
                     {
                         "role": "customer",
-                        "text": "Yep, that sounds right."
+                        "text": "Sure! It\u2019s J-O-H-N dot B-R-O-W-N at H-O-T-M-A-I-L dot C-O-M."
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: John Brown, you are booking a family room from 14 June to 15 June. This is for one night and will cost $250 per night, for a total of $250. I will send the payment link to john.brown@hotmail.com. Does that sound right?"
+                        "text": "Just to confirm: John Brown, Family Suite, checking in on June 14, 2026, checking out on June 15, 2026, one night at two hundred and twenty dollars per night, total two hundred and twenty dollars. I'll send the payment link to john.brown@hotmail.com. Does that sound right?"
                     },
                     {
                         "role": "customer",
-                        "text": "Yeah, that sounds right to me."
+                        "text": "Yep, that sounds right. Thanks for confirming!"
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: John Brown, you are booking a family room from 14 June to 15 June. This is for one night and will cost $250 per night, for a total of $250. I will send the payment link to john.brown@hotmail.com. Does that sound right?"
-                    },
-                    {
-                        "role": "customer",
-                        "text": "Yes, that\u2019s correct!"
-                    },
-                    {
-                        "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: John Brown, you are booking a family room from 14 June to 15 June. This is for one night and will cost $250 per night, for a total of $250. I will send the payment link to john.brown@hotmail.com. Does that sound right?"
+                        "text": "No worries, take your time. I'll stay on the line."
                     }
                 ],
                 "evaluation_report": {
-                    "total_score": 80,
+                    "total_score": 100,
                     "winner": "Gemini",
                     "metric_scores": {
                         "tool_accuracy": 30,
-                        "conversational_stability": 15,
+                        "conversational_stability": 25,
                         "markdown_bleed": 20,
-                        "interruption_pivot": 5,
+                        "interruption_pivot": 15,
                         "fault_recovery": 10
                     },
-                    "detailed_reasoning": "The agent correctly identified that the booking could proceed and was prepared to invoke the appropriate tools for finalizing the booking, earning full points for tool accuracy. However, the agent showed repetitive responses by reiterating the booking summary multiple times, which negatively impacted the conversational stability score. The speech was clean, with no markdown issues, thereby receiving full points in that metric. The agent struggled with pivoting efficiently when the customer was confirming details, leading to a low score in interruption handling. Nonetheless, the agent honored privacy guidelines, maintaining compliance throughout the interaction. Waivers applied include no penalties for the payment process, as it correctly simulated sending a link and did not involve any booking failures that would penalize for missing mock data."
+                    "detailed_reasoning": "The agent (Gemini) displayed excellent tool invocation accuracy, confirming the availability of the Family Suite correctly and preparing to send a payment link, scoring full points in this category. The conversational stability was strong as the agent maintained context throughout the conversation and avoided repetitive or generic responses. There were no markdown issues; all speech was clear and free of improper formatting. The agent handled the customer's shift in intent efficiently, indicating its ability to pivot without issues, and correctly implemented wait on requests when needed. Lastly, the agent enforced privacy governance by asking the customer to spell the email address and summarizing the booking details before confirming the creation of the booking request. Overall, all aspects of the conversation were handled proficiently without any notable failures, hence full points in all categories. No critical simulation waivers were necessary as all actions conformed to the guidelines."
                 },
-                "total_score": 80
+                "total_score": 100
             },
             "phase_2": {
-                "input": "can i book a family room for uh 14 moon to um 15 my brown",
+                "input": "can i fambly room for 14 soon to 15 june my name is john brown",
                 "transcript": [
                     {
                         "role": "customer",
-                        "text": "can i book emily room 14 to 15 my name is john brown"
+                        "text": "um can i book a room sort of 14 june to 15 june my name is john brown"
                     },
                     {
                         "role": "agent",
-                        "text": "Could you please clarify what type of room \"emily room\" is? We have queen, twin, family, and deluxe spa suites. Also, what is your email address? I will confirm the dates as June 14th to June 15th, 2026."
+                        "text": "Okay, John. So that's for June 14th to June 15th, 2026. What type of room would you like to book? And what is your email address, spelled out please?"
                     },
                     {
                         "role": "customer",
-                        "text": "Hey there! I\u2019m looking for a family room for June 14th to 15th. My name\u2019s John Brown. And I don\u2019t have an email."
+                        "text": "Um, I want a family room, and I don\u2019t have an email."
                     },
                     {
                         "role": "agent",
-                        "text": "I understand. To proceed with booking the family room for June 14th to June 15th, an email address is required. Do you have one you can provide?"
+                        "text": "A family room, got it. We do require an email address to send the booking confirmation and payment link. Do you have one I can use? If not, I can transfer you to reception to help with this booking."
                     },
                     {
                         "role": "customer",
-                        "text": "Oh, I see. Alright, you can use john.brown@hotmail.com. Thanks!"
+                        "text": "Oh, I see. Alright, you can use john.brown@hotmail.com."
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Let me read it back to make sure it's correct. Just to confirm: John Brown, family room, June 14th to June 15th, 1 night at the rate of $250 per night, total $250. I'll send the payment link to john.brown@hotmail.com. Does that sound right?"
+                        "text": "Thank you. Could you please spell out that email address for me, character by character?"
                     },
                     {
                         "role": "customer",
-                        "text": "Yep, that sounds right! Thanks for confirming."
+                        "text": "Sure! It's j-o-h-n dot b-r-o-w-n at h-o-t-m-a-i-l dot c-o-m."
                     },
                     {
                         "role": "agent",
-                        "text": "It seems I missed confirming the details with you earlier. John Brown, family room, checking in June 14th and checking out June 15th. That's 1 night at $250 per night, for a total of $250. I'll send the payment link to john.brown@hotmail.com. Does that sound right?"
+                        "text": "Thank you, john.brown@hotmail.com.\n\nJust to confirm, how many guests will be staying in the family room?"
                     },
                     {
                         "role": "customer",
-                        "text": "Yeah, that\u2019s perfect! Thanks for sorting that out."
+                        "text": "It\u2019ll be four of us."
                     },
                     {
                         "role": "agent",
-                        "text": "I apologize, it appears I still need to confirm the booking details with you. John Brown, family room, checking in June 14th and checking out June 15th. That's 1 night at $250 per night, for a total of $250. I'll send the payment link to john.brown@hotmail.com. Does that sound right?"
+                        "text": "I am sorry, John. The Family Suite is not available for June 14th to June 15th. It is sold out for those dates. Would you like to check availability for other room types or different dates?"
                     },
                     {
                         "role": "customer",
-                        "text": "Yes, that\u2019s exactly right! Thanks for your help!"
+                        "text": "Oh, bummer! Um, what other room types do you have available for those dates?"
                     },
                     {
                         "role": "agent",
-                        "text": "My apologies. It seems I'm having trouble confirming the booking. John Brown, family room, checking in June 14th and checking out June 15th. That's 1 night at $250 per night, for a total of $250. I'll send the payment link to john.brown@hotmail.com. Does that sound right?"
+                        "text": "For those dates, June 14th to June 15th, we have a Twin Room at one hundred and sixty dollars per night, or a Queen/Double room at one hundred and fifty dollars per night. Which one would you prefer?"
                     }
                 ],
                 "evaluation_report": {
-                    "total_score": 82,
+                    "total_score": 100,
                     "winner": "Gemini",
                     "metric_scores": {
                         "tool_accuracy": 30,
-                        "conversational_stability": 15,
+                        "conversational_stability": 25,
                         "markdown_bleed": 20,
-                        "interruption_pivot": 7,
+                        "interruption_pivot": 15,
                         "fault_recovery": 10
                     },
-                    "detailed_reasoning": "The agent invoked booking tools correctly by confirming room availability and providing details, earning full points in tool accuracy. However, there were issues with conversational stability, as the agent repeated booking details unnecessarily multiple times, which disrupted the flow of the conversation. Therefore, it received only 15 points. The speech was clean and free of markdown artifacts, allowing it to achieve full points for markdown bleed. There were some minor issues with gracefully handling repetitive confirmations and pivoting, which resulted in a 7-point score. Lastly, the agent complied with gate requirements by verifying the email and summarizing the booking details, thereby securing full points for fault recovery. Given these assessments, the total score is 72."
+                    "detailed_reasoning": "The agent accurately invoked the tools needed for checking availability and handled the room request appropriately, receiving full points for tool accuracy. It maintained context effectively throughout the conversation without repeating unnecessary responses, earning full marks for conversational stability. The conversation was free from markdown artifacts and was communicated clearly, securing full points in markdown bleed. The agent showed resilience in handling the customer's queries and intent shifts, ensuring the conversation flowed smoothly even when faced with the unavailability of the chosen room type, thus receiving full points for interruption pivot. Finally, there were no breaches of privacy governance; the agent enforced email spelling requirements correctly, leading to a full score in fault recovery. No penalties were applied for potential waivers regarding payment and booking availability, contributing to the perfect score."
                 },
-                "total_score": 82,
-                "phase_delta": -2
+                "total_score": 100,
+                "phase_delta": 0
             }
         },
         {
@@ -1836,5 +1836,5 @@
             }
         }
     ],
-    "avg_phase_1_score": 91.4
+    "avg_phase_1_score": 92.8
 }

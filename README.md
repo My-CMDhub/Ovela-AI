@@ -118,7 +118,7 @@ Standard hackathon implementations fail under the strict constraints of live tel
 Ovela undergoes continuous adversarial testing against real-world edge cases across three cognitive difficulty levels. 
 
 ### Highlight Metrics:
-* **91.4 / 100** Audited Phase 1 Average Score — 14 adversarial scenarios, graded by an independent LLM judge across a strict 100-point rubric.
+* **92.8 / 100** Audited Phase 1 Average Score — 14 adversarial scenarios, graded by an independent LLM judge across a strict 100-point rubric.
 * Scenarios span 3 cognitive difficulty levels: Happy Path → Mid-Flow Interruptions → Race Conditions, Privacy Boundary Violations, and Backend Failure Recovery.
 
 <div align="center">

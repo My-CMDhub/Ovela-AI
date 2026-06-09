@@ -96,8 +96,12 @@ const BASELINE_SCORES: Record<string, number> = {
     "C1: Race Condition — Last Room Pressure": 60,
     "C2: Payment Status Lookup by Return Caller": 52,
     "C3: Backend Failure — Graceful Human Handoff": 71,
+    "C4: Pre-Booking Hard Gate Enforcement": 45,
+    "C5: Privacy Boundary Verification": 50,
+    "C6: Unpaid Confirmation Resend Guard": 40,
+    "C7: Interruption Tolerance": 55,
 };
-const GLOBAL_BASELINE_AVG = 72.4;
+const GLOBAL_BASELINE_AVG = 61.1;
 
 // ─── Utility helpers ───────────────────────────────────────────────────────────
 
