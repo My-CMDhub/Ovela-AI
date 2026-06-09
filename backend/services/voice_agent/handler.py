@@ -53,7 +53,7 @@ from .latency_tracker import LatencyTracker
 from .memory import CallerMemoryBank
 from services.motel_knowledge_base import set_tenant_context
 
-CARTESIA_VOICE_ID = "f9836c6e-a0bd-460e-9d3c-f7299fa60f94"
+CARTESIA_VOICE_ID = "e8e5fffb-252c-436d-b842-8879b84445b6"
 # CARTESIA_VOICE_ID = "3e1ed423-17e5-4773-b87c-25b031106e41" - Paul AU
 # CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab" - Blake US
 # CARTESIA_VOICE_ID = "47c38ca4-5f35-497b-b1a3-415245fb35e1" - Daniel US
@@ -623,14 +623,14 @@ class VoiceAgentHandler:
             voice_id = CARTESIA_VOICE_ID
             
         # Get dynamic speed and volume parameters for Cartesia provider
-        speed = voice_settings.get("speed", 0.8)
+        speed = voice_settings.get("speed", "normal")
         volume = voice_settings.get("volume", 0.8)
         
-        logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
+        logger.info(f"🎤 Using Cartesia Sonic-3.5 TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
         return {
             "provider": {
                 "type": "cartesia",
-                "model_id": "sonic-3",
+                "model_id": "sonic-3.5",
                 "speed": speed,
                 "volume": volume,
                 "voice": {
