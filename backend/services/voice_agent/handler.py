@@ -610,6 +610,23 @@ class VoiceAgentHandler:
         if self.custom_params.get("transfer_failed") == "true":
             memory_context += "• CRITICAL: You just attempted to transfer the user to staff, but NO ONE ANSWERED. The user has been returned to you. Apologize that the front desk is busy right now, and ask if there's anything else you can help them with directly or if they want to leave a message. DO NOT attempt to transfer them  until user explicitly ask for it again.\n"
             
+        # Inject Pre-Loaded Active Booking (For fuzzy-matching / instant confirmation)
+        if self.memory.get("active_booking"):
+            ab = self.memory["active_booking"]
+            memory_context += f"\n=== ACTIVE BOOKING PRE-LOADED ===\n"
+            memory_context += f"• Reference: {ab.get('booking_reference')}\n"
+            memory_context += f"• Guest Name: {ab.get('guest_name')}\n"
+            memory_context += f"• Guest Email: {ab.get('guest_email', '')}\n"
+            memory_context += f"• Room Type: {ab.get('room_type')}\n"
+            memory_context += f"• Dates: {ab.get('check_in_date')} to {ab.get('check_out_date')} ({ab.get('num_nights')} nights)\n"
+            memory_context += f"• Status: {ab.get('status')} / Payment: {ab.get('payment_status')}\n"
+            memory_context += (
+                "IMPORTANT: You ALREADY have the user's booking details loaded above. "
+                "If the user asks to check or confirm their booking, DO NOT call lookup_booking. "
+                "Instead, fuzzy-match their spoken name against the 'Guest Name' above (e.g. 'Drew' matches 'Dhruv'). "
+                "If it's a match, just confirm the details directly with them.\n"
+            )
+
         memory_context += "========================================\n"
 
         
@@ -748,15 +765,16 @@ class VoiceAgentHandler:
             ))
 
         # =====================================================================
-        # ASYNC INIT: Fetch profile and tenant config concurrently
+        # ASYNC INIT: Fetch profile, tenant config, and active bookings concurrently
         # Reduces cold start TTFT latency by not blocking sequentially.
         # =====================================================================
         try:
-            logger.info(f"📥 Loading config for tenant: {self.tenant_id} and profile for {self.user_phone[:4]}****")
-            caller_profile, tenant_config, cached_memory = await asyncio.gather(
+            logger.info(f"📥 Loading config, profile, and bookings for tenant: {self.tenant_id} / phone: {self.user_phone[:4]}****")
+            caller_profile, tenant_config, cached_memory, active_bookings = await asyncio.gather(
                 self.caller_memory_bank.get_profile(self.user_phone),
                 db_service.get_tenant_config(self.tenant_id),
                 db_service.get_hot_path_state(self.call_sid),
+                db_service.lookup_motel_reservation(phone=self.user_phone, tenant_id=self.tenant_id),
                 return_exceptions=True
             )
             
@@ -776,6 +794,22 @@ class VoiceAgentHandler:
                     logger.info("🧠 Returning guest recognised: %s", self.user_phone[:4] + "****")
                 if caller_profile.get("room_preference"):
                     self.memory["room_type"] = caller_profile["room_preference"]
+            
+            # Handle active bookings result to enable fuzzy-matching pre-load context
+            if isinstance(active_bookings, Exception):
+                logger.error("Failed to load active bookings: %s", active_bookings)
+            elif active_bookings:
+                # Find most recent active/pending reservation
+                for doc in active_bookings:
+                    _ps = doc.get("payment_status") or ""
+                    _bs = doc.get("status") or ""
+                    is_pending = (
+                        _bs in ("reserved", "pending", "pending_payment", "link_sent", "confirmed", "paid")
+                    )
+                    if is_pending:
+                        self.memory["active_booking"] = doc
+                        logger.info("📅 Pre-loaded active booking into memory for fuzzy context: %s", doc.get("booking_reference"))
+                        break
             
             # Handle config result
             if isinstance(tenant_config, Exception):
