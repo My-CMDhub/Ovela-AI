@@ -316,7 +316,7 @@ Do NOT call this tool if:
         {
             "name": "wait_on_request",
             "description": """CRITICAL: Call this function IMMEDIATELY if the user uses WAIT SIGNALS (e.g., 'give me a sec', 'hold on', 'one moment', 'wait a minute', 'wait a while', 'let me check', 'I'll do that', 'let me pay', 'processing it', 'bear with me'). 
-Starts passive wait mode. Say ONE word ('Sure.' or 'Of course.') and call this tool. No questions, no continuation.""",
+Starts passive wait mode. DO NOT OUTPUT ANY TEXT. RETURN ONLY THE FUNCTION CALL. The system handles the acknowledgment automatically.""",
             "parameters": {
                 "type": "object",
                 "properties": {

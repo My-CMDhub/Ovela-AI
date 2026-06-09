@@ -878,10 +878,10 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
             return {"status": "ignored", "reason": "invalid_signature"}
             
         event = verification.get("event")
-        event_type = event.get("type")
+        event_type = getattr(event, "type", None) or event.get("type")
         
         if event_type == "checkout.session.completed":
-            session = event.get("data", {}).get("object", {})
+            session = getattr(event.data, "object", None) or event.get("data", {}).get("object", {})
             
             # Handle success (Payment or Setup)
             result = await coalcreek_stripe_service.handle_checkout_completion(session)
