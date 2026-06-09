@@ -1075,18 +1075,30 @@ class VoiceAgentHandler:
                 or self._pending_injection_event is not None
                 or _silence_paused
                 or self._is_processing_function
+                or getattr(self, '_ai_is_speaking', False)
             )
-            if is_busy and self._is_meaningless_interruption(content):
-                logger.info(
-                    "🙉 N4: Meaningless affirmation '%s' discarded while system busy "
-                    "(audio=%s / injection=%s / wait_pause=%s / processing=%s)",
-                    content[:40],
-                    self._is_system_audio_playing,
-                    self._pending_injection_event is not None,
-                    _silence_paused,
-                    self._is_processing_function,
-                )
-                return
+
+            # Pre-calculate wait and completion signals for advanced filtering
+            _lower = content.lower()
+            is_wait_signal = any(kw in _lower for kw in self._WAIT_KEYWORDS_EXTENDED)
+            is_completion_signal = any(kw in _lower for kw in ["done", "paid", "finished", "ready", "complete", "completed", "sent", "that's it", "all good"])
+            word_count = len(content.strip().split())
+
+            if is_busy:
+                # Discard meaningless noise OR any short utterance (<= 3 words) that isn't a deliberate wait/completion command
+                if self._is_meaningless_interruption(content) or (word_count <= 3 and not (is_wait_signal or is_completion_signal)):
+                    logger.info(
+                        "🙉 N4: Short or meaningless noise '%s' (%dw) discarded while system busy "
+                        "(audio=%s / injection=%s / wait_pause=%s / processing=%s / ai_speaking=%s)",
+                        content[:40],
+                        word_count,
+                        self._is_system_audio_playing,
+                        self._pending_injection_event is not None,
+                        _silence_paused,
+                        self._is_processing_function,
+                        getattr(self, '_ai_is_speaking', False)
+                    )
+                    return
 
             # If we survived the meaningless filter, it's a MEANINGFUL interruption!
             # If the AI was actively speaking, we must now fire the deferred `clear` 
@@ -1134,23 +1146,16 @@ class VoiceAgentHandler:
                 self._tts_playback_started_this_turn = False
                 self._final_help_offer_active = False
 
-            # C2/I5: Wait-signal safety net — if the user uses wait keywords,
+            # I5: Wait-signal safety net — if the user uses wait keywords,
             # proactively extend the silence pause by 30s so the soft prompt
             # doesn't fire while they search for their card/wallet/inbox.
-            _lower = content.lower()
-            is_wait_signal = any(kw in _lower for kw in self._WAIT_KEYWORDS_EXTENDED)
             if is_wait_signal:
                 logger.info(f"I5: Wait-signal detected in user utterance ('{content}') — extending silence pause +30s")
                 self.silence_monitor.pause_silence(30)
 
             # HEURISTIC FILTER DURING FUNCTION CALLS:
-            # If a tool is executing, let meaningful corrections flow through.
-            # Short noise <= 2 words is discarded unless it contains a wait signal.
+            # If a tool is executing, let meaningful corrections (> 3 words or signals) flow through.
             if self._is_processing_function:
-                word_count = len(content.strip().split())
-                if word_count <= 2 and not is_wait_signal:
-                    logger.debug(f"🙉 Short noise during function call ({word_count}w) — discarded")
-                    return
                 # Meaningful correction: record locally but skip all state
                 # changes — the LLM sees it via Deepgram's conversation context.
                 logger.info(f"📝 Meaningful correction during function call ({word_count}w) — LLM will handle post-result")
