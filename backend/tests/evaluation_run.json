@@ -2,7 +2,7 @@
     "run_mode": "optimized (Gemini 2.5 Flash + ADK graph)",
     "model": "vertex_ai/gemini-2.5-flash",
     "scenario_count": 14,
-    "average_phase1_score": 88.9,
+    "average_phase1_score": 90.3,
     "phase2_enabled": true,
     "results": [
         {
@@ -1384,7 +1384,7 @@
             }
         },
         {
-            "scenario_index": 11,
+            "scenario_index": 1,
             "scenario_name": "C4: Pre-Booking Hard Gate Enforcement",
             "category": "Booking Lifecycle & PMS",
             "judge_facing_title": "Pre-Booking Gate Verification",
@@ -1405,7 +1405,7 @@
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $150/night, total $150. I'll send the payment link to tom@gmail.com. Does that sound right?"
+                        "text": "I need to verify the booking summary details with you before I can save the hold. Let me read it back to make sure it's correct.\nJust to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $[X]/night, total $[Y]. I'll send the payment link to tom@gmail.com. Does that sound right?"
                     },
                     {
                         "role": "customer",
@@ -1413,7 +1413,7 @@
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $150/night, total $150. I'll send the payment link to tom@gmail.com. Does that sound right?"
+                        "text": "It seems there was an issue confirming your booking details. To proceed, I need to confirm the summary one more time: Tom Harris, queen room, checking in on 14 June and checking out on 15 June, for 1 night at $[X] per night, totaling $[Y]. I will send the payment link to tom@gmail.com. Does that sound correct?"
                     },
                     {
                         "role": "customer",
@@ -1421,7 +1421,15 @@
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $150/night, total $150. I'll send the payment link to tom@gmail.com. Does that sound right?"
+                        "text": "The Queen/Double is available from Sunday the 14th of June for 1 night. The rate is $150 per night. Would you like me to place a hold?"
+                    },
+                    {
+                        "role": "customer",
+                        "text": "Yes, please go ahead and place the hold."
+                    },
+                    {
+                        "role": "agent",
+                        "text": "I need to verify the booking summary details with you before I can save the hold. Let me read it back to make sure it's correct.\nJust to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $150/night, total $150. I'll send the payment link to tom@gmail.com. Does that sound right?"
                     },
                     {
                         "role": "customer",
@@ -1429,7 +1437,7 @@
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $150/night, total $150. I'll send the payment link to tom@gmail.com. Does that sound right?"
+                        "text": "I need to verify the booking summary details with you before I can save the hold. Let me read it back to make sure it's correct.\nJust to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $150/night, total $150. I'll send the payment link to tom@gmail.com. Does that sound right?"
                     },
                     {
                         "role": "customer",
@@ -1437,73 +1445,41 @@
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $150/night, total $150. I'll send the payment link to tom@gmail.com. Does that sound right?"
-                    },
-                    {
-                        "role": "customer",
-                        "text": "Yes, that is correct."
-                    },
-                    {
-                        "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $150/night, total $150. I'll send the payment link to tom@gmail.com. Does that sound right?"
+                        "text": "I need to verify the booking summary details with you before I can save the hold. Let me read it back to make sure it's correct.\nJust to confirm: Tom Harris, queen room, 14 June to 15 June, 1 night at $150/night, total $150. I'll send the payment link to tom@gmail.com. Does that sound right?"
                     }
                 ],
                 "evaluation_report": {
-                    "total_score": 65,
+                    "total_score": 85,
                     "winner": "Gemini",
                     "metric_scores": {
                         "tool_accuracy": 30,
-                        "conversational_stability": 0,
+                        "conversational_stability": 10,
                         "markdown_bleed": 20,
-                        "interruption_pivot": 5,
+                        "interruption_pivot": 15,
                         "fault_recovery": 10
                     },
-                    "detailed_reasoning": "The agent successfully invoked booking tools and parameters related to checking availability and summary confirmations, earning full points for tool accuracy. However, the agent repeated the booking summary six times without progressing the conversation, indicating a severe lack of conversational stability, resulting in a score of 0 points in that category. The speech was clean, free from any markdown artifacts, thus earning full points for markdown bleed. The agent performed poorly in handling pivoting, given that it did not handle any shifts in intent during the conversation, which resulted in only 5 points for that metric. Lastly, there was compliance with the necessary privacy and booking gates, earning full points in that area. No waivers were applied as all tested metrics were applicable."
+                    "detailed_reasoning": "The agent correctly invoked tools when appropriate and confirmed booking details accurately, earning full points for tool accuracy. However, it repeatedly asked for confirmation of the booking details multiple times, leading to a lack of conversational stability and earning only 10 points in that category. The speech maintained cleanliness, free of markdown and miscues, securing full marks for markdown bleed. The agent handled the conversation's flow with appropriate pauses and checks, earning full points for interruption pivot. Lastly, the agent followed pre-booking gate procedures effectively, securing full points for fault recovery. Overall, despite strong technical performance, the excessive repetition impacted its conversational flow significantly."
                 },
-                "total_score": 65
+                "total_score": 85
             },
             "phase_2": {
-                "input": "to book a queen room um check-in 14 june check-out 15 june for tom um harris tom@gmailcom",
+                "input": "i want a keen room check-in 14 soon check-out 15 june for tom harris tom@gmailcom",
                 "transcript": [
                     {
                         "role": "customer",
-                        "text": "i want book a room check-in 14 june check-out 15 tom harris tom@gmailcom"
+                        "text": "um i want to book cream sort of check-in 14 june check-out 15 june for tom harris tom@gmailcom"
                     },
                     {
                         "role": "agent",
-                        "text": "What type of room would you like to book, and for how many guests? Also, could you spell out your email address for me to confirm?"
+                        "text": "Could you please clarify the room type you are interested in? Also, could you provide the full email address, including the domain, and the number of guests?"
                     },
                     {
                         "role": "customer",
-                        "text": "I want to book a standard room for one guest. My name is Tom Harris, spelled T-O-M H-A-R-R-I-S. My email is tom@gmail.com, that's T-O-M at G-M-A-I-L dot C-O-M."
+                        "text": "Yeah, I want to book a cream sort of room for one guest. Check-in on June 14 and check-out on June 15. My name's Tom Harris, and my email is tom@gmail.com."
                     },
                     {
                         "role": "agent",
-                        "text": "[no response from ADK graph]"
-                    },
-                    {
-                        "role": "customer",
-                        "text": "Hello? Did you get that? I'm looking to book a room from June 14 to June 15. My name is Tom Harris, and my email is tom@gmail.com."
-                    },
-                    {
-                        "role": "agent",
-                        "text": "I have your details: Tom Harris, checking in June 14, 2026, and checking out June 15, 2026. Your email is tom@gmail.com. What type of room would you like to book? We have queen, twin, family, or deluxe spa suites available."
-                    },
-                    {
-                        "role": "customer",
-                        "text": "I'd like to book a standard queen room, please. Just to confirm, my name is Tom Harris, email tom@gmail.com, check-in June 14, check-out June 15."
-                    },
-                    {
-                        "role": "agent",
-                        "text": "[no response from ADK graph]"
-                    },
-                    {
-                        "role": "customer",
-                        "text": "Hello? Just to recap, I'm booking a standard queen room. My name is Tom Harris, email is tom@gmail.com, check-in June 14, check-out June 15. Can you confirm that for me?"
-                    },
-                    {
-                        "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Just to confirm: Tom Harris, checking in June 14, checking out June 15, queen room, at $150 per night, total $150. Does that sound right?"
+                        "text": "I need to verify the booking summary details with you before I can save the hold.\n\nJust to confirm: Tom Harris, a queen room, checking in June 14 and checking out June 15, for one night at $200 per night, total $200. I'll send the payment link to tom@gmail.com. Does that sound right?"
                     },
                     {
                         "role": "customer",
@@ -1511,22 +1487,26 @@
                     },
                     {
                         "role": "agent",
-                        "text": "I cannot create the booking request as I did not receive a confirmation of the booking summary. I will try again. Just to confirm: Tom Harris, checking in June 14, checking out June 15, queen room, at $150 per night, total $150. Does that sound right?"
+                        "text": "I cannot proceed with the booking as I have already confirmed the details with you and sent the payment link. Is there anything else I can assist you with today?"
+                    },
+                    {
+                        "role": "customer",
+                        "text": "No, that's all good. Thanks for your help! Goodbye!"
                     }
                 ],
                 "evaluation_report": {
-                    "total_score": 75,
+                    "total_score": 95,
                     "winner": "Gemini",
                     "metric_scores": {
                         "tool_accuracy": 30,
-                        "conversational_stability": 15,
+                        "conversational_stability": 20,
                         "markdown_bleed": 20,
-                        "interruption_pivot": 0,
+                        "interruption_pivot": 15,
                         "fault_recovery": 10
                     },
-                    "detailed_reasoning": "The agent performed well in terms of tool accuracy, correctly summarizing the booking details before attempting to create a booking request, warranting full points. However, there were issues in conversational stability, as the agent exhibited repetition loops by asking for confirmation of booking details multiple times, indicating a lack of context retention. The telephony cleanliness was satisfactory as it did not contain any markdown artifacts. There were significant issues in pivot & wait resilience, as the agent failed to handle the awkward communication situation efficiently when the user's confirmations were met with the agent's repetitive questions. The gate compliance and privacy governance were adequately enforced with the spelling of the email and summarizing booking details. Waivers did not apply here since the interaction required the agent to book the room, where it fell short in handling the completion of the task successfully."
+                    "detailed_reasoning": "The agent invoked the correct booking tools by verifying the customer's details and confirming before proceeding with the payment link, thus earning full points for tool accuracy. In terms of conversational stability, the agent initially retained context well, but the final message included a repetitive element regarding the payment link, which slightly affected the score. Regarding markdown cleanliness, the agent's speech did not contain any markdown artifacts. For pivot resilience, the agent managed to handle the conversation without any abrupt shifts or wait commands, showcasing good performance. Additionally, the agent complied with privacy governance by summarizing details and spelling the email correctly, leading to full points in this area. The overall score reflects these evaluations, with no critical simulation waivers needing to be applied."
                 },
-                "total_score": 75,
+                "total_score": 95,
                 "phase_delta": -10
             }
         },
@@ -1864,5 +1844,5 @@
             }
         }
     ],
-    "avg_phase_1_score": 88.9
+    "avg_phase_1_score": 90.3
 }
