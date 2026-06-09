@@ -871,20 +871,24 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
         
         payload = await request.body()
         verification = coalcreek_stripe_service.verify_webhook(payload, stripe_signature)
+        print(f"WEBHOOK VERIFICATION: {verification}")
         
         if not verification.get("valid"):
             logger.warning("Invalid Stripe webhook signature")
+            print("WEBHOOK SIGNATURE INVALID, IGNORING")
             # Don't return 400 to avoid Stripe retrying, just warn and 200
             return {"status": "ignored", "reason": "invalid_signature"}
             
         event = verification.get("event")
         event_type = getattr(event, "type", None) or event.get("type")
+        print(f"WEBHOOK EVENT TYPE: {event_type}")
         
         if event_type == "checkout.session.completed":
             session = getattr(event.data, "object", None) or event.get("data", {}).get("object", {})
             
             # Handle success (Payment or Setup)
             result = await coalcreek_stripe_service.handle_checkout_completion(session)
+            print(f"WEBHOOK RESULT FROM SERVICE: {result}")
             
             if result.get("success"):
                 # Update Booking Status in DB
@@ -893,6 +897,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                 stripe_session_id = getattr(session, "id", None) or session.get("id", "")
                 stripe_payment_id = result.get("payment_intent")
                 amount_total_cents = result.get("amount_total", 0)
+                print(f"WEBHOOK LOOKING UP REF: {booking_ref} AND SID: {stripe_session_id}")
 
                 # PRIMARY lookup: booking_reference from Stripe metadata
                 # FALLBACK: stripe_session_id stored on doc during booking creation
@@ -907,6 +912,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                     )
                     booking_doc = await _db.get_booking_by_stripe_session(stripe_session_id)
 
+                print(f"WEBHOOK FOUND BOOKING DOC: {bool(booking_doc)}")
                 if booking_doc:
                     doc_id = booking_doc.get("$id")
                     
