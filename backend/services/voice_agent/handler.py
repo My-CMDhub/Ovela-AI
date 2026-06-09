@@ -623,7 +623,7 @@ class VoiceAgentHandler:
             voice_id = CARTESIA_VOICE_ID
             
         # Get dynamic speed and volume parameters for Cartesia provider
-        speed = voice_settings.get("speed", "normal")
+        speed = voice_settings.get("speed", "fast")
         volume = voice_settings.get("volume", 0.8)
         
         logger.info(f"🎤 Using Cartesia Sonic-3.5 TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
