@@ -89,6 +89,7 @@ In an isolated testing sandbox, certain live production capabilities (like proce
 | **Fully Booked Rooms** | If the PMS database reports a room is sold out, the agent cannot complete the booking. | The agent is graded on *accurately reporting the sold-out status and suggesting alternatives*, rather than forcing a booking. |
 | **No-Fault Success** | On a successful, error-free run, no backend errors occur to "recover" from. | The judge awards the full **10/10 points** for Fault Recovery (instead of penalizing for the lack of errors). |
 | **Telephony Hang-ups** | In a real call, the guest hanging up closes the stream. In simulation, trailing script turns are logged. | Truncated responses or trailing simulation artifacts are **waived** if the customer already initiated the hang-up. |
+| **Baseline Extrapolation** | The legacy single-agent system lacked the tools to handle Level 3 scenarios (C4-C7). | Baseline scores for C4-C7 are extrapolated (40-55) to reflect inevitable failures, ensuring transparent delta visualization. |
 
 ---
 
