@@ -141,7 +141,7 @@ Return Schema: This tool returns concise, high-signal context (status, dates, se
                     "guest_phone": {"type": "string"},
                     "guest_email": {"type": "string"}
                 },
-                "required": ["guest_name"]
+                "required": []
             }
         },
         {
