@@ -297,7 +297,8 @@ class BookingsMixin:
         payment_link_url: str = None,
         stripe_payment_id: str = None,
         deposit_paid: float = None,
-        tenant_id: str = "coalcreek"
+        tenant_id: str = "coalcreek",
+        status: str = None
     ) -> dict:
         """
         Update payment status for a booking in motel_reservations.
@@ -316,6 +317,9 @@ class BookingsMixin:
                 
             if deposit_paid is not None:
                 data["deposit_paid"] = float(deposit_paid)
+                
+            if status:
+                data["status"] = status
 
             # Note: payment_expires_at is omitted as the Appwrite collection schema doesn't have it
                 

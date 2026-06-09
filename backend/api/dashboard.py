@@ -925,6 +925,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                             payment_status="paid",
                             stripe_payment_id=stripe_payment_id,
                             deposit_paid=float(amount_total_cents) / 100.0,
+                            status="confirmed"
                         )
                         logger.info("💰 Booking %s marked as PAID | amount=AUD$%.2f", booking_ref, amount_total_cents / 100.0)
 

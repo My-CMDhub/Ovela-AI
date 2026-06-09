@@ -1146,7 +1146,14 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
             # Find most recent active reservation with incomplete payment
             active_doc = None
             for doc in (docs or []):
-                if doc.get("status") in ("pending", "pending_payment") and doc.get("payment_status") not in ("paid",):
+                _ps = doc.get("payment_status") or ""
+                _bs = doc.get("status") or ""
+                is_pending = (
+                    _bs in ("reserved", "pending", "pending_payment", "link_sent")
+                    or _ps in ("pending", "pending_payment", "email_failed", "")
+                )
+                is_paid = _ps == "paid" and _bs in ("paid", "confirmed")
+                if is_pending and not is_paid:
                     active_doc = doc
                     break
             if active_doc and active_doc.get("$id"):
