@@ -925,8 +925,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "total_amount":           doc.get("total_amount", ""),
             "other_bookings":         total_docs - 1,
         }
-        # N6-ASSIST: Human-readable payment state for AI — covers ALL known DB status values
-        # so the AI never needs to infer meaning from raw status strings.
+        
         _pstatus = doc.get("payment_status") or ""   # null / missing treated as outstanding
         _bstatus = doc.get("status") or ""
 
