@@ -1661,7 +1661,7 @@ class VoiceAgentHandler:
         try:
             # ── Execute via dispatcher ──────────────────────────────────────
             ctx = {
-                "pending_order": self.pending_order,
+                "pending_order": getattr(self, "pending_order", None),
                 "availability_cache": self._availability_cache,
             }
             try:
