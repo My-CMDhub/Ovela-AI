@@ -622,9 +622,9 @@ class VoiceAgentHandler:
             memory_context += f"• Status: {ab.get('status')} / Payment: {ab.get('payment_status')}\n"
             memory_context += (
                 "IMPORTANT: You ALREADY have the user's booking details loaded above. "
-                "If the user asks to check or confirm their booking, DO NOT call lookup_booking. "
+                "If the user asks to check or confirm their booking and you found correct matching then doesn't need to call lookup_booking. "
                 "Instead, fuzzy-match their spoken name against the 'Guest Name' above (e.g. 'Drew' matches 'Dhruv'). "
-                "If it's a match, just confirm the details directly with them.\n"
+                "If it's a match, just confirm the details directly with them. if not then call lookup_booking function explicitly with proper details.\n"
             )
 
         memory_context += "========================================\n"
