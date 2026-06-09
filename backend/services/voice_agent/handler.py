@@ -2647,7 +2647,7 @@ class VoiceAgentHandler:
                         booking_ref=self.call_reference,
                         status=self.call_outcome,
                         call_summary=await self._generate_call_summary(),
-                        customer_name=self.memory.get("name"),
+                        customer_name=self.memory.get("name") or (self.memory.get("active_booking", {}).get("guest_name")),
                         metadata={
                             "exchange_count": self.exchange_count,
                             "outcome": self.call_outcome
