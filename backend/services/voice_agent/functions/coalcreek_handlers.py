@@ -269,9 +269,9 @@ async def _check_appwrite_availability(db_service, check_in_str: str, check_out_
                 room_num = room.get("room_number")
                 r_type = room.get("room_type")
                 
-                # We group by mapped room types (e.g. "Queen/Double") to match scraper semantics
+                # We group by mapped room types to match scraper semantics
                 mapped_type = r_type.title()
-                if mapped_type == "Queen": mapped_type = "Queen/Double"
+                if mapped_type == "Queen": mapped_type = "Double Room"
                 elif mapped_type == "Twin": mapped_type = "Twin Room"
                 elif mapped_type == "Family": mapped_type = "Family Suite"
                 
@@ -380,8 +380,8 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
     
     # 2. Map room type to scraper format
     room_map = {
-        "queen": "Queen/Double",
-        "standard": "Queen/Double",
+        "queen": "Double Room",
+        "standard": "Double Room",
         "twin": "Twin Room",
         "family": "Family Suite",
         "suite": "Deluxe Spa Suite",

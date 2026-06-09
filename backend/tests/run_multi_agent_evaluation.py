@@ -87,7 +87,7 @@ async def seed_return_caller_fixture(user_phone: str, check_in: date, check_out:
         "guest_phone": user_phone,
         "guest_email": "emma.clark@example.com",
         "num_guests": 2,
-        "room_type": "Queen/Double",
+        "room_type": "Double Room",
         "check_in_date": check_in.strftime("%Y-%m-%d"),
         "check_out_date": check_out.strftime("%Y-%m-%d"),
         "num_nights": max(1, (check_out - check_in).days),

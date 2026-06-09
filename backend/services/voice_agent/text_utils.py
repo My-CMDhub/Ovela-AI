@@ -337,7 +337,9 @@ def clean_tts_output(text: str) -> str:
     result = _re.sub(r'\b0(\d)\b', lambda m: _to_ordinal(int(m.group(1))), result)
 
     # ── Room type slash normalization (M1 extended: any letter/slash/letter combo)
-    # "Queen/Double" → "Queen and Double", "Family/Spa" → "Family and Spa"
+    # Legacy: "Queen/Double" → "Double Room" (prevent TTS reading 'slash')
+    # "Family/Spa" → "Family and Spa"
+    text = re.sub(r'Queen/Double', 'Double Room', text, flags=re.IGNORECASE)
     # Prevents TTS speaking "slash" for any room type or combo string
     result = re.sub(r'(?<=[A-Za-z])/(?=[A-Za-z])', ' and ', result)
 

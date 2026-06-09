@@ -126,7 +126,7 @@ def parse_calendar_availability(html: str) -> List[Dict[str, object]]:
     if len(room_panels) == 0:
         return [
             {"room_type": "Deluxe Spa Suite", "available": False, "price_per_night": 210},
-            {"room_type": "Queen/Double", "available": False, "price_per_night": 135},
+            {"room_type": "Double Room", "available": False, "price_per_night": 135},
             {"room_type": "Twin Room", "available": False, "price_per_night": 160},
             {"room_type": "Family Suite", "available": False, "price_per_night": 190}
         ]
@@ -134,7 +134,7 @@ def parse_calendar_availability(html: str) -> List[Dict[str, object]]:
     rooms = []
     known_room_mapping = {
         "deluxe": ("Deluxe Spa Suite", 210),
-        "queen": ("Queen/Double", 135),
+        "queen": ("Double Room", 135),
         "twin": ("Twin Room", 160),
         "family": ("Family Suite", 190)
     }

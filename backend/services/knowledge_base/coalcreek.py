@@ -37,7 +37,7 @@ COALCREEK_DATA = {
     },
     "rooms": {
         "queen": {
-            "name": "Queen/Double",
+            "name": "Double Room",
             "price": 135,
             "bedding": "1 Queen Bed",
             "max_guests": 2,

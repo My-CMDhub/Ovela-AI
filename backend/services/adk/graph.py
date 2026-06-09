@@ -280,7 +280,7 @@ async def check_availability(check_in_date: str, check_out_date: str = "", room_
     Args:
         check_in_date: Check-in date in YYYY-MM-DD format (e.g., "2026-06-15"). Today's date/year is in the CURRENT SYSTEM CLOCK.
         check_out_date: Check-out date in YYYY-MM-DD format. If unspecified, defaults to 1 night stay.
-        room_type: Mapped room type: "queen" (covers Queen/Double rooms), "twin" (Twin Room), "family" (Family Suite), "suite" (Deluxe Spa Suite), or "any" to see all available types.
+        room_type: Mapped room type: "queen" (covers Double Room), "twin" (Twin Room), "family" (Family Suite), "suite" (Deluxe Spa Suite), or "any" to see all available types.
 
     Returns JSON string with structure:
       On Success:
