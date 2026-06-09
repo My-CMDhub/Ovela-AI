@@ -53,7 +53,7 @@ from .latency_tracker import LatencyTracker
 from .memory import CallerMemoryBank
 from services.motel_knowledge_base import set_tenant_context
 
-CARTESIA_VOICE_ID = "e8e5fffb-252c-436d-b842-8879b84445b6"
+CARTESIA_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 # CARTESIA_VOICE_ID = "3e1ed423-17e5-4773-b87c-25b031106e41" - Paul AU
 # CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab" - Blake US
 # CARTESIA_VOICE_ID = "47c38ca4-5f35-497b-b1a3-415245fb35e1" - Daniel US
