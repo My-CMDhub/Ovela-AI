@@ -851,6 +851,8 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 details.append(f"checking in on {doc['check_in_date']}")
         if doc.get("room_type"):
             details.append(f"for the {doc['room_type']}")
+        if doc.get("total_amount"):
+            details.append(f"with a total of ${doc['total_amount']}")
         return " ".join(details)
 
     def _build_confirmation_prompt(result: dict, found_by: str, name_mismatch: bool = False) -> str:
