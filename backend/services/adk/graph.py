@@ -298,7 +298,7 @@ async def check_availability(check_in_date: str, check_out_date: str = "", room_
     args = {"check_in_date": check_in_date, "check_out_date": check_out_date, "room_type": room_type}
     return await _execute_with_error_handling("check_availability", dispatcher.execute("check_availability", args))
 
-async def create_booking_request(guest_name: str, check_in_date: str, room_type: str, num_guests: int = 1, check_out_date: str = "", guest_phone: str = "", guest_email: str = "", notes: str = "", tool_context: ToolContext = None) -> str:
+async def create_booking_request(guest_name: str, check_in_date: str, room_type: str, num_guests: int = 1, check_out_date: str = "", guest_phone: str = "", guest_email: str = "", notes: str = "", has_user_confirmed_summary: str = "NO", tool_context: ToolContext = None) -> str:
     """
     Create a provisional soft hold booking request in the Coal Creek Motel PMS.
 
@@ -319,6 +319,7 @@ async def create_booking_request(guest_name: str, check_in_date: str, room_type:
         guest_phone: Guest's phone number. Defaults to calling number.
         guest_email: Guest's email address.
         notes: Special requests (accessible access, extra bed, late check-in).
+        has_user_confirmed_summary: Crucial status flag. Pass "YES" if caller explicitly agreed to the read-back summary. Defaults to "NO".
         tool_context: Internal ADK context containing caller session state.
 
     Returns JSON string with structure:
@@ -341,7 +342,8 @@ async def create_booking_request(guest_name: str, check_in_date: str, room_type:
         "check_out_date": check_out_date,
         "guest_phone": guest_phone,
         "guest_email": guest_email,
-        "notes": notes
+        "notes": notes,
+        "has_user_confirmed_summary": has_user_confirmed_summary
     }
     return await _execute_with_error_handling("create_booking_request", dispatcher.execute("create_booking_request", args))
 

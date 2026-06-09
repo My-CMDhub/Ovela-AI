@@ -1575,7 +1575,8 @@ class VoiceAgentHandler:
                 logger.info(f"🧠 Memory Updated: notes = {self.memory['notes']}")
                 
         # Background save of the hot path state so it survives reconnects
-        asyncio.create_task(db_service.save_hot_path_state(self.call_sid, self.memory))
+        if getattr(self, "call_sid", None):
+            asyncio.create_task(db_service.save_hot_path_state(self.call_sid, self.memory))
         
         # ─────────────────────────────────────────────────────────────────
         # FAST-START PATH: For check_availability we always need a filler
