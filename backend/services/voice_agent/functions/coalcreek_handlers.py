@@ -1152,7 +1152,8 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                     check_in=active_doc.get("check_in_date", ""),
                     check_out=active_doc.get("check_out_date", ""),
                     db_service=db_service,
-                    existing_stripe_url=active_doc.get("payment_link_url")
+                    existing_stripe_url=active_doc.get("payment_link_url"),
+                    existing_expires_at=active_doc.get("payment_expires_at", 0)
                 ))
                 email_resent = True
         except Exception as resend_err:
@@ -1355,20 +1356,29 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
                 "error": "Booking is already paid. Use resend_payment_confirmation instead to send a receipt."
             }
             
+        total_amt = float(active_doc.get("total_amount") or 0)
+        if total_amt <= 0:
+            return {
+                "success": False,
+                "error": "I couldn't fetch the exact total amount for your booking to generate a payment link. Please call reception."
+            }
+            
         # Re-use existing link if possible to avoid double payment race condition
         existing_url = active_doc.get("payment_link_url")
+        expires_at = active_doc.get("payment_expires_at", 0)
         
         asyncio.create_task(_handle_stripe_and_guest_email(
             booking_ref=active_doc.get("booking_reference", ""),
             room_type=active_doc.get("room_type", ""),
-            total_amt=float(active_doc.get("total_amount", 0)),
+            total_amt=total_amt,
             guest_email=guest_email,
             guest_name=active_doc.get("guest_name", ""),
             guest_phone=active_doc.get("guest_phone", ""),
             check_in=active_doc.get("check_in_date", ""),
             check_out=active_doc.get("check_out_date", ""),
             db_service=db_service,
-            existing_stripe_url=existing_url
+            existing_stripe_url=existing_url,
+            existing_expires_at=expires_at
         ))
         
         return {
@@ -1401,6 +1411,7 @@ async def _handle_stripe_and_guest_email(
     notify_event: asyncio.Event | None = None,
     notify_result: list | None = None,
     existing_stripe_url: str | None = None,
+    existing_expires_at: int | None = None,
 ) -> None:
     """
     Cold-path task: creates Stripe checkout session, PATCHes Appwrite reservation
@@ -1419,11 +1430,21 @@ async def _handle_stripe_and_guest_email(
         from .stripe_handlers import create_checkout_session
         expiry_ts = int(time.time()) + 1800
         
-        if existing_stripe_url:
+        if total_amt <= 0:
+            logger.error("💳 Cannot generate Stripe session for %s with amount 0", booking_ref)
+            if notify_event and notify_result is not None:
+                notify_result[0] = False
+                notify_event.set()
+            return
+
+        if existing_stripe_url and existing_expires_at and time.time() < (existing_expires_at - 300):
             stripe_url = existing_stripe_url
             logger.info("💳 Reusing existing Stripe URL to prevent double-payment race conditions for %s", booking_ref)
             doc_id = saved_doc_id
         else:
+            if existing_stripe_url:
+                logger.info("💳 Existing Stripe URL is expired or expiring soon. Forcing new session generation.")
+                existing_stripe_url = None  # Ensure we PATCH Appwrite with the new link
             stripe_url = create_checkout_session(
                 amount_aud=int(total_amt),
                 room_type=room_type,
