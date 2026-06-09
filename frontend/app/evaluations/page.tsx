@@ -165,7 +165,7 @@ function HeroHeader({ run }: { run: EvaluationRun }) {
                 <h1 className="mb-6 text-2xl font-bold tracking-tight text-white">
                     Agent Observability Dashboard
                     <span className="ml-2 text-slate-500 font-normal text-base">
-                        — 10 adversarial scenarios, independent LLM judge
+                        — {run.scenario_count} adversarial scenarios, independent LLM judge
                     </span>
                 </h1>
 

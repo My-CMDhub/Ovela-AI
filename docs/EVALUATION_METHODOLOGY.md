@@ -10,7 +10,7 @@ By subjecting the agent to adversarial, edge-case heavy scenarios across three c
 
 Ovela AI is continuously evaluated against **14 adversarial guest scenarios** spanning Booking Lifecycle, Privacy Governance, Fault Tolerance, and Conversational Stability. Results are graded by an independent LLM judge on a strict 100-point rubric and persisted to the live Appwrite evaluation dashboard for verifiability.
 
-* **Phase 1 (Deterministic Text Baseline):** **88.9 / 100** Average Score (14 scenarios)
+* **Phase 1 (Deterministic Text Baseline):** **90.3 / 100** Average Score (14 scenarios)
 * **Phase 2 (ASR Voice Emulation):** Enabled — measures voice realism resistance (noise-induced score delta per scenario)
 * **Evaluation Engine:** Full ADK graph (OvelaManager → BookingWorker / InfoWorker) on **Gemini 2.5 Flash** via Vertex AI ADC — not a flat prompt baseline.
 
