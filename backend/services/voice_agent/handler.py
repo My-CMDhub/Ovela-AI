@@ -625,6 +625,7 @@ class VoiceAgentHandler:
                 "If the user asks to check or confirm their booking and you found correct matching then doesn't need to call lookup_booking. "
                 "Instead, fuzzy-match their spoken name against the 'Guest Name' above (e.g. 'Drew' matches 'Dhruv'). "
                 "If it's a match, just confirm the details directly with them. if not then call lookup_booking function explicitly with proper details.\n"
+                "SECURITY RULE: Before making any changes or sending links for this booking, politely ask the user to verify their email address to confirm their identity.\n"
             )
 
         memory_context += "========================================\n"
