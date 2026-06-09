@@ -401,6 +401,42 @@ class BookingsMixin:
             logger.error(f"Error finding booking by reference: {e}")
             return None
 
+    async def get_booking_by_stripe_session(
+        self,
+        stripe_session_id: str,
+        tenant_id: str = "coalcreek",
+    ) -> dict:
+        """
+        Find a booking by its Stripe checkout session ID.
+
+        Used as a fallback lookup in the Stripe webhook handler when the
+        primary booking_ref query misses (e.g., metadata was missing or
+        the booking was created before stripe_session_id was stored).
+
+        Returns the first matching document dict, or None if not found.
+        """
+        try:
+            queries = [
+                self.Query.equal("stripe_session_id", stripe_session_id),
+                self.Query.equal("tenant_id", tenant_id),
+            ]
+            result = await self._motel_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                params={"queries": queries},
+            )
+            docs = result.get("documents", []) if result else []
+            if docs:
+                logger.info(
+                    "🔍 Booking found by stripe_session_id fallback: %s → %s",
+                    stripe_session_id[:20],
+                    docs[0].get("booking_reference"),
+                )
+            return docs[0] if docs else None
+        except Exception as e:
+            logger.error("Error finding booking by stripe_session_id %s: %s", stripe_session_id, e)
+            return None
+
     async def lookup_motel_reservation(
         self,
         guest_name: str = None,

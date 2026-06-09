@@ -1431,13 +1431,14 @@ async def _handle_stripe_and_guest_email(
 
         if existing_stripe_url and existing_expires_at and time.time() < (existing_expires_at - 300):
             stripe_url = existing_stripe_url
+            stripe_session_id = None  # existing session — ID already saved in Appwrite
             logger.info("💳 Reusing existing Stripe URL to prevent double-payment race conditions for %s", booking_ref)
             doc_id = saved_doc_id
         else:
             if existing_stripe_url:
                 logger.info("💳 Existing Stripe URL is expired or expiring soon. Forcing new session generation.")
                 existing_stripe_url = None  # Ensure we PATCH Appwrite with the new link
-            stripe_url = create_checkout_session(
+            stripe_url, stripe_session_id = create_checkout_session(
                 amount_aud=int(total_amt),
                 room_type=room_type,
                 booking_ref=booking_ref,
@@ -1465,15 +1466,24 @@ async def _handle_stripe_and_guest_email(
                     doc_id = doc.get("$id") if doc else None
 
                 if doc_id:
+                    # Step A: mark pending_payment + save payment_link_url
+                    # NOTE: payment_expires_at is NOT a field in motel_reservations schema—omit it.
                     await db_service.update_booking_payment_status(
                         booking_id=doc_id,
                         payment_status="pending_payment",
                         payment_link_url=stripe_url,
-                        payment_expires_at=expiry_ts,
                     )
+                    # Step B: save stripe_session_id separately via generic PATCH
+                    # Required for webhook fallback lookup when booking_ref lookup misses.
+                    if stripe_session_id:
+                        await db_service.update_motel_reservation(
+                            doc_id,
+                            {"stripe_session_id": stripe_session_id}
+                        )
                     logger.info(
-                        "💳 Reservation %s → pending_payment | expiry=%d",
+                        "💳 Reservation %s → pending_payment | sid=%s | expiry=%d",
                         booking_ref,
+                        stripe_session_id or "reused",
                         expiry_ts,
                     )
             except Exception as db_err:

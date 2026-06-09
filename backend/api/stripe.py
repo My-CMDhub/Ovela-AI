@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     """
     Handle Stripe webhook events.
