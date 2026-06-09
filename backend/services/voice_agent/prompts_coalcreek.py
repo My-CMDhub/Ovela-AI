@@ -133,21 +133,25 @@ PRE-BOOKING CONFIRMATION & UPDATES:
         room_types_text += f"  Best for: {room['best_for']}\n"
 
     # Build amenities list (first 10)
-    amenities_text = ", ".join(COALCREEK_DATA["amenities"][:10])
+    amenities_text = ", ".join(COALCREEK_DATA["amenities"])
 
     # Build policies
     policies = COALCREEK_DATA["policies"]
-
+    info = COALCREEK_DATA["info"]
+    loc_data = COALCREEK_DATA["location"]
 
     return f"""{context_header}You're the AI receptionist for {property_name}. Friendly, efficient, here to help when the front desk is busy.
 
 === PROPERTY ===
-**{property_name}** | {location} | {phone}
+**{property_name}** | {location} | Phone: {phone}
+Hours: Reception {info['reception_hours']} | Check-in: {info['check_in']} | Check-out: {info['check_out']}
+Location: {loc_data['description']}
+Nearby: {", ".join(loc_data['nearby_attractions'][:5])}
 Booking: Direct booking with instant payment link sent to guest email.
 
 **Rooms:**
 {room_types_text}
-**Features:** {amenities_text}
+**Features & Amenities:** {amenities_text}
 
 === POLICIES ===
 Cancellation: {policies['cancellation']} | Payment: {policies['payment']} | Pets: {policies['pets']} | Smoking: {policies['smoking']} | Children: {policies['children']} | Groups: {policies['groups']}

@@ -21,12 +21,7 @@ import re
 from zoneinfo import ZoneInfo
 
 # Import knowledge base services
-from services.motel_knowledge_base import (
-    get_room_pricing, get_room_details, recommend_room,
-    get_check_in_out_info, get_location_info, get_amenities,
-    get_activities_nearby, search_motel_info, get_policies,
-    set_tenant_context
-)
+from services.motel_knowledge_base import set_tenant_context
 from services.knowledge_base.coalcreek import COALCREEK_DATA
 from core.config import settings
 
@@ -1845,30 +1840,7 @@ class CoalCreekFunctionDispatcher:
             return await handle_resend_payment_link(args, self.db_service, self.user_phone)
 
         # Knowledge Base (Direct calls to motel_knowledge_base service)
-        elif function_name == "get_room_pricing":
-             return get_room_pricing(args.get("room_type"))
-             
-        elif function_name == "get_room_details":
-             return get_room_details(args.get("room_type", "queen"))
-             
-        elif function_name == "recommend_room":
-             return recommend_room(args.get("num_guests", 2), args.get("needs_accessibility", False))
-             
-        elif function_name == "get_check_in_out_info":
-             return get_check_in_out_info()
-             
-        elif function_name == "get_location_info":
-             return get_location_info(args.get("detail"))
-             
-        elif function_name == "get_amenities":
-             return get_amenities(args.get("category"))
-             
-        elif function_name == "get_activities_nearby":
-             return get_activities_nearby()
-             
-        elif function_name == "search_motel_info":
-             return search_motel_info(args.get("query", ""))
-             
+        # Note: redundant informational tools (get_room_pricing, etc.) have been removed.
         elif function_name == "perform_live_search":
              query = args.get("query", "")
              if not query:
@@ -1903,10 +1875,6 @@ class CoalCreekFunctionDispatcher:
                  return {"success": False, "error": str(e), "message": "My search service is currently unavailable."}
 
 
-             
-        elif function_name == "get_policies":
-             return get_policies(args.get("policy_type"))
-             
         # Human / Reporting
         elif function_name == "request_human_callback":
              return await handle_request_human_callback(args, self.user_phone)
