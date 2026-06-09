@@ -1780,7 +1780,7 @@ class CoalCreekFunctionDispatcher:
                  return {"error": "No query provided"}
 
              # ── Direct Vertex AI call (Hot Path optimized) ────────────────────
-             # Uses gemini-2.5-flash-lite — optimized for grounding
+             # Uses gemini-2.5-flash — optimized for grounding
              # tasks with no quality loss for weather/news lookups. Thinking is
              # explicitly disabled (budget=0) to cut another 300-500ms per call.
              # ─────────────────────────────────────────────────────────────────

@@ -28,8 +28,6 @@
 **/.venv/
 **/logs/
 
-# Ignore most test files — but expose evaluation harness as primary judge evidence
-# NOTE: Must use file-glob patterns (not directory-level) so git can evaluate negations inside the dir
 backend/tests/**
 !backend/tests/run_multi_agent_evaluation.py
 !backend/tests/evaluation_run.json
@@ -39,10 +37,6 @@ backend/redeploy-guide.md
 backend/Procfile
 backend/stream
 
-# Expose harness plan before the *.md sweep catches it
-!/docs/EVALUATION_HARNESS_PLAN.md
-
 **/*.md
 !/README.md
 !/docs/EVALUATION_METHODOLOGY.md
-!/docs/EVALUATION_HARNESS_PLAN.md

@@ -70,7 +70,7 @@ class VertexGemini(AdkGemini):
             return self.model == other
         return super().__eq__(other)
 
-_ADK_MODEL = "gemini-2.5-flash-lite"
+_ADK_MODEL = "gemini-2.5-flash"
 _ADK_MODEL_VERTEX = VertexGemini(model=_ADK_MODEL)  
 
 
@@ -235,6 +235,12 @@ def _format_tool_error(tool_name: str, exception: Exception) -> dict:
     elif tool_name == "update_guest_info":
         user_facing_message = "I couldn't update your information right now. Let me connect you to staff."
         retry_allowed = False
+    elif tool_name == "resend_payment_confirmation":
+        user_facing_message = "I couldn't resend the confirmation email right now. Let me connect you to staff."
+        retry_allowed = False
+    elif tool_name == "resend_payment_link":
+        user_facing_message = "I couldn't resend the payment link right now. Let me connect you to staff."
+        retry_allowed = False
     elif tool_name == "perform_live_search":
         user_facing_message = "My search service is currently unavailable. Let me try that again, or can I help with something else?"
         retry_allowed = True
@@ -391,6 +397,24 @@ async def resend_payment_confirmation(guest_email: str, tool_context: ToolContex
     dispatcher = _get_dispatcher(tool_context)
     args = {"guest_email": guest_email}
     return await _execute_with_error_handling("resend_payment_confirmation", dispatcher.execute("resend_payment_confirmation", args))
+
+async def resend_payment_link(guest_email: str, tool_context: ToolContext = None) -> str:
+    """
+    Resend the payment link email. ONLY use this when the user has an unpaid or pending booking and explicitly says they haven't received the payment link, or they ask you to send it again.
+
+    Args:
+        guest_email: Guest email address to send the payment link to.
+        tool_context: Internal ADK context containing caller session state.
+
+    Returns JSON string with structure:
+      On Success:
+        {"success": true, "message": "..."}
+      On Error:
+        {"success": false, "user_facing_message": "...", "retry_allowed": false, "error_details": "..."}
+    """
+    dispatcher = _get_dispatcher(tool_context)
+    args = {"guest_email": guest_email}
+    return await _execute_with_error_handling("resend_payment_link", dispatcher.execute("resend_payment_link", args))
 
 async def update_guest_info(guest_name: str = "", guest_email: str = "", guest_phone: str = "", tool_context: ToolContext = None) -> str:
     """
@@ -565,7 +589,7 @@ class ADKOrchestrator:
             model=_ADK_MODEL_VERTEX,
             instruction="",
             static_instruction=dynamic_booking_instruction,
-            tools=[check_availability, create_booking_request, lookup_booking, resend_payment_confirmation, update_guest_info, wait_on_request, flag_off_topic, transfer_to_staff, end_call],
+            tools=[check_availability, create_booking_request, lookup_booking, resend_payment_confirmation, resend_payment_link, update_guest_info, wait_on_request, flag_off_topic, transfer_to_staff, end_call],
         )
         self.info_worker = LlmAgent(
             name="InfoWorker",
