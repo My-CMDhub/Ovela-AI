@@ -240,7 +240,16 @@ Return Schema: This tool returns concise, high-signal context (status, dates, se
         },
         {
             "name": "resend_payment_confirmation",
-            "description": "Resend the payment confirmation or receipt email. ONLY use this when the user says they have already paid/secured the booking but didn't receive the payment receipt or confirmation email.",
+            "description": """Resend the booking confirmation receipt email. 
+
+MANDATORY PRE-CHECK: You MUST call lookup_booking BEFORE calling this tool.
+Only call this if lookup_booking returned payment_confirmed=true (payment_status='paid').
+If payment_confirmed=false, the backend will reject the call anyway — but you must check first so you can tell the user the correct status before wasting a round-trip.
+
+Do NOT call this tool if:
+- The caller just said 'send me a confirmation' without you having checked their payment status
+- lookup_booking returned payment_status != 'paid'
+- You just created the booking (payment is always pending at creation time)""",
             "parameters": {
                 "type": "object",
                 "properties": {

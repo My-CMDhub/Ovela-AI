@@ -716,7 +716,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                 for r in rooms_for_night:
                     if r["room_type"] == room_data["name"] and r["available"]:
                         reservation_data["room_number"] = r["room_number"]
-                        reservation_data["status"] = "confirmed"
+                        reservation_data["status"] = "reserved"
                         reservation_data["source"] = "voice_ai_pms_auto"
                         logger.info(f"✅ PMS Mode: Auto-assigned room {r['room_number']} to {booking_ref}")
                         break
@@ -914,11 +914,20 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "num_nights":             doc.get("num_nights", ""),
             "status":                 doc.get("status", ""),
             "payment_status":         doc.get("payment_status", "pending"),
+            "payment_confirmed":      doc.get("payment_status") == "paid", 
             "payment_link_sent":      bool(doc.get("payment_link_url") or doc.get("payment_link_sent_at")),
             "payment_link_url":       doc.get("payment_link_url", ""),
             "total_amount":           doc.get("total_amount", ""),
             "other_bookings":         total_docs - 1,
         }
+        # N6-ASSIST: Human-readable payment state for AI reasoning
+        _pstatus = doc.get("payment_status", "pending")
+        if _pstatus == "paid":
+            result["payment_status_message"] = "Payment CONFIRMED. You may call resend_payment_confirmation to resend the receipt."
+        elif _pstatus == "email_failed":
+            result["payment_status_message"] = "Payment link was sent but email delivery FAILED. Offer to resend the link."
+        else:
+            result["payment_status_message"] = f"Payment NOT yet received (status='{_pstatus}'). DO NOT call resend_payment_confirmation — offer resend_payment_link instead."
         if found_by:
             result["found_by"] = found_by
         if name_mismatch:
@@ -1218,17 +1227,23 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
                 "message": "I couldn't find a recent booking for that email address. Would you like to use a different email or your phone number?"
             }
 
-        # N6: Hard guard — block confirmation email when payment is still pending
-        if active_doc.get("payment_status") in ("pending_payment", "pending", None) \
-                and active_doc.get("status") not in ("paid", "confirmed"):
-            logger.warning("ARGS DUMP: %s", args); logger.warning(
-                "🔒 N6 guard: resend_payment_confirmation blocked for %s — payment_status='%s' (still pending).",
+        # N6: Hard guard — block confirmation email unless payment is CONFIRMED PAID.
+        # PRIMARY KEY IS payment_status — NOT status field.
+        # History: Previously checked 'status not in (paid, confirmed)' which was bypassed
+        # because PMS auto-assign was incorrectly writing status='confirmed' before payment.
+        # Fix: Guard now fires on ANY payment_status that is not explicitly 'paid'.
+        if active_doc.get("payment_status") != "paid":
+            logger.warning(
+                "🔒 N6 guard: resend_payment_confirmation blocked for %s — payment_status='%s' (not paid).",
                 active_doc.get("booking_reference"), active_doc.get("payment_status")
             )
             return {
                 "success": False,
-                "error": "SYSTEM RULE: You cannot send a confirmation email because payment is still PENDING. "
-                         "Tell the user the payment is still pending and you can only resend the payment LINK if they need it.",
+                "error": (
+                    "SYSTEM RULE: Cannot send a confirmation receipt — payment is NOT yet confirmed. "
+                    f"Current payment_status='{active_doc.get('payment_status')}'. "
+                    "Tell the user payment is still pending and offer to resend the payment LINK instead."
+                ),
             }
 
         # Strict Caller-Phone Lock verification (Approach 1)
