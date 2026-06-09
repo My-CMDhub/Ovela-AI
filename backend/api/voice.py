@@ -423,7 +423,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for Twilio Media Stream.
     Bridges audio to Deepgram Voice Agent API.
-    Deepgram handles: STT (flux) + LLM (gpt-4.1-mini) + TTS (aura-2) + VAD.
+    Deepgram handles: STT (flux) + LLM (gemini-2.5-flash) + TTS (aura-2) + VAD.
     """
     await websocket.accept()
     handler = VoiceAgentHandler(websocket)
