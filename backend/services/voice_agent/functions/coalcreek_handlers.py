@@ -1541,13 +1541,7 @@ async def _handle_stripe_and_guest_email(
                         payment_status="pending_payment",
                         payment_link_url=stripe_url,
                     )
-                    # Step B: save stripe_session_id separately via generic PATCH
-                    # Required for webhook fallback lookup when booking_ref lookup misses.
-                    if stripe_session_id:
-                        await db_service.update_motel_reservation(
-                            doc_id,
-                            {"stripe_session_id": stripe_session_id}
-                        )
+                    # Step B: Log the stripe_session_id (Appwrite attribute does not exist natively yet, lookup fallback handles it dynamically in webhook if we miss)
                     logger.info(
                         "💳 Reservation %s → pending_payment | sid=%s | expiry=%d",
                         booking_ref,

@@ -45,6 +45,7 @@ def create_checkout_session(
     success_url: Optional[str] = None,
     cancel_url: Optional[str] = None,
     expires_at: Optional[int] = None,
+    tenant_id: Optional[str] = "coalcreek",
 ) -> Optional[str]:
     """
     Create a Stripe Checkout Session for a motel room booking.
@@ -90,6 +91,8 @@ def create_checkout_session(
         _expires_at = expires_at if expires_at else int(time.time()) + 1800
 
         metadata = {"room_type": room_type}
+        if tenant_id:
+            metadata["tenant_id"] = tenant_id
         if booking_ref:
             metadata["booking_ref"] = booking_ref
         if guest_email:
