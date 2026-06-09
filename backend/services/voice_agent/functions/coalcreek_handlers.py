@@ -1840,7 +1840,6 @@ class CoalCreekFunctionDispatcher:
             return await handle_resend_payment_link(args, self.db_service, self.user_phone)
 
         # Knowledge Base (Direct calls to motel_knowledge_base service)
-        # Note: redundant informational tools (get_room_pricing, etc.) have been removed.
         elif function_name == "perform_live_search":
              query = args.get("query", "")
              if not query:
@@ -1849,7 +1848,7 @@ class CoalCreekFunctionDispatcher:
              # ── Direct Vertex AI call (Hot Path optimized) ────────────────────
              # Uses gemini-2.5-flash — optimized for grounding
              # tasks with no quality loss for weather/news lookups. Thinking is
-             # explicitly disabled (budget=0) to cut another 300-500ms per call.
+             # explicitly disabled to cut another 300-500ms per call.
              # ─────────────────────────────────────────────────────────────────
              try:
                  from google import genai
