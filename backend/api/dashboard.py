@@ -935,7 +935,11 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                         from services.email import email_service
 
                         tenant_id = doc.get("tenant_id", "coalcreek")
-                        guest_email = doc.get("guest_email")
+                        
+                        # Use DB email, but fallback to the email entered during Stripe checkout if missing
+                        guest_email = doc.get("guest_email") or result.get("customer_email")
+                        if not guest_email:
+                            logger.error("❌ No guest_email found on booking doc or Stripe session for %s", booking_ref)
 
                         _COALCREEK_DEFAULTS = {
                             "staff_email": "officialcoalcreek@gmail.com",

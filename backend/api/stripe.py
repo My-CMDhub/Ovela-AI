@@ -62,7 +62,7 @@ async def stripe_webhook(request: Request):
             # Extract metadata (all fields set by create_checkout_session)
             metadata = session.get("metadata", {})
             booking_ref = metadata.get("booking_ref", "")
-            guest_email = metadata.get("guest_email", "")
+            guest_email = metadata.get("guest_email") or session.get("customer_email") or session.get("customer_details", {}).get("email") or ""
             guest_name = metadata.get("guest_name", "Guest")
             room_type = metadata.get("room_type", "Queen Room")
             check_in = metadata.get("check_in", "")

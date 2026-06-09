@@ -193,7 +193,8 @@ class CoalCreekStripeService:
             else:
                 metadata = session.get("metadata", {})
                 mode = session.get("mode")
-                customer_email = session.get("customer_email")
+                customer_details = session.get("customer_details") or {}
+                customer_email = session.get("customer_email") or customer_details.get("email")
                 setup_intent = session.get("setup_intent")
                 payment_intent = session.get("payment_intent")
                 amount_total = session.get("amount_total")
