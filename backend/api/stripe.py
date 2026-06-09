@@ -105,6 +105,7 @@ async def stripe_webhook(request: Request):
                             booking_id=booking_doc_id,
                             payment_status="paid",
                             stripe_payment_id=stripe_payment_id,
+                            deposit_paid=amount_total,
                         )
                         logger.info(f"✅ Booking {booking_ref} marked as paid in Appwrite")
                     else:

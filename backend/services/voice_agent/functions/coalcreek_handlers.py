@@ -690,6 +690,8 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         "source": "voice_ai_soft_hold",
         "booking_reference": booking_ref,
         "notes": notes or "Soft Hold Request via AI",
+        "arrival_time": "14:00",
+        "deposit_paid": 0,
         "created_at": now,
         "updated_at": now,
         "created_by": "ovela_ai",

@@ -917,6 +917,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                         update_data["payment_status"] = "paid"
                         update_data["payment_received_at"] = datetime.now().isoformat()
                         update_data["stripe_payment_id"] = result.get("payment_intent")
+                        update_data["deposit_paid"] = float(result.get("amount_total", 0) / 100.0)
                         logger.info(f"💰 Booking {booking_ref} marked as PAID")
                     
                     await appwrite_request("PATCH", f"{query_endpoint}/{doc_id}", {"data": update_data})
