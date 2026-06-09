@@ -917,21 +917,49 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "check_out_date":         doc.get("check_out_date", ""),
             "num_nights":             doc.get("num_nights", ""),
             "status":                 doc.get("status", ""),
-            "payment_status":         doc.get("payment_status", "pending"),
-            "payment_confirmed":      doc.get("payment_status") == "paid", 
+            "payment_status":         doc.get("payment_status") or "outstanding",
+            "payment_confirmed":      doc.get("payment_status") == "paid",
+            "payment_outstanding":    doc.get("payment_status") not in ("paid", "card_on_file"),
             "payment_link_sent":      bool(doc.get("payment_link_url") or doc.get("payment_link_sent_at")),
             "payment_link_url":       doc.get("payment_link_url", ""),
             "total_amount":           doc.get("total_amount", ""),
             "other_bookings":         total_docs - 1,
         }
-        # N6-ASSIST: Human-readable payment state for AI reasoning
-        _pstatus = doc.get("payment_status", "pending")
+        # N6-ASSIST: Human-readable payment state for AI — covers ALL known DB status values
+        # so the AI never needs to infer meaning from raw status strings.
+        _pstatus = doc.get("payment_status") or ""   # null / missing treated as outstanding
+        _bstatus = doc.get("status") or ""
+
         if _pstatus == "paid":
-            result["payment_status_message"] = "Payment CONFIRMED. You may call resend_payment_confirmation to resend the receipt."
+            result["payment_status_message"] = (
+                "Payment CONFIRMED and received. "
+                "If caller asks for receipt, call resend_payment_confirmation."
+            )
+        elif _pstatus == "card_on_file":
+            result["payment_status_message"] = (
+                "Card securely saved (pre-authorisation). "
+                "Payment will be charged at check-in. Booking is confirmed."
+            )
         elif _pstatus == "email_failed":
-            result["payment_status_message"] = "Payment link was sent but email delivery FAILED. Offer to resend the link."
+            result["payment_status_message"] = (
+                "Payment link was generated but the email FAILED to deliver. "
+                "Offer to resend the payment link — call resend_payment_link."
+            )
+        elif _pstatus in ("pending_payment", "pending") or _bstatus in ("reserved", "pending", "pending_payment", "link_sent"):
+            # 'reserved' is the PMS hold status — it always means payment is outstanding
+            result["payment_status_message"] = (
+                "Payment NOT yet received — booking is on hold awaiting payment. "
+                "DO NOT say 'cancelled'. "
+                "Tell the caller their booking is held and payment is outstanding. "
+                "Offer to resend the payment link by calling resend_payment_link."
+            )
         else:
-            result["payment_status_message"] = f"Payment NOT yet received (status='{_pstatus}'). DO NOT call resend_payment_confirmation — offer resend_payment_link instead."
+            # Catch-all: any unknown status should also never be called 'cancelled'
+            result["payment_status_message"] = (
+                f"Booking is active (internal status='{_bstatus}', payment_status='{_pstatus}'). "
+                "Payment outstanding. DO NOT say 'cancelled'. "
+                "Offer resend_payment_link if caller wants to pay."
+            )
         if found_by:
             result["found_by"] = found_by
         if name_mismatch:
@@ -1332,11 +1360,40 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
         
         active_doc = None
         for doc in (docs or []):
-            if doc.get("status") in ("pending_payment", "pending", "link_sent") or doc.get("payment_status") in ("pending_payment", "pending"):
+            _ps = doc.get("payment_status") or ""
+            _bs = doc.get("status") or ""
+            # Accept any booking that is on-hold / pending payment — includes:
+            # - 'reserved' (PMS hold, payment not yet started)
+            # - 'pending' / 'pending_payment' (explicit payment pending statuses)
+            # - 'link_sent' (link was sent but not paid)
+            # - null/empty payment_status (pipeline glitch — treat as outstanding)
+            is_pending = (
+                _bs in ("reserved", "pending", "pending_payment", "link_sent")
+                or _ps in ("pending", "pending_payment", "email_failed", "")
+            )
+            is_paid = _ps == "paid" and _bs in ("paid", "confirmed")
+            if is_pending and not is_paid:
                 active_doc = doc
                 break
-                
+
         if not active_doc:
+            # Check whether the booking IS actually paid (so we can redirect, not dead-end)
+            paid_doc = None
+            for doc in (docs or []):
+                if doc.get("payment_status") == "paid":
+                    paid_doc = doc
+                    break
+            if paid_doc:
+                return {
+                    "success": False,
+                    "already_paid": True,
+                    "booking_reference": paid_doc.get("booking_reference", ""),
+                    "error": (
+                        "Booking for this email is already PAID. "
+                        "Do NOT resend the payment link — instead offer to resend the receipt confirmation "
+                        "by calling resend_payment_confirmation. Tell the caller their payment was received."
+                    ),
+                }
             return {
                 "success": False,
                 "message": "I couldn't find a pending booking for that email address. Do you have a different email or your phone number?"
@@ -1467,7 +1524,6 @@ async def _handle_stripe_and_guest_email(
 
                 if doc_id:
                     # Step A: mark pending_payment + save payment_link_url
-                    # NOTE: payment_expires_at is NOT a field in motel_reservations schema—omit it.
                     await db_service.update_booking_payment_status(
                         booking_id=doc_id,
                         payment_status="pending_payment",
