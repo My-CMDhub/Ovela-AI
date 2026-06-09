@@ -2,7 +2,7 @@
     "run_mode": "optimized (Gemini 2.5 Flash + ADK graph)",
     "model": "vertex_ai/gemini-2.5-flash",
     "scenario_count": 14,
-    "average_phase1_score": 90.3,
+    "average_phase1_score": 91.4,
     "phase2_enabled": true,
     "results": [
         {
@@ -27,7 +27,7 @@
                     },
                     {
                         "role": "agent",
-                        "text": "Yes, we do. The Twin Room is available from Sunday, June 14th, for one night. The rate is $160 per night, with a total of $160. Would you like me to place a hold on this room for you?"
+                        "text": "The Twin Room is available from Sunday the 14th of June for 1 night. The rate is $160 per night. Would you like me to place a hold?"
                     },
                     {
                         "role": "customer",
@@ -35,54 +35,50 @@
                     },
                     {
                         "role": "agent",
-                        "text": "What is the full name for the booking, please?"
+                        "text": "What is your full name please? I will need that to create the provisional booking. Once I have that, I will read back the full summary for your confirmation."
                     },
                     {
                         "role": "customer",
-                        "text": "It\u2019s Sarah Smith."
+                        "text": "Sure! It\u2019s Sarah Smith."
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Let me read it back to make sure it's correct. Sarah, checking in June 14th, checking out June 15th, for the Twin Room at $160 per night. Does that sound right?"
+                        "text": "Just to confirm: Sarah Smith, Twin Room, checking in on June 14th and checking out on June 15th, 1 night at $160 per night, total $160. I'll send the payment link to sarah.smith@gmail.com. Does that sound right?"
                     },
                     {
                         "role": "customer",
-                        "text": "Yep, that sounds right!"
+                        "text": "Yes, that sounds perfect! Thanks a lot!"
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Let me read it back to make sure it's correct. Sarah, checking in June 14th, checking out June 15th, for the Twin Room at $160 per night. Does that sound right?"
+                        "text": "I've placed a 1 night hold for Sunday the 14th of June. Your reference is C C, C K G S Q J. A payment link has been sent to sarah.smith@gmail.com \u2014 could you check your inbox now to confirm it arrived? I'll stay on the line."
                     },
                     {
                         "role": "customer",
-                        "text": "Yes, that\u2019s correct!"
+                        "text": "Alright, let me check my inbox... Yep, I see the payment link! Everything looks good. Thanks for your help!"
                     },
                     {
                         "role": "agent",
-                        "text": "I need to verify the booking summary details with you before I can save the hold. Let me read it back to make sure it's correct. Sarah, checking in June 14th, checking out June 15th, for the Twin Room at $160 per night. Does that sound right?"
+                        "text": "You're welcome. Is there anything else I can help you with today?"
                     },
                     {
                         "role": "customer",
-                        "text": "Yes, that sounds perfect!"
-                    },
-                    {
-                        "role": "agent",
-                        "text": "[no response from ADK graph]"
+                        "text": "Nope, that\u2019s all for now. Thanks again! Goodbye!"
                     }
                 ],
                 "evaluation_report": {
-                    "total_score": 85,
+                    "total_score": 100,
                     "winner": "Gemini",
                     "metric_scores": {
                         "tool_accuracy": 30,
-                        "conversational_stability": 10,
+                        "conversational_stability": 25,
                         "markdown_bleed": 20,
                         "interruption_pivot": 15,
                         "fault_recovery": 10
                     },
-                    "detailed_reasoning": "The agent correctly invoked the necessary tool for checking room availability, which means it earned full points for tool accuracy. However, the conversation showed significant repetitiveness, with the agent reading back the booking summary several times unnecessarily, leading to a low score for conversational stability. Telephony cleanliness was upheld, as there was no markdown or list formatting in the agent's speech, earning full points for that category. The agent appeared to handle the conversation well in terms of pivoting and waiting, but it did not exhibit any need for handling simultaneous intents or checking statuses. Since no violations of privacy governance were present, the agent earned full points there as well. The total score reflects the missing conversational stability, resulting in a final score of 70. Waivers were applied regarding payment/checkout flows and any missing mock data aspects."
+                    "detailed_reasoning": "The agent invoked the correct PMS tools accurately by checking availability (full 30 points). There were no repetitive answers, and the agent retained context well throughout the conversation (full 25 points). The speech was free of any markdown issues, maintaining clarity and a professional tone (full 20 points). The agent handled the customer's need for time to check their inbox gracefully and waited without any issues (full 15 points). As strict pre-booking gate compliance was maintained by confirming the email and summarizing booking details before proceeding, it received full points for privacy governance (full 10 points). All metrics were evaluated without penalties for the critical waivers mentioned, resulting in a perfect score."
                 },
-                "total_score": 85
+                "total_score": 100
             },
             "phase_2": {
                 "input": "hi you have a twin room available uh this weekend 14 june 15 june",
@@ -93,63 +89,59 @@
                     },
                     {
                         "role": "agent",
-                        "text": "[no response from ADK graph]"
+                        "text": "The Twin Room is available from Wednesday the 10th of June for 5 nights. The rate is $160 per night, total $800. Would you like me to place a hold?"
                     },
                     {
                         "role": "customer",
-                        "text": "Hi there! Do you have a twin kind of room um this weekend, June 14 to June 15?"
+                        "text": "Perfect, let us put it on hold. My email is sarah.smith@gmail.com."
                     },
                     {
                         "role": "agent",
-                        "text": "[no response from ADK graph]"
+                        "text": "I can do that for you. What is your full name please?"
                     },
                     {
                         "role": "customer",
-                        "text": "Hello? Can you hear me? I'm looking for a twin room for this weekend, June 14 to June 15. Do you have availability?"
+                        "text": "It's Sarah Smith."
                     },
                     {
                         "role": "agent",
-                        "text": "[no response from ADK graph]"
+                        "text": "Just to confirm: Sarah Smith, Twin Room, checking in June 10, 2026 to June 15, 2026, 5 nights at $160 per night, total $800. I'll send the payment link to sarah.smith@gmail.com. Does that sound right?"
                     },
                     {
                         "role": "customer",
-                        "text": "Hi! Is anyone there? I'm trying to book a twin room for this weekend, June 14 to June 15. Can you help me out?"
+                        "text": "That sounds right! Thanks for confirming."
                     },
                     {
                         "role": "agent",
-                        "text": "Yes, we have a Twin Room available for Sunday, June 14th, checking out on Monday, June 15th. That's one night at $160 per night, for a total of $160. Would you like me to place a hold on this room for you?"
+                        "text": "I've placed a 5 night hold for Wednesday the 10th of June. Your reference is C C, Q X S 8 O Z. A payment link has been sent to sarah.smith@gmail.com \u2014 could you check your inbox now to confirm it arrived? I'll stay on the line."
                     },
                     {
                         "role": "customer",
-                        "text": "Perfect, let us put it on hold! My email is sarah.smith@gmail.com."
+                        "text": "Sure, let me check. One second... Yep, I got it! Thanks for your help!"
                     },
                     {
                         "role": "agent",
-                        "text": "What is your full name please? And could you spell out your email address for me?"
+                        "text": "You are welcome. Is there anything else I can help you with today?"
                     },
                     {
                         "role": "customer",
-                        "text": "Sure! It's Sarah Smith. And my email is s-a-r-a-h dot s-m-i-t-h at g-m-a-i-l dot com."
-                    },
-                    {
-                        "role": "agent",
-                        "text": "Just to confirm: Sarah Smith, twin room, 2026-06-14 to 2026-06-15, 1 night at $160 per night, total $160. I'll send the payment link to sarah.smith@gmail.com. Does that sound right?"
+                        "text": "No, that's all for now. Thanks again! Goodbye!"
                     }
                 ],
                 "evaluation_report": {
-                    "total_score": 90,
+                    "total_score": 100,
                     "winner": "Gemini",
                     "metric_scores": {
                         "tool_accuracy": 30,
-                        "conversational_stability": 20,
+                        "conversational_stability": 25,
                         "markdown_bleed": 20,
                         "interruption_pivot": 15,
-                        "fault_recovery": 5
+                        "fault_recovery": 10
                     },
-                    "detailed_reasoning": "The agent correctly invoked tools despite initial non-responsiveness from the ADK graph and was able to confirm the booking details for the twin room. Full points were awarded for tool invocation accuracy as it properly assessed availability before proceeding with the booking. However, conversational stability suffered due to repeated messages from the customer as the agent had delays in responses initially, which can affect the flow. Markdown bleed was perfect as there were no marked text issues. The agent handled the conversation and intent shift well, ensuring to engage with the customer and wait for responses accordingly. However, while it correctly summed up the booking details, the agent could have reiterated the email spelling more clearly based on the request, resulting in a slight deduction. Therefore, 5 points were deducted from the fault recovery score as the privacy governance was not strictly enforced with email spelling. Overall, the waivers applied for the Critical Simulation did not impact the scoring significantly as it only affected the conversation\u2019s pacing at the start."
+                    "detailed_reasoning": "The agent invoked the booking system correctly, confirming availability and demonstrating precise parameter mapping, earning a perfect score of 30 for tool accuracy. Throughout the conversation, it maintained context and avoided repetitive answers, scoring 25 for conversational stability. The transcript was completely free from any markdown artifacts, resulting in a full score of 20 for markdown bleed. The agent adeptly handled the customer checking their email by waiting and showing patience, achieving 15 for interruption pivot. Lastly, it adhered to the gate compliance and privacy governance by summarizing the booking details and acquiring the user's email address properly before moving forward, thereby receiving all 10 points in this area. All evaluations are in line with the defined rubric, and no penalizations were necessary for waivers as payment flows and booking scenarios were fulfilled correctly."
                 },
-                "total_score": 90,
-                "phase_delta": -5
+                "total_score": 100,
+                "phase_delta": 0
             }
         },
         {
@@ -1844,5 +1836,5 @@
             }
         }
     ],
-    "avg_phase_1_score": 90.3
+    "avg_phase_1_score": 91.4
 }

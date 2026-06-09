@@ -760,6 +760,10 @@ async def main(args=None):
     print(f"   Report saved: {output_path}")
 
     # ── Persist evaluation run to Appwrite evaluation_runs collection ────────
+    if args and getattr(args, "scenario", None):
+        print("ℹ️ Skipping Appwrite persistence because we ran a single scenario (--scenario).")
+        return
+
     try:
         all_p2_scores = [
             r["phase_2"]["total_score"]
