@@ -459,9 +459,9 @@ class VoiceAgentHandler:
             #                      early.  Must be <= eot_threshold.  Increases
             #                      LLM call volume (~50-70%) — enable for demo.
             _stt_provider["version"] = "v2"
-            _stt_provider["eot_threshold"]  = float(os.getenv("FLUX_EOT_THRESHOLD", "0.75"))
-            _stt_provider["eot_timeout_ms"] = int(os.getenv("FLUX_EOT_TIMEOUT_MS", "4000"))
-            _eager = os.getenv("FLUX_EAGER_EOT_THRESHOLD", "")
+            _stt_provider["eot_threshold"]  = float(voice_settings.get("eot_threshold", os.getenv("FLUX_EOT_THRESHOLD", "0.75")))
+            _stt_provider["eot_timeout_ms"] = int(voice_settings.get("eot_timeout_ms", os.getenv("FLUX_EOT_TIMEOUT_MS", "4000")))
+            _eager = voice_settings.get("eager_eot_threshold", os.getenv("FLUX_EAGER_EOT_THRESHOLD", ""))
             if _eager:
                 _stt_provider["eager_eot_threshold"] = float(_eager)
             logger.info(
