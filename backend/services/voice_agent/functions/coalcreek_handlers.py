@@ -1161,29 +1161,19 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
         except Exception as resend_err:
             logger.error("📧 Email correction/resend error: %s", resend_err)
     
-    if db_service and hasattr(db_service, "upsert_motel_guest"):
-        try:
-            db_service.upsert_motel_guest(
-                guest_name=guest_name, 
-                guest_phone=guest_phone, 
-                guest_email=guest_email,
-                tenant_id="coalcreek",
-                status="inquiry"
-            )
-            if email_resent:
-                message = (
-                    f"I've updated your email address to {guest_email} and resent the payment link. "
-                    "Could you check your inbox now to make sure it has arrived?"
-                )
-            else:
-                message = "Details securely saved to guest profile."
-        except Exception as e:
-            logger.error(f"Failed to save guest info: {e}")
-            message = "Details captured."
+    if email_resent:
+        message = (
+            f"I've updated your email address to {guest_email} and resent the payment link. "
+            "Could you check your inbox now to make sure it has arrived?"
+        )
     else:
-        message = "Details captured (temporary)."
+        message = "Details safely stored in my temporary memory for this call."
         
-    return {"success": True, "message": message, "email_resent": email_resent}
+    return {
+        "success": True,
+        "message": message,
+        "ai_should_say": message if email_resent else "Got it. I've noted that down."
+    }
 
 
 async def handle_resend_payment_confirmation(args: dict, db_service, user_phone: str = None) -> dict:

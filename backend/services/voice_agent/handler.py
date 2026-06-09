@@ -162,7 +162,6 @@ class VoiceAgentHandler:
         self.call_start_time = None
         self.call_sid = None
         self.exchange_count = 0
-        self.customer_id = None # Track Square Customer ID for order linking
 
         self.booking_completed = False
         
@@ -204,7 +203,7 @@ class VoiceAgentHandler:
         # Transcript for analytics
         self.transcript = []
         self.call_outcome = "completed"
-        self.call_reference = None # Unified reference for bookings/orders
+        self.call_reference = None # Unified reference for bookings
         
         # Environment detection (demo vs production call)
         self.is_demo_call = False  # Set in _handle_twilio_start based on custom parameters
@@ -216,8 +215,6 @@ class VoiceAgentHandler:
         # Smart Memory (for latency optimization & amnesia fix)
         self.memory = {
             "name": None,
-            "order_summary": None,
-            "pickup_time": None,
             # Coal Creek motel booking context (session-only)
             "check_in": None,
             "check_out": None,
@@ -226,9 +223,6 @@ class VoiceAgentHandler:
             "notes": None,
         }
         
-        # Order Tracking
-        self.order_id = None
-        self.pending_order = None # [NEW] Batch/Draft order buffer
         self._availability_cache = {}
         
         # Tenant Configuration (Database Driven)
@@ -576,13 +570,7 @@ class VoiceAgentHandler:
                 memory_context += f"• Number of Guests: {self.memory['num_guests']}\n"
             if self.memory.get("notes"):
                 memory_context += f"• Special Requests / Notes: {self.memory['notes']}\n"
-        else:
-            # Saranda Cafe (or generic food/pickup order)
-            if self.memory.get("order_summary"):
-                memory_context += f"• Current Order: {self.memory['order_summary']}\n"
-            if self.memory.get("pickup_time"):
-                memory_context += f"• Desired Pickup: {self.memory['pickup_time']}\n"
-        
+                        
         if self.custom_params.get("transfer_failed") == "true":
             memory_context += "• CRITICAL: You just attempted to transfer the user to staff, but NO ONE ANSWERED. The user has been returned to you. Apologize that the front desk is busy right now, and ask if there's anything else you can help them with directly or if they want to leave a message. DO NOT attempt to transfer them  until user explicitly ask for it again.\n"
             
@@ -1539,26 +1527,10 @@ class VoiceAgentHandler:
         elif "name" in function_args and function_args["name"]:
             self.memory["name"] = function_args["name"]
             logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
+        elif "guest_name" in function_args and function_args["guest_name"]:
+            self.memory["name"] = function_args["guest_name"]
+            logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
         
-        if "items" in function_args:
-             # Summarize items
-            try:
-                items = function_args["items"]
-                summary_parts = []
-                for item in items:
-                    qty = item.get("quantity", 1)
-                    name = item.get("name", "Item")
-                    mods = item.get("modifiers", [])
-                    mod_str = f" ({', '.join(mods)})" if mods else ""
-                    summary_parts.append(f"{qty}x {name}{mod_str}")
-                self.memory["order_summary"] = ", ".join(summary_parts)
-                logger.info(f"🧠 Memory Updated: Order = {self.memory['order_summary']}")
-            except Exception as e:
-                logger.warning(f"Failed to parse memory items: {e}")
-
-        if "pickup_time" in function_args:
-            self.memory["pickup_time"] = function_args["pickup_time"]
-
         # COAL CREEK BOOKING MEMORY: Capture preferred dates, room type, guest
         # count and notes from check_availability and create_booking_request so
         # the AI never has to ask again mid-conversation.
@@ -1813,24 +1785,10 @@ class VoiceAgentHandler:
                 self.booking_completed = True
 
             # Check for order completion
-            if function_name == "submit_order":
-                 if result.get("success") and result.get("action") == "hold":
-                     self.pending_order = result.get("order_details")
-                     logger.info(f"📝 Order Held in Batch: {len(self.pending_order.get('items', []))} items")
-                 elif result.get("success") and result.get("order_id"):
-                     self.order_id = result.get("order_id")
-                     self.call_reference = self.order_id
-                     logger.info(f"🛒 Order captured (Immediate): {self.order_id}")
-
             # Check for booking completion (Motel)
             if function_name == "create_booking_request" and result.get("success"):
                 self.call_reference = result.get("booking_reference")
                 logger.info(f"🏨 Booking captured: {self.call_reference}")
-
-            # SMART MEMORY UPDATE: Capture Customer ID from Lookup
-            if function_name == "lookup_customer" and result.get("found") and result.get("customer_id"):
-                self.customer_id = result.get("customer_id")
-                logger.info(f"🆔 Captured Customer ID: {self.customer_id}")
 
             # I1: Wait for injection ack audio to finish before sending result
             # This creates the natural "Got it. [pause] Here's what I found..." gap.
@@ -2093,13 +2051,6 @@ class VoiceAgentHandler:
                             if booking_details:
                                 intent = "Motel Booking Request"
                                 sms_context = f" | Details: {', '.join(booking_details)}"
-                        else:
-                            if self.memory.get("order_summary"):
-                                intent = self.memory["order_summary"]
-                            if self.pending_order:
-                                 items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
-                                 sms_context = f" | DRAFT: {items}"
-                        
                         summary_msg = f"⏱️ HARD CAP TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
                         
                         # Use immediate dispatch & AWAIT it
@@ -2478,12 +2429,6 @@ class VoiceAgentHandler:
                     if booking_details:
                         intent = "Motel Booking Request"
                         sms_context = f" | Details: {', '.join(booking_details)}"
-                else:
-                    if self.memory.get("order_summary"):
-                        intent = self.memory["order_summary"]
-                    if self.pending_order:
-                        items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
-                        sms_context = f" | DRAFT ORDER: {items}"
                 
                 from services.sms import sms_service
                 summary_msg = f"📞 INCALL TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
@@ -2634,8 +2579,7 @@ class VoiceAgentHandler:
                         customer_name=self.memory.get("name"),
                         metadata={
                             "exchange_count": self.exchange_count,
-                            "outcome": self.call_outcome,
-                            "order_id": self.order_id
+                            "outcome": self.call_outcome
                         }
                     )
                     logger.info(f"📝 Saved transcript: {len(self.transcript)} entries, {duration}s")
@@ -2677,7 +2621,7 @@ class VoiceAgentHandler:
             system_instruction = (
                 "You are a helpful assistant that summarizes customer service calls. "
                 "Provide an ultra-concise, 1-sentence summary of what happened in the call "
-                "(e.g., 'Customer ordered 2 large pepperoni rooms for 7:30pm pickup'). Focus on the intent and result."
+                "(e.g., 'Customer booked a Queen room for 2 nights and received payment link'). Focus on the intent and result."
             )
             
             # Run in a threadpool to prevent blocking the async event loop
