@@ -523,7 +523,7 @@ class VoiceAgentHandler:
             "provider": {
                 "type": provider_type,
                 "model": model,
-                "temperature": 0.45
+                "temperature": 0.42
             },
             "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()
