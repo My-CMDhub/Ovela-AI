@@ -89,17 +89,17 @@ graph TD
 
 <br />
 
-### The Hot Path (Real-Time Voice, <850ms)
-- **Flow:** Guest Voice → Twilio WebSocket → FastAPI Audio Bridge → Deepgram Voice Agent
-- **Purpose:** Manages immediate speech interaction, voice activity detection (VAD), and turn-taking.
-- **Stack:** Deepgram Nova-3 (STT) with domain keyterm boosting, Cartesia Sonic-3 (TTS) with cached system voices.
+### The Hot Path — Real-Time Telephony Infrastructure (~850ms)
+- **Flow:** Guest Voice → Twilio WebSocket → FastAPI Audio Bridge → Deepgram Nova-3 STT + VAD → Cartesia Sonic-3 TTS
+- **Purpose:** Pure speech streaming layer. Handles voice activity detection (VAD), audio byte routing, and transcription. Has **no AI tools, no business logic, and no database access.** Transcribed text is forwarded to the Cold Path via async webhook.
+- **Stack:** Deepgram Nova-3 (STT + keyterm domain boosting), Cartesia Sonic-3 (TTS) with zero-latency pre-synthesized `.mulaw.raw` voice cache.
 
-### The Cold Path (Async Business Logic, Google ADK)
-- **Flow:** Webhook Trigger → FastAPI ADK Router → `OvelaManager` (LlmAgent)
-  - ├─ `BookingWorker` (availability, hold placement, Stripe generation)
-  - └─ `InfoWorker` (policies, amenities, live search grounding)
-- **Orchestration:** Built entirely on the **Google Agent Development Kit (ADK)**. Tool executions run asynchronously, delegating complex schema validation to specialized agents.
-- **Engine:** Powered by **Gemini 2.5 Flash** (via Vertex AI Application Default Credentials) for rapid, cost-efficient tool execution.
+### The Cold Path — Gemini AI Intelligence Layer (Google ADK)
+- **Flow:** Async Webhook → FastAPI ADK Router → `OvelaManager` (LlmAgent) on **Gemini 2.5 Flash**
+  - ├─ `BookingWorker`: availability checks, hold placement, dynamic Stripe pricing, confirmation emails
+  - └─ `InfoWorker`: motel policies, amenities, live Google Search grounding
+- **All AI reasoning, every tool call, and every business decision runs exclusively here** — authenticated to Vertex AI via Application Default Credentials (ADC). Zero hardcoded API keys.
+- **Session Resilience:** `AppwriteSessionService` persists ADK graph state across Cloud Run scaling events so conversation context is never dropped.
 
 ---
 

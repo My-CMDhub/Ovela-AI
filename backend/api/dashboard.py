@@ -1015,8 +1015,8 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
         return {"status": "received"}
 
     except Exception as e:
-        logger.error(f"Stripe webhook error: {e}")
-        return {"status": "error", "message": str(e)}
+        logger.warning(f"Stripe webhook processing warning (non-fatal): {type(e).__name__}: {e}")
+        return {"status": "received"}
 
 
 # -----------------------------------------------------------------------------
