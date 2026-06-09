@@ -932,45 +932,69 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                     doc = booking_doc
                     try:
                         from services.email import email_service
-                        from services.appwrite import db_service as _db2
 
                         tenant_id = doc.get("tenant_id", "coalcreek")
-                        tenant_config = await _db2.get_tenant_config(tenant_id)
-                        staff_email = tenant_config.get("staff_email")
                         guest_email = doc.get("guest_email")
 
-                        # 1. Notify Staff (Ovela Branded)
-                        await email_service.send_staff_payment_notification(
-                            staff_email=staff_email,
-                            booking_reference=booking_ref,
-                            customer_name=doc.get("guest_name", "Guest"),
-                            customer_email=guest_email,
-                            room_type=doc.get("room_type", ""),
-                            check_in=doc.get("check_in_date", ""),
-                            check_out=doc.get("check_out_date", ""),
-                            num_nights=doc.get("num_nights", 1),
-                            amount_paid=amount_total_cents / 100.0 if mode == "payment" else 0.0,
-                            mode=mode,
-                        )
+                        _COALCREEK_DEFAULTS = {
+                            "staff_email": "officialcoalcreek@gmail.com",
+                            "business_name": "Coal Creek Motel",
+                            "business_phone": "+61468088990",
+                            "location": "8444 South Gippsland Highway, Korumburra VIC 3950",
+                        }
+                        if tenant_id == "coalcreek":
+                            tenant_config = _COALCREEK_DEFAULTS
+                        else:
+                            from services.appwrite import db_service as _db2
+                            tenant_config = await _db2.get_tenant_config(tenant_id) or {}
 
-                        # 2. Notify Guest (Client Branded Receipt)
-                        if guest_email:
-                            await email_service.send_guest_booking_confirmation(
-                                guest_email=guest_email,
-                                guest_name=doc.get("guest_name", "Guest"),
+                        staff_email = tenant_config.get("staff_email") or _COALCREEK_DEFAULTS["staff_email"]
+                        business_name = tenant_config.get("business_name", "Coal Creek Motel")
+
+                        # 1. Notify Staff — isolated so guest email still fires if this fails
+                        try:
+                            await email_service.send_staff_payment_notification(
+                                staff_email=staff_email,
                                 booking_reference=booking_ref,
+                                customer_name=doc.get("guest_name", "Guest"),
+                                customer_email=guest_email,
                                 room_type=doc.get("room_type", ""),
                                 check_in=doc.get("check_in_date", ""),
                                 check_out=doc.get("check_out_date", ""),
                                 num_nights=doc.get("num_nights", 1),
-                                total_amount=amount_total_cents / 100.0 if mode == "payment" else doc.get("total_amount", 0),
-                                business_name=tenant_config.get("business_name", "Coal Creek Motel"),
-                                business_phone=tenant_config.get("business_phone", ""),
-                                business_location=tenant_config.get("location", ""),
-                                tenant_id=tenant_id,
+                                amount_paid=amount_total_cents / 100.0 if mode == "payment" else 0.0,
+                                mode=mode,
                             )
+                            logger.info("📧 Staff payment notification sent to %s", staff_email)
+                        except Exception as staff_err:
+                            logger.error("❌ Staff notification failed (non-fatal): %s", staff_err)
+
+                        # 2. Notify Guest — isolated so staff email failure cannot block this
+                        if guest_email:
+                            try:
+                                await email_service.send_guest_booking_confirmation(
+                                    guest_email=guest_email,
+                                    guest_name=doc.get("guest_name", "Guest"),
+                                    booking_reference=booking_ref,
+                                    room_type=doc.get("room_type", ""),
+                                    check_in=doc.get("check_in_date", ""),
+                                    check_out=doc.get("check_out_date", ""),
+                                    num_nights=doc.get("num_nights", 1),
+                                    total_amount=amount_total_cents / 100.0 if mode == "payment" else doc.get("total_amount", 0),
+                                    business_name=business_name,
+                                    business_phone=tenant_config.get("business_phone", ""),
+                                    business_location=tenant_config.get("location", ""),
+                                    tenant_id=tenant_id,
+                                )
+                                logger.info("📧 Guest confirmation sent to %s (%s)", guest_email, booking_ref)
+                            except Exception as guest_err:
+                                logger.error("❌ Guest confirmation failed for %s: %s", booking_ref, guest_err)
+                        else:
+                            logger.error("❌ No guest_email on booking doc — skipping guest confirmation for %s", booking_ref)
+
                     except Exception as email_err:
                         logger.error("Failed to send payment/setup emails for %s: %s", booking_ref, email_err)
+
 
                 else:
                     logger.warning("Booking not found for webhook update: ref=%s sid=%s", booking_ref, stripe_session_id)
