@@ -425,14 +425,12 @@ class VoiceAgentHandler:
             
         # Extract voice settings from DB config
         voice_settings = self.tenant_config.get("voice_settings", {})
-        _stt_model = voice_settings.get("model", "nova-2")
-        _endpointing = voice_settings.get("endpointing",
-                        voice_settings.get("utterance_end_ms", 300 if "nova-3" in _stt_model else 300))
+        _stt_model = voice_settings.get("model", "flux-general-en")
+        _is_flux = _stt_model.startswith("flux-")
 
         # ── Domain vocabulary for accent-resilient STT ────────────────────────
-        # Nova-2 uses 'keyterms' (flat list of strings).
-        # Nova-3 uses 'vocabulary' (list of {"word": str} dicts).
-        # Sending the wrong one is silently ignored — wasting the accuracy boost.
+        # All Deepgram models (Nova-2, Nova-3, Flux) accept 'keyterms' as a flat
+        # list of strings inside the Voice Agent API settings payload.
         # ─────────────────────────────────────────────────────────────────────
         _domain_terms = [
             "Coal Creek", "Chiltern", "Queen Room", "King Room",
@@ -440,12 +438,47 @@ class VoiceAgentHandler:
             "gmail", "hotmail", "yahoo", "outlook", "icloud",
             "booking", "check-in", "check-out",
         ]
+
         _stt_provider: dict = {
             "type": "deepgram",
             "model": _stt_model,
-            "endpointing": _endpointing,
             "keyterms": _domain_terms,
         }
+
+        if _is_flux:
+            # Flux requires version:v2 to activate the /v2/listen engine inside
+            # the Voice Agent API.  EOT params replace legacy 'endpointing'.
+            #
+            # eot_threshold      — confidence gate to close a turn (0.5-0.9).
+            #                      Higher = more reliable but slightly slower.
+            # eot_timeout_ms     — hard silence fallback in ms.  If the user
+            #                      stops talking and confidence never crosses
+            #                      eot_threshold, the turn is force-closed here.
+            # eager_eot_threshold — (optional) lower confidence gate that fires
+            #                      BEFORE eot_threshold to start LLM processing
+            #                      early.  Must be <= eot_threshold.  Increases
+            #                      LLM call volume (~50-70%) — enable for demo.
+            _stt_provider["version"] = "v2"
+            _stt_provider["eot_threshold"]  = float(os.getenv("FLUX_EOT_THRESHOLD", "0.75"))
+            _stt_provider["eot_timeout_ms"] = int(os.getenv("FLUX_EOT_TIMEOUT_MS", "4000"))
+            _eager = os.getenv("FLUX_EAGER_EOT_THRESHOLD", "")
+            if _eager:
+                _stt_provider["eager_eot_threshold"] = float(_eager)
+            logger.info(
+                "🌊 STT: flux (%s) | eot_threshold=%.2f | eot_timeout_ms=%d%s",
+                _stt_model,
+                _stt_provider["eot_threshold"],
+                _stt_provider["eot_timeout_ms"],
+                f" | eager_eot={_stt_provider['eager_eot_threshold']}" if _eager else "",
+            )
+        else:
+            # Nova-2 / Nova-3 legacy path — uses silence-based endpointing.
+            _endpointing = voice_settings.get(
+                "endpointing",
+                voice_settings.get("utterance_end_ms", 300)
+            )
+            _stt_provider["endpointing"] = _endpointing
+            logger.info("🔷 STT: nova (%s) | endpointing=%dms", _stt_model, _endpointing)
 
         return {
             "type": "Settings",
@@ -517,7 +550,10 @@ class VoiceAgentHandler:
             "provider": {
                 "type": provider_type,
                 "model": model,
-                "temperature": 0.42
+                # 0.35 — stable-creative sweet spot for multi-turn voice booking:
+                # low enough to keep dates/names/emails consistent across turns,
+                # high enough to vary phrasing so it doesn't sound robotic.
+                "temperature": 0.35
             },
             "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()

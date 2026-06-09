@@ -8,9 +8,10 @@ Easy to switch between demo and production environments.
 import random
 
 
-# =============================================================================
-# DEEPGRAM API
-# =============================================================================
+# Voice Agent API endpoint — handles the full Listen → Think → Speak pipeline.
+# STT model is set in Settings.agent.listen.provider.model.
+# When model is flux-general-en: add version="v2" + EOT params (no endpointing).
+# When model is nova-2/nova-3: use endpointing param (no version/EOT needed).
 DEEPGRAM_AGENT_URL = "wss://agent.deepgram.com/v1/agent/converse"
 
 # Greetings are now generated dynamically based on tenant
