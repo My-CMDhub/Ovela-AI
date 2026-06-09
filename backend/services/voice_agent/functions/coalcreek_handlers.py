@@ -1159,12 +1159,18 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                             "message": f"My system flagged a delivery error for {guest_email}. Could we verify the spelling, or do you have a different email address?"
                         }
 
-                # PATCH email in Appwrite using generic update
+                # PATCH details in Appwrite using generic update
+                patch_data = {"payment_status": "pending_payment"}
+                if guest_email:
+                    patch_data["guest_email"] = guest_email
+                if guest_name:
+                    patch_data["guest_name"] = guest_name
+
                 await db_service.update_motel_reservation(
                     booking_id=active_doc["$id"],
-                    data={"guest_email": guest_email, "payment_status": "pending_payment"},
+                    data=patch_data,
                 )
-                logger.info("📧 Email corrected in Appwrite for %s", active_doc.get("booking_reference"))
+                logger.info("📝 Details corrected in Appwrite for %s", active_doc.get("booking_reference"))
                 # Resend payment link to corrected email (fire-and-forget)
                 asyncio.create_task(_handle_stripe_and_guest_email(
                     booking_ref=active_doc.get("booking_reference", ""),
@@ -1185,16 +1191,19 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
     
     if email_resent:
         message = (
-            f"I've updated your email address to {guest_email} and resent the payment link. "
+            f"I've updated your details and resent the payment link to {guest_email}. "
             "Could you check your inbox now to make sure it has arrived?"
         )
     else:
-        message = "Details safely stored in my temporary memory for this call."
+        if guest_name and not guest_email:
+            message = "I've successfully updated the name on your booking."
+        else:
+            message = "Details safely stored in my temporary memory for this call."
         
     return {
         "success": True,
         "message": message,
-        "ai_should_say": message if email_resent else "Got it. I've noted that down."
+        "ai_should_say": message
     }
 
 
