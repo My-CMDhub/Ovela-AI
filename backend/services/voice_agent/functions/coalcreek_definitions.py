@@ -56,9 +56,9 @@ If availability cannot be verified, apologize briefly and transfer to staff (bet
 
 MANDATORY GATE — you MUST complete ALL 3 steps before calling this function:
   STEP 1: Collected first name + last name (confirmed spelling if unusual).
-  STEP 2: Spelled out the email character by character AND received a verbal YES/confirmation.
+  STEP 2: Spelled out the email character by character AND received a verbal YES. (Skip spelling out character-by-character ONLY IF the email is already pre-loaded in CURRENT MEMORY).
   STEP 3: Read back the FULL one-line summary IN ONE SENTENCE and received a verbal YES:
-    "Just to confirm — [First Name Last Name], checking in [spoken date], checking out [spoken date], [Room Type] at $[price] per night, total $[total]. That email is [spell email letter by letter]. Is all of that correct?"
+    "Just to confirm — [First Name Last Name], checking in [spoken date], checking out [spoken date], [Room Type] at $[price] per night, total $[total]. That email is [email]. Is all of that correct?"
     The STEP 3 summary MUST include: full name, check-in, check-out, room type, price per night, total, AND email.
     A "Yep" confirming only the email address is NOT sufficient — the full summary must be read and confirmed.
 

@@ -964,13 +964,12 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         # Real-world security verification: don't give away the name immediately if we just matched the phone
         if found_by == "caller_phone":
             opener = "I see a booking linked to this phone number"
-            if details:
-                opener = f"{opener} {details}"
+            # OMIT details (room type, price) to avoid AI confirming too much upfront
             if name_mismatch:
                 return f"{opener}. However, the name on file is '{guest}'. If '{guest}' sounds like a misspelled version of what the user said (e.g. 'B H R U V' vs 'Drew', or 'Smith' vs 'Smyth'), ignore the mismatch and confirm it with them naturally. If it is completely different, tell them 'I have a different name on file though — what name is it under?'"
             if name_already_provided:
                 return f"{opener}. And since you've already given your name, I can confirm it's yours. How can I help you with it?"
-            return f"{opener}. could you just verify the first name on the reservation?"
+            return f"{opener}. I've got your booking details right here. How can I help you with it?"
             
         elif found_by == "phone":
             opener = f"I found a booking on that number under {guest}"
@@ -1279,7 +1278,10 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                 logger.info("📝 Details corrected in Appwrite for %s", active_doc.get("booking_reference"))
                 final_email = guest_email or active_doc.get("guest_email")
                 if final_email:
-                    # Resend payment link to corrected email (fire-and-forget)
+                    email_notify_event = asyncio.Event()
+                    email_notify_result = [None]
+                    
+                    # Resend payment link to corrected email (with wait for bounce detection)
                     asyncio.create_task(_handle_stripe_and_guest_email(
                         booking_ref=active_doc.get("booking_reference", ""),
                         room_type=active_doc.get("room_type", ""),
@@ -1291,8 +1293,23 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                         check_out=active_doc.get("check_out_date", ""),
                         db_service=db_service,
                         existing_stripe_url=active_doc.get("payment_link_url"),
-                        existing_expires_at=active_doc.get("payment_expires_at", 0)
+                        existing_expires_at=active_doc.get("payment_expires_at", 0),
+                        notify_event=email_notify_event,
+                        notify_result=email_notify_result,
                     ))
+                    
+                    try:
+                        await asyncio.wait_for(email_notify_event.wait(), timeout=6.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("N2: Email dispatch timeout (6s) during update for %s", active_doc.get("booking_reference"))
+                        
+                    if email_notify_result[0] is False:
+                        return {
+                            "success": False,
+                            "error": f"Email bounced. The payment link could not be delivered to {final_email}. Tell the user their email address bounced and ask them to spell it again.",
+                            "_email_bounce": True
+                        }
+                    
                     email_resent = True
         except Exception as resend_err:
             logger.error("📧 Details correction/resend error: %s", resend_err)
@@ -1527,6 +1544,9 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
         existing_url = active_doc.get("payment_link_url")
         expires_at = active_doc.get("payment_expires_at", 0)
         
+        email_notify_event = asyncio.Event()
+        email_notify_result = [None]
+        
         asyncio.create_task(_handle_stripe_and_guest_email(
             booking_ref=active_doc.get("booking_reference", ""),
             room_type=active_doc.get("room_type", ""),
@@ -1538,8 +1558,22 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
             check_out=active_doc.get("check_out_date", ""),
             db_service=db_service,
             existing_stripe_url=existing_url,
-            existing_expires_at=expires_at
+            existing_expires_at=expires_at,
+            notify_event=email_notify_event,
+            notify_result=email_notify_result,
         ))
+        
+        try:
+            await asyncio.wait_for(email_notify_event.wait(), timeout=6.0)
+        except asyncio.TimeoutError:
+            logger.warning("N2: Email dispatch timeout (6s) during resend for %s", active_doc.get("booking_reference"))
+            
+        if email_notify_result[0] is False:
+            return {
+                "success": False,
+                "error": f"Email bounced. The payment link could not be delivered to {guest_email}. Tell the user their email address bounced and ask them to spell it again.",
+                "_email_bounce": True
+            }
         
         return {
             "success": True,
