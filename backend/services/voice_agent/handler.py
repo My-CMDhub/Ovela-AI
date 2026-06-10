@@ -1402,7 +1402,10 @@ class VoiceAgentHandler:
         # If it's still playing, suppress immediate `clear` to prevent "mmhmm"
         # from cutting off the AI prematurely.
         # ─────────────────────────────────────────────────────────────────
-        if getattr(self, '_ai_is_speaking', False) and hasattr(self, '_tts_playback_start'):
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        is_flux = voice_settings.get("model", "flux-general-en").startswith("flux-")
+        
+        if not is_flux and getattr(self, '_ai_is_speaking', False) and hasattr(self, '_tts_playback_start'):
             bytes_sent = getattr(self, '_twilio_audio_bytes_sent', 0)
             elapsed_time = time.time() - self._tts_playback_start
             expected_duration = bytes_sent / 8000.0  # 8000 bytes/sec for 8kHz mulaw
@@ -1456,9 +1459,30 @@ class VoiceAgentHandler:
         # Notify silence monitor
         self.silence_monitor.on_user_speech()
         
-        # We NO LONGER clear the Twilio audio buffer here.
-        # It is deferred to `_handle_conversation_text` (Sync Layer) which verifies
-        # the text is a meaningful interruption before stopping the AI's speech.
+        # ─────────────────────────────────────────────────────────────────
+        # FLUX VAD INTERRUPTION (Immediate Clear)
+        # Deepgram Flux sends ConversationText at the END of the turn (EOT).
+        # We cannot wait for the transcript to verify if it's a meaningful interruption,
+        # otherwise the AI will keep talking over the user for seconds.
+        # We MUST clear the Twilio buffer immediately on VAD for Flux.
+        # ─────────────────────────────────────────────────────────────────
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        is_flux = voice_settings.get("model", "flux-general-en").startswith("flux-")
+
+        if is_flux and getattr(self, '_ai_is_speaking', False):
+            logger.info("🛑 Flux VAD Interruption: Firing Twilio clear event immediately to stop AI.")
+            clear_message = {
+                "event": "clear",
+                "streamSid": self.stream_sid
+            }
+            asyncio.create_task(self.twilio_ws.send_json(clear_message))
+            # We don't force _ai_is_speaking = False yet; we let the ConversationText 
+            # handler do the trimming and system tag injection later.
+        else:
+            # We NO LONGER clear the Twilio audio buffer here for Nova.
+            # It is deferred to `_handle_conversation_text` (Sync Layer) which verifies
+            # the text is a meaningful interruption before stopping the AI's speech.
+            pass
         
         # CRITICAL: Do NOT force AI speaking state to False yet!
         # If it was a false interruption, the AI is actually still speaking.
