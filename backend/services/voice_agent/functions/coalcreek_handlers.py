@@ -388,6 +388,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
     room_map = {
         "queen": "Double Room",
         "standard": "Double Room",
+        "double": "Double Room",
         "twin": "Twin Room",
         "family": "Family Suite",
         "suite": "Deluxe Spa Suite",
@@ -692,7 +693,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     rooms_data = COALCREEK_DATA["rooms"]
     # fuzzy match logic again
     search_key = room_type.lower().split()[0]
-    key_map = {"queen": "queen", "standard": "queen", "twin": "twin", "family": "family", "spa": "spa", "deluxe": "spa"}
+    key_map = {"queen": "queen", "standard": "queen", "double": "queen", "twin": "twin", "family": "family", "spa": "spa", "deluxe": "spa", "suite": "spa"}
     final_key = key_map.get(search_key, "queen")
     room_data = rooms_data.get(final_key, rooms_data["queen"])
     

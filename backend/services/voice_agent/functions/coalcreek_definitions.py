@@ -43,7 +43,7 @@ If availability cannot be verified, apologize briefly and transfer to staff (bet
                     },
                     "room_type": {
                         "type": "string",
-                        "enum": ["queen", "twin", "family", "suite", "any"],
+                        "enum": ["queen", "twin", "family", "suite", "spa", "deluxe", "double", "standard", "any"],
                         "description": "Specific room type to check, or 'any' for all rooms (HIGHLY RECOMMENDED)"
                     }
                 },
@@ -82,8 +82,8 @@ If this tool fails validation, it will return a natural language error (e.g., 'E
                     },
                     "room_type": {
                         "type": "string",
-                        "enum": ["queen", "twin", "family", "suite"],
-                        "description": "Room type to book. CRITICAL MAPPING: 'double' or 'double room' ALWAYS maps to 'queen'. 'twin' is ONLY used when caller explicitly says 'twin' or 'two single beds'. Never use 'twin' for a 'double' request."
+                        "enum": ["queen", "twin", "family", "suite", "spa", "deluxe", "double", "standard"],
+                        "description": "Room type to book. CRITICAL MAPPING: 'double' or 'double room' maps to 'queen'. 'twin' is ONLY used when caller explicitly says 'twin' or 'two single beds'. Never use 'twin' for a 'double' request."
                     },
                     "num_guests": {
                         "type": "integer",
