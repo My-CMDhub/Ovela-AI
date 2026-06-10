@@ -668,11 +668,11 @@ class VoiceAgentHandler:
         speed = voice_settings.get("speed", "fast")
         volume = voice_settings.get("volume", 0.8)
         
-        logger.info(f"🎤 Using Cartesia Sonic-3.5 TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
+        logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
         return {
             "provider": {
                 "type": "cartesia",
-                "model_id": "sonic-3.5",
+                "model_id": "sonic-3",
                 "speed": speed,
                 "volume": volume,
                 "voice": {
@@ -2261,8 +2261,31 @@ class VoiceAgentHandler:
             self._last_system_tts_error = "CARTESIA_API_KEY missing or empty text"
             return None
         voice_id = self._get_cartesia_voice_id()
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        
+        # Convert config speed (numeric or preset string) to Cartesia ratio (0.6 - 1.5)
+        db_speed = voice_settings.get("speed", "fast")
+        db_volume = voice_settings.get("volume", 0.8)
+        
+        speed_map = {
+            "slowest": 0.7,
+            "slow": 0.85,
+            "normal": 1.0,
+            "fast": 1.25,
+            "fastest": 1.5
+        }
+        try:
+            speed = float(db_speed)
+        except (ValueError, TypeError):
+            speed = speed_map.get(str(db_speed).lower(), 1.25)
+            
+        try:
+            volume = float(db_volume)
+        except (ValueError, TypeError):
+            volume = 0.8
+
         payload = {
-            "model_id": "sonic-3",
+            "model_id": "sonic-3.5",
             "transcript": text,
             "voice": {"mode": "id", "id": voice_id},
             "output_format": {
@@ -2270,7 +2293,10 @@ class VoiceAgentHandler:
                 "encoding": "pcm_mulaw",
                 "sample_rate": 8000,
             },
-            "language": "en",
+            "generation_config": {
+                "speed": speed,
+                "volume": volume,
+            }
         }
         headers = {
             "X-API-Key": settings.CARTESIA_API_KEY,

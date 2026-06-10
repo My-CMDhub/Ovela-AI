@@ -11,6 +11,9 @@ import {
     BedDouble,
     Calendar,
     Plus,
+    Mail,
+    CreditCard,
+    ExternalLink,
 } from "lucide-react";
 import { columns } from "@/components/reservations/columns";
 import { DataTable } from "@/components/reservations/data-table";
@@ -229,8 +232,7 @@ export default function ReservationsPage() {
                             </div>
                         </div>
                         <div className="p-6 space-y-4">
-                            {/* ... (Keep existing modal content logic for now as it's complex) ... */}
-                            {/* NOTE: Re-implementing the modal body briefly to ensure it works contextually */}
+                            {/* ── Guest & Room grid ── */}
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <p className="text-sm text-gray-500">Guest Name</p>
@@ -242,7 +244,7 @@ export default function ReservationsPage() {
                                 </div>
                                 <div>
                                     <p className="text-sm text-gray-500">Room Type</p>
-                                    <p className="font-medium">{selectedReservation.room_type}</p>
+                                    <p className="font-medium capitalize">{selectedReservation.room_type}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm text-gray-500">Guests</p>
@@ -257,18 +259,77 @@ export default function ReservationsPage() {
                                     <p className="font-medium">{new Date(selectedReservation.check_out_date).toLocaleDateString()}</p>
                                 </div>
                                 <div>
-                                    <p className="text-sm text-gray-500">Rate/Night</p>
+                                    <p className="text-sm text-gray-500">Rate / Night</p>
                                     <p className="font-medium">${selectedReservation.rate_per_night}</p>
                                 </div>
                                 <div>
                                     <p className="text-sm text-gray-500">Total</p>
-                                    <p className="font-medium text-[#D4AF37]">${selectedReservation.total_amount}</p>
+                                    <p className="font-semibold text-emerald-700">${selectedReservation.total_amount}</p>
                                 </div>
                             </div>
+
+                            {/* ── Email row — shows MISSING badge when blank (key for demo) ── */}
+                            <div className="pt-3 border-t border-gray-100">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <Mail className="w-4 h-4 text-gray-400" />
+                                        <p className="text-sm text-gray-500">Email</p>
+                                    </div>
+                                    {selectedReservation.guest_email ? (
+                                        <p className="font-medium text-gray-900 text-sm">{selectedReservation.guest_email}</p>
+                                    ) : (
+                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-600 border border-red-200">
+                                            <AlertCircle className="w-3 h-3" />
+                                            MISSING
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* ── Payment status row ── */}
+                            <div className="pt-3 border-t border-gray-100">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <CreditCard className="w-4 h-4 text-gray-400" />
+                                        <p className="text-sm text-gray-500">Payment</p>
+                                    </div>
+                                    {(() => {
+                                        const ps = selectedReservation.payment_status || selectedReservation.status || "unknown";
+                                        const styles: Record<string, string> = {
+                                            paid:            "bg-emerald-50 text-emerald-700 border-emerald-200",
+                                            confirmed:       "bg-emerald-50 text-emerald-700 border-emerald-200",
+                                            link_sent:       "bg-sky-50 text-sky-700 border-sky-200",
+                                            pending_payment: "bg-amber-50 text-amber-700 border-amber-200",
+                                            pending:         "bg-amber-50 text-amber-700 border-amber-200",
+                                            outstanding:     "bg-orange-50 text-orange-700 border-orange-200",
+                                            email_failed:    "bg-red-50 text-red-700 border-red-200",
+                                        };
+                                        const cls = styles[ps] ?? "bg-gray-50 text-gray-600 border-gray-200";
+                                        return (
+                                            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${cls}`}>
+                                                {ps.replace(/_/g, " ")}
+                                            </span>
+                                        );
+                                    })()}
+                                </div>
+                                {/* Payment link — clickable if present */}
+                                {selectedReservation.payment_link_url && (
+                                    <a
+                                        href={selectedReservation.payment_link_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="mt-2 flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 hover:underline"
+                                    >
+                                        <ExternalLink className="w-3 h-3" />
+                                        View payment link
+                                    </a>
+                                )}
+                            </div>
+
                             {selectedReservation.notes && (
-                                <div>
-                                    <p className="text-sm text-gray-500">Notes</p>
-                                    <p className="text-gray-700 mt-1">{selectedReservation.notes}</p>
+                                <div className="pt-3 border-t border-gray-100">
+                                    <p className="text-sm text-gray-500 mb-1">Notes</p>
+                                    <p className="text-gray-700 text-sm">{selectedReservation.notes}</p>
                                 </div>
                             )}
 
