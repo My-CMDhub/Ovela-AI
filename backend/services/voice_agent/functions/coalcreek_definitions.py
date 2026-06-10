@@ -133,7 +133,7 @@ Return Schema: This tool returns concise, high-signal context (status, dates, se
         },
         {
             "name": "update_guest_info",
-            "description": "Save guest info. CRITICAL: If fixing a wrong email, this function AUTOMATICALLY RESENDS the payment link. DO NOT call create_booking_request again after using this.",
+            "description": "Save or update guest info. CRITICAL RULE: DO NOT use this tool if the guest's name is already listed in CURRENT MEMORY or ACTIVE BOOKING and they are simply confirming it. ONLY call this tool if you are learning their name for the FIRST time, OR if they explicitly tell you their name or email is incorrect and needs to be changed. If fixing a wrong email, this function AUTOMATICALLY RESENDS the payment link. DO NOT call create_booking_request again after using this.",
             "parameters": {
                 "type": "object",
                 "properties": {
