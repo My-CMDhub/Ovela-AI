@@ -89,17 +89,17 @@ graph TD
 
 <br />
 
-### The Hot Path (Real-Time Voice, <850ms)
-- **Flow:** Guest Voice → Twilio WebSocket → FastAPI Audio Bridge → Deepgram Voice Agent
-- **Purpose:** Manages immediate speech interaction, voice activity detection (VAD), and turn-taking.
-- **Stack:** Deepgram Nova-3 (STT) with domain keyterm boosting, Cartesia Sonic-3 (TTS) with cached system voices.
+### The Hot Path — Real-Time Telephony Infrastructure (~850ms)
+- **Flow:** Guest Voice → Twilio WebSocket → FastAPI Audio Bridge → Deepgram Nova-3 STT + VAD → Cartesia Sonic-3 TTS
+- **Purpose:** Pure speech streaming layer. Handles voice activity detection (VAD), audio byte routing, and transcription. Has **no AI tools, no business logic, and no database access.** Transcribed text is forwarded to the Cold Path via async webhook.
+- **Stack:** Deepgram Nova-3 (STT + keyterm domain boosting), Cartesia Sonic-3 (TTS) with zero-latency pre-synthesized `.mulaw.raw` voice cache.
 
-### The Cold Path (Async Business Logic, Google ADK)
-- **Flow:** Webhook Trigger → FastAPI ADK Router → `OvelaManager` (LlmAgent)
-  - ├─ `BookingWorker` (availability, hold placement, Stripe generation)
-  - └─ `InfoWorker` (policies, amenities, live search grounding)
-- **Orchestration:** Built entirely on the **Google Agent Development Kit (ADK)**. Tool executions run asynchronously, delegating complex schema validation to specialized agents.
-- **Engine:** Powered by **Gemini 2.5 Flash Lite** (via Vertex AI Application Default Credentials) for rapid, cost-efficient tool execution.
+### The Cold Path — Gemini AI Intelligence Layer (Google ADK)
+- **Flow:** Async Webhook → FastAPI ADK Router → `OvelaManager` (LlmAgent) on **Gemini 2.5 Flash**
+  - ├─ `BookingWorker`: availability checks, hold placement, dynamic Stripe pricing, confirmation emails
+  - └─ `InfoWorker`: motel policies, amenities, live Google Search grounding
+- **All AI reasoning, every tool call, and every business decision runs exclusively here** — authenticated to Vertex AI via Application Default Credentials (ADC). Zero hardcoded API keys.
+- **Session Resilience:** `AppwriteSessionService` persists ADK graph state across Cloud Run scaling events so conversation context is never dropped.
 
 ---
 
@@ -118,8 +118,8 @@ Standard hackathon implementations fail under the strict constraints of live tel
 Ovela undergoes continuous adversarial testing against real-world edge cases across three cognitive difficulty levels. 
 
 ### Highlight Metrics:
-* **99.0%** Combined Average Pass Rate
-* **100%** Voice Realism Resistance (Zero degradation under simulated ASR background noise and phonetic distortion).
+* **92.8 / 100** Audited Phase 1 Average Score — 14 adversarial scenarios, graded by an independent LLM judge across a strict 100-point rubric.
+* Scenarios span 3 cognitive difficulty levels: Happy Path → Mid-Flow Interruptions → Race Conditions, Privacy Boundary Violations, and Backend Failure Recovery.
 
 <div align="center">
   <a href="https://ovela.dev/evaluations" target="_blank">
@@ -131,6 +131,19 @@ Ovela undergoes continuous adversarial testing against real-world edge cases acr
 
 > [!NOTE]  
 > For the complete breakdown of our testing pipeline, ASR Noise Simulator methodology, and scenario matrix, view the full **[Evaluation Methodology & System Card](docs/EVALUATION_METHODOLOGY.md)**.
+
+---
+
+## 🧪 Evaluation & Testing Methodology
+
+Our evaluation harness is a first-class engineering artifact — not a post-hoc benchmark. It runs against live production APIs (Appwrite, Vertex AI, Deepgram) and persists results directly to the hosted dashboard.
+
+| Artifact | Description |
+|---|---|
+| [`run_multi_agent_evaluation.py`](backend/tests/run_multi_agent_evaluation.py) | 14-scenario simulation harness. Exercises the full OvelaManager → Worker ADK routing graph on Gemini 2.5 Flash via Vertex AI ADC. |
+| [`asr_noise_simulator.py`](backend/tests/asr_noise_simulator.py) | Deterministic ASR noise emulator (light / medium / heavy profiles). Seeds phonetic swaps, filler words, and acoustic distortions to simulate real phone call degradation. |
+| [`evaluation_run.json`](backend/tests/evaluation_run.json) | Last persisted run output. Full transcript traces + per-scenario LLM judge scores. |
+| [`EVALUATION_METHODOLOGY.md`](docs/EVALUATION_METHODOLOGY.md) | System card: rubric breakdown, sandbox waivers, and scenario matrix.
 
 ---
 

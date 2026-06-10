@@ -172,49 +172,60 @@ class SettingsMixin:
         Get full tenant configuration for Voice Agent.
         Uses in-memory cache with 5-minute TTL to avoid DB round-trip per call.
         """
-        # Check cache first
+        # Check cache first 
         cached = _tenant_config_cache.get(tenant_id)
         if cached and (time.monotonic() - cached["ts"]) < _TENANT_CACHE_TTL:
             logger.debug(f"Tenant config cache HIT for {tenant_id}")
             return cached["config"]
 
         try:
+            # Primary: try direct document ID lookup
             path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
             result = await self._make_request("GET", path)
-            
+
             if not result:
-                params = {"queries": [AppwriteQuery.equal("slug", tenant_id)]}
-                list_result = await self._make_request("GET", f"/databases/{self.motel_db_id}/collections/tenants/documents", params=params)
+                # Fallback: query by slug using correct Appwrite REST query format
+                # AppwriteQuery.equal() produces the wrong string format for REST API.
+                # Correct format: JSON-encoded {method, attribute, values} as queries[0]
+                slug_query = json.dumps({"method": "equal", "attribute": "slug", "values": [tenant_id]})
+                list_result = await self._make_request(
+                    "GET",
+                    f"/databases/{self.motel_db_id}/collections/tenants/documents",
+                    params={"queries[0]": slug_query},
+                )
                 if list_result and list_result.get("documents"):
                     result = list_result["documents"][0]
-            
+
             if not result:
+                logger.warning(f"Tenant config not found for {tenant_id}")
                 return {}
 
             config = {}
             if result.get("config"):
                 try:
                     config = json.loads(result["config"])
-                except:
+                except Exception:
                     config = {}
-            
+
             config["tenant_id"] = tenant_id
             config["business_name"] = result.get("name")
             config["twilio_phone"] = result.get("twilio_phone")
             config["business_phone"] = result.get("business_phone")
             config["staff_email"] = result.get("staff_email")
-            
+
             if "integrations" not in config:
                 config["integrations"] = {}
-            
+
             if result.get("pms_provider"):
                 config["integrations"]["pms_provider"] = result.get("pms_provider")
                 config["pms_provider"] = result.get("pms_provider")
-            
+
             # Store in cache
             _tenant_config_cache[tenant_id] = {"config": config, "ts": time.monotonic()}
+            logger.info(f"Tenant config loaded for {tenant_id}: staff_email={config.get('staff_email')}")
             return config
-            
+
         except Exception as e:
             logger.error(f"Error fetching tenant config for {tenant_id}: {e}")
             return {}
+

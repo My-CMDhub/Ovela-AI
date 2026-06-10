@@ -1,7 +1,7 @@
 "use client"
 
 import { ColumnDef } from "@tanstack/react-table"
-import { MoreHorizontal, ArrowUpDown, Calendar, User, Phone, BedDouble, CheckCircle, XCircle, Clock, AlertCircle } from "lucide-react"
+import { MoreHorizontal, ArrowUpDown, Calendar, User, Phone, BedDouble, CheckCircle, XCircle, Clock, AlertCircle, Mail } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
     DropdownMenu,
@@ -85,6 +85,15 @@ export const columns: ColumnDef<Reservation>[] = [
                         <Phone className="w-3 h-3" />
                         {row.original.guest_phone}
                     </div>
+                    {/* Email indicator — red dot = missing, green = present */}
+                    <div className="flex items-center gap-1 mt-0.5">
+                        <Mail className="w-3 h-3" />
+                        {row.original.guest_email ? (
+                            <span className="text-xs text-emerald-600 font-medium">{row.original.guest_email}</span>
+                        ) : (
+                            <span className="text-xs text-red-500 font-semibold">No email</span>
+                        )}
+                    </div>
                 </div>
             )
         },
@@ -143,6 +152,28 @@ export const columns: ColumnDef<Reservation>[] = [
             return (
                 <Badge variant="outline" className={`border-0 font-medium ${getStatusStyles(status)}`}>
                     {status.replace("_", " ")}
+                </Badge>
+            )
+        },
+    },
+    {
+        accessorKey: "payment_status",
+        header: "Payment",
+        cell: ({ row }) => {
+            const ps = (row.getValue("payment_status") as string) || row.original.status || "unknown"
+            const styles: Record<string, string> = {
+                paid:            "bg-emerald-100 text-emerald-800 border-emerald-200",
+                confirmed:       "bg-emerald-100 text-emerald-800 border-emerald-200",
+                link_sent:       "bg-sky-100 text-sky-800 border-sky-200",
+                pending_payment: "bg-amber-100 text-amber-800 border-amber-200",
+                pending:         "bg-amber-100 text-amber-800 border-amber-200",
+                outstanding:     "bg-orange-100 text-orange-800 border-orange-200",
+                email_failed:    "bg-red-100 text-red-800 border-red-200",
+            }
+            const cls = styles[ps] ?? "bg-slate-100 text-slate-600 border-slate-200"
+            return (
+                <Badge variant="outline" className={`border font-medium ${cls}`}>
+                    {ps.replace(/_/g, " ")}
                 </Badge>
             )
         },

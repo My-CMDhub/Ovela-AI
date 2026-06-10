@@ -21,12 +21,7 @@ import re
 from zoneinfo import ZoneInfo
 
 # Import knowledge base services
-from services.motel_knowledge_base import (
-    get_room_pricing, get_room_details, recommend_room,
-    get_check_in_out_info, get_location_info, get_amenities,
-    get_activities_nearby, search_motel_info, get_policies,
-    set_tenant_context
-)
+from services.motel_knowledge_base import set_tenant_context
 from services.knowledge_base.coalcreek import COALCREEK_DATA
 from core.config import settings
 
@@ -46,6 +41,23 @@ WEEKDAY_INDEX = {
 
 def _today_melbourne_date():
     return datetime.now(MELBOURNE_TZ).date()
+
+
+def phone_numbers_match(p1: str, p2: str) -> bool:
+    """
+    Check if two phone numbers match (by comparing their last 9 digits).
+    This handles country code prefixes (+61 vs 0) and formatting differences.
+    """
+    if not p1 or not p2:
+        return False
+    d1 = "".join(c for c in p1 if c.isdigit())
+    d2 = "".join(c for c in p2 if c.isdigit())
+    if not d1 or not d2:
+        return False
+    if len(d1) >= 9 and len(d2) >= 9:
+        return d1[-9:] == d2[-9:]
+    return d1 == d2
+
 
 
 # Common STT mishearings for email domains
@@ -252,9 +264,9 @@ async def _check_appwrite_availability(db_service, check_in_str: str, check_out_
                 room_num = room.get("room_number")
                 r_type = room.get("room_type")
                 
-                # We group by mapped room types (e.g. "Queen/Double") to match scraper semantics
+                # We group by mapped room types to match scraper semantics
                 mapped_type = r_type.title()
-                if mapped_type == "Queen": mapped_type = "Queen/Double"
+                if mapped_type == "Queen": mapped_type = "Double Room"
                 elif mapped_type == "Twin": mapped_type = "Twin Room"
                 elif mapped_type == "Family": mapped_type = "Family Suite"
                 
@@ -363,8 +375,8 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
     
     # 2. Map room type to scraper format
     room_map = {
-        "queen": "Queen/Double",
-        "standard": "Queen/Double",
+        "queen": "Double Room",
+        "standard": "Double Room",
         "twin": "Twin Room",
         "family": "Family Suite",
         "suite": "Deluxe Spa Suite",
@@ -408,7 +420,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                         logger.info(f"✅ Scraping success on attempt {attempt}")
                         break
                     else:
-                        logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
+                        logger.warning("ARGS DUMP: %s", args); logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
                         
                 except Exception as scrape_err:
                     logger.error(f"⚠️ Scraping exception on attempt {attempt}: {scrape_err}")
@@ -581,29 +593,54 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     guest_email = _normalize_email(args.get("guest_email", ""), guest_name)
     notes = args.get("notes", "")
 
-    guest_phone = args.get("guest_phone", "") or user_phone
+    from services.voice_agent.text_utils import normalize_phone_number
+    raw_guest_phone = args.get("guest_phone", "")
+    normalized_guest = normalize_phone_number(raw_guest_phone) if raw_guest_phone else ""
+    if len(normalized_guest) >= 5:
+        guest_phone = normalized_guest
+    else:
+        guest_phone = user_phone
+
+
+    # N1: System-level pre-booking gate — reject the call if the AI hasn't confirmed
+    # the full booking summary with the caller yet.
+    has_confirmed_val = args.get("has_user_confirmed_summary", "NO")
+    has_confirmed = (str(has_confirmed_val).upper() == "YES" or has_confirmed_val is True)
+    if not has_confirmed:
+        logger.warning("ARGS DUMP: %s", args); logger.warning(
+            "N1 gate: create_booking_request called WITHOUT caller summary confirmation — rejecting. "
+            "guest=%s email=%s check_in=%s room=%s",
+            guest_name, guest_email, check_in, room_type
+        )
+        return {
+            "success": False,
+            "error": (
+                "SYSTEM RULE VIOLATION: You must complete the mandatory 3-step pre-booking gate before calling this function.\n"
+                "STEP 3 is MISSING: You have not read back the full booking summary "
+                "('[Name], checking in [date], checking out [date], [room] at $[price] per night') "
+                "and received an explicit YES from the caller.\n"
+                "Go back and read the full summary now, then wait for their confirmation before retrying."
+            ),
+        }
 
     if not guest_name:
         return {
             "success": False,
-            "message": "I need your name and check-in date to place the hold."
+            "error": "guest_name is missing. You must ask the user for their name before creating a booking."
         }
 
     check_in_date, check_out_date, resolution_source = _resolve_relative_dates(check_in, check_out, user_utterance)
     if not check_in_date:
         return {
             "success": False,
-            "message": "I need a valid check-in date to place the hold."
+            "error": "check_in_date is invalid or missing. Ask the user for their specific check-in date."
         }
 
     if check_in_date < _today_melbourne_date():
         today_formatted = _today_melbourne_date().strftime("%A, %d %B %Y")
         return {
             "success": False,
-            "message": (
-                f"Oh, just to let you know, today is {today_formatted}, so that date has already passed. "
-                "Did you want to place a hold for a future date instead?"
-            )
+            "error": f"check_in_date is in the past. Today is {today_formatted}. Tell the user the date has passed and ask for a future date."
         }
 
     if not check_out_date or check_out_date <= check_in_date:
@@ -648,6 +685,8 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         "source": "voice_ai_soft_hold",
         "booking_reference": booking_ref,
         "notes": notes or "Soft Hold Request via AI",
+        "arrival_time": "14:00",
+        "deposit_paid": 0,
         "created_at": now,
         "updated_at": now,
         "created_by": "ovela_ai",
@@ -674,7 +713,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                 for r in rooms_for_night:
                     if r["room_type"] == room_data["name"] and r["available"]:
                         reservation_data["room_number"] = r["room_number"]
-                        reservation_data["status"] = "confirmed"
+                        reservation_data["status"] = "reserved"
                         reservation_data["source"] = "voice_ai_pms_auto"
                         logger.info(f"✅ PMS Mode: Auto-assigned room {r['room_number']} to {booking_ref}")
                         break
@@ -809,6 +848,8 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 details.append(f"checking in on {doc['check_in_date']}")
         if doc.get("room_type"):
             details.append(f"for the {doc['room_type']}")
+        if doc.get("total_amount"):
+            details.append(f"with a total of ${doc['total_amount']}")
         return " ".join(details)
 
     def _build_confirmation_prompt(result: dict, found_by: str, name_mismatch: bool = False) -> str:
@@ -849,8 +890,8 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 except Exception:
                     normalized_doc_phone = doc_phone
             
-            if not caller_phone or normalized_doc_phone != caller_phone:
-                logger.warning(
+            if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
+                logger.warning("ARGS DUMP: %s", args); logger.warning(
                     "🔒 Privacy boundary triggered: Caller phone '%s' attempted to access booking for '%s' (phone: '%s'). Refusing access.",
                     caller_phone, doc.get("guest_name"), doc_phone
                 )
@@ -871,12 +912,48 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "check_out_date":         doc.get("check_out_date", ""),
             "num_nights":             doc.get("num_nights", ""),
             "status":                 doc.get("status", ""),
-            "payment_status":         doc.get("payment_status", "pending"),
+            "payment_status":         doc.get("payment_status") or "outstanding",
+            "payment_confirmed":      doc.get("payment_status") == "paid",
+            "payment_outstanding":    doc.get("payment_status") not in ("paid", "card_on_file"),
             "payment_link_sent":      bool(doc.get("payment_link_url") or doc.get("payment_link_sent_at")),
             "payment_link_url":       doc.get("payment_link_url", ""),
             "total_amount":           doc.get("total_amount", ""),
             "other_bookings":         total_docs - 1,
         }
+        
+        _pstatus = doc.get("payment_status") or ""   # null / missing treated as outstanding
+        _bstatus = doc.get("status") or ""
+
+        if _pstatus == "paid":
+            result["payment_status_message"] = (
+                "Payment CONFIRMED and received. "
+                "If caller asks for receipt, call resend_payment_confirmation."
+            )
+        elif _pstatus == "card_on_file":
+            result["payment_status_message"] = (
+                "Card securely saved (pre-authorisation). "
+                "Payment will be charged at check-in. Booking is confirmed."
+            )
+        elif _pstatus == "email_failed":
+            result["payment_status_message"] = (
+                "Payment link was generated but the email FAILED to deliver. "
+                "Offer to resend the payment link — call resend_payment_link."
+            )
+        elif _pstatus in ("pending_payment", "pending") or _bstatus in ("reserved", "pending", "pending_payment", "link_sent"):
+            # 'reserved' is the PMS hold status — it always means payment is outstanding
+            result["payment_status_message"] = (
+                "Payment NOT yet received — booking is on hold awaiting payment. "
+                "DO NOT say 'cancelled'. "
+                "Tell the caller their booking is held and payment is outstanding. "
+                "Offer to resend the payment link by calling resend_payment_link."
+            )
+        else:
+            # Catch-all: any unknown status should also never be called 'cancelled'
+            result["payment_status_message"] = (
+                f"Booking is active (internal status='{_bstatus}', payment_status='{_pstatus}'). "
+                "Payment outstanding. DO NOT say 'cancelled'. "
+                "Offer resend_payment_link if caller wants to pay."
+            )
         if found_by:
             result["found_by"] = found_by
         if name_mismatch:
@@ -1058,9 +1135,9 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
     
     logger.info(f"Captured Guest Info: {guest_name} - {guest_phone}")
 
-    # ── Email correction path: patch reservation + resend Stripe link ──
+    # ── Correction path: patch reservation + resend Stripe link ──
     email_resent = False
-    if guest_email and guest_phone and db_service:
+    if (guest_email or guest_name) and guest_phone and db_service:
         try:
             docs = await db_service.lookup_motel_reservation(
                 phone=guest_phone,
@@ -1069,7 +1146,14 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
             # Find most recent active reservation with incomplete payment
             active_doc = None
             for doc in (docs or []):
-                if doc.get("status") in ("pending", "pending_payment") and doc.get("payment_status") not in ("paid",):
+                _ps = doc.get("payment_status") or ""
+                _bs = doc.get("status") or ""
+                is_pending = (
+                    _bs in ("reserved", "pending", "pending_payment", "link_sent")
+                    or _ps in ("pending", "pending_payment", "email_failed", "")
+                )
+                is_paid = _ps == "paid" and _bs in ("paid", "confirmed")
+                if is_pending and not is_paid:
                     active_doc = doc
                     break
             if active_doc and active_doc.get("$id"):
@@ -1082,56 +1166,63 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                             "message": f"My system flagged a delivery error for {guest_email}. Could we verify the spelling, or do you have a different email address?"
                         }
 
-                # PATCH email in Appwrite using generic update
+                # PATCH details in Appwrite using generic update
+                patch_data = {"payment_status": "pending_payment"}
+                if guest_email:
+                    patch_data["guest_email"] = guest_email
+                if guest_name:
+                    patch_data["guest_name"] = guest_name
+
                 await db_service.update_motel_reservation(
                     booking_id=active_doc["$id"],
-                    data={"guest_email": guest_email, "payment_status": "pending_payment"},
+                    data=patch_data,
                 )
-                logger.info("📧 Email corrected in Appwrite for %s", active_doc.get("booking_reference"))
-                # Resend payment link to corrected email (fire-and-forget)
-                asyncio.create_task(_handle_stripe_and_guest_email(
-                    booking_ref=active_doc.get("booking_reference", ""),
-                    room_type=active_doc.get("room_type", ""),
-                    total_amt=float(active_doc.get("total_amount", 0)),
-                    guest_email=guest_email,
-                    guest_name=guest_name or active_doc.get("guest_name", ""),
-                    guest_phone=guest_phone,
-                    check_in=active_doc.get("check_in_date", ""),
-                    check_out=active_doc.get("check_out_date", ""),
-                    db_service=db_service,
-                ))
-                email_resent = True
+                logger.info("📝 Details corrected in Appwrite for %s", active_doc.get("booking_reference"))
+                final_email = guest_email or active_doc.get("guest_email")
+                if final_email:
+                    # Resend payment link to corrected email (fire-and-forget)
+                    asyncio.create_task(_handle_stripe_and_guest_email(
+                        booking_ref=active_doc.get("booking_reference", ""),
+                        room_type=active_doc.get("room_type", ""),
+                        total_amt=float(active_doc.get("total_amount", 0)),
+                        guest_email=final_email,
+                        guest_name=guest_name or active_doc.get("guest_name", ""),
+                        guest_phone=guest_phone,
+                        check_in=active_doc.get("check_in_date", ""),
+                        check_out=active_doc.get("check_out_date", ""),
+                        db_service=db_service,
+                        existing_stripe_url=active_doc.get("payment_link_url"),
+                        existing_expires_at=active_doc.get("payment_expires_at", 0)
+                    ))
+                    email_resent = True
         except Exception as resend_err:
-            logger.error("📧 Email correction/resend error: %s", resend_err)
+            logger.error("📧 Details correction/resend error: %s", resend_err)
     
-    if db_service and hasattr(db_service, "upsert_motel_guest"):
-        try:
-            db_service.upsert_motel_guest(
-                guest_name=guest_name, 
-                guest_phone=guest_phone, 
-                guest_email=guest_email,
-                tenant_id="coalcreek",
-                status="inquiry"
-            )
-            if email_resent:
-                message = (
-                    f"I've updated your email address to {guest_email} and resent the payment link. "
-                    "Could you check your inbox now to make sure it has arrived?"
-                )
-            else:
-                message = "Details securely saved to guest profile."
-        except Exception as e:
-            logger.error(f"Failed to save guest info: {e}")
-            message = "Details captured."
+    if email_resent:
+        message = (
+            f"I've updated your details and resent the payment link. "
+            "Could you check your inbox now to make sure it has arrived?"
+        )
     else:
-        message = "Details captured (temporary)."
+        if guest_name and not guest_email:
+            message = "I've successfully updated the name on your booking."
+        else:
+            message = "Details safely stored in my temporary memory for this call."
         
-    return {"success": True, "message": message, "email_resent": email_resent}
+    return {
+        "success": True,
+        "message": message,
+        "ai_should_say": message
+    }
 
 
 async def handle_resend_payment_confirmation(args: dict, db_service, user_phone: str = None) -> dict:
     """
     Manually resend the payment confirmation or receipt email.
+
+    N6 GUARD: If payment_status is still pending_payment this tool MUST NOT send
+    a confirmation receipt — only the payment link flow applies.  Return a hard
+    system error so the AI is forced to correct the caller immediately.
     """
     guest_email = args.get("guest_email", "")
     
@@ -1161,7 +1252,7 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
         
         active_doc = None
         for doc in (docs or []):
-            if doc.get("status") in ("paid", "confirmed", "link_sent", "pending_payment"):
+            if doc.get("status") in ("paid", "confirmed", "link_sent", "pending_payment", "pending"):
                 active_doc = doc
                 break
                 
@@ -1169,6 +1260,25 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
             return {
                 "success": False,
                 "message": "I couldn't find a recent booking for that email address. Would you like to use a different email or your phone number?"
+            }
+
+        # N6: Hard guard — block confirmation email unless payment is CONFIRMED PAID.
+        # PRIMARY KEY IS payment_status — NOT status field.
+        # History: Previously checked 'status not in (paid, confirmed)' which was bypassed
+        # because PMS auto-assign was incorrectly writing status='confirmed' before payment.
+        # Fix: Guard now fires on ANY payment_status that is not explicitly 'paid'.
+        if active_doc.get("payment_status") != "paid":
+            logger.warning(
+                "🔒 N6 guard: resend_payment_confirmation blocked for %s — payment_status='%s' (not paid).",
+                active_doc.get("booking_reference"), active_doc.get("payment_status")
+            )
+            return {
+                "success": False,
+                "error": (
+                    "SYSTEM RULE: Cannot send a confirmation receipt — payment is NOT yet confirmed. "
+                    f"Current payment_status='{active_doc.get('payment_status')}'. "
+                    "Tell the user payment is still pending and offer to resend the payment LINK instead."
+                ),
             }
 
         # Strict Caller-Phone Lock verification (Approach 1)
@@ -1180,8 +1290,8 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
             except Exception:
                 normalized_doc_phone = doc_phone
 
-        if not caller_phone or normalized_doc_phone != caller_phone:
-            logger.warning(
+        if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
+            logger.warning("ARGS DUMP: %s", args); logger.warning(
                 "🔒 Privacy boundary triggered: Caller phone '%s' attempted to resend receipt for '%s' (phone: '%s'). Refusing access.",
                 caller_phone, active_doc.get("guest_name"), doc_phone
             )
@@ -1242,6 +1352,108 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
         }
 
 
+async def handle_resend_payment_link(args: dict, db_service, user_phone: str) -> dict:
+    """
+    Resend payment link email for an unpaid/pending booking.
+    """
+    guest_email = args.get("guest_email", "")
+    
+    if not guest_email or not db_service:
+        return {
+            "success": False,
+            "message": "I need your email address to resend the payment link."
+        }
+        
+    try:
+        docs = await db_service.lookup_motel_reservation(
+            email=guest_email,
+            tenant_id="coalcreek"
+        )
+        
+        active_doc = None
+        for doc in (docs or []):
+            _ps = doc.get("payment_status") or ""
+            _bs = doc.get("status") or ""
+            # Accept any booking that is on-hold / pending payment — includes:
+            # - 'reserved' (PMS hold, payment not yet started)
+            # - 'pending' / 'pending_payment' (explicit payment pending statuses)
+            # - 'link_sent' (link was sent but not paid)
+            # - null/empty payment_status (pipeline glitch — treat as outstanding)
+            is_pending = (
+                _bs in ("reserved", "pending", "pending_payment", "link_sent")
+                or _ps in ("pending", "pending_payment", "email_failed", "")
+            )
+            is_paid = _ps == "paid" and _bs in ("paid", "confirmed")
+            if is_pending and not is_paid:
+                active_doc = doc
+                break
+
+        if not active_doc:
+            # Check whether the booking IS actually paid (so we can redirect, not dead-end)
+            paid_doc = None
+            for doc in (docs or []):
+                if doc.get("payment_status") == "paid":
+                    paid_doc = doc
+                    break
+            if paid_doc:
+                return {
+                    "success": False,
+                    "already_paid": True,
+                    "booking_reference": paid_doc.get("booking_reference", ""),
+                    "error": (
+                        "Booking for this email is already PAID. "
+                        "Do NOT resend the payment link — instead offer to resend the receipt confirmation "
+                        "by calling resend_payment_confirmation. Tell the caller their payment was received."
+                    ),
+                }
+            return {
+                "success": False,
+                "message": "I couldn't find a pending booking for that email address. Do you have a different email or your phone number?"
+            }
+            
+        if active_doc.get("status") in ("paid", "confirmed") and active_doc.get("payment_status") == "paid":
+            return {
+                "success": False,
+                "error": "Booking is already paid. Use resend_payment_confirmation instead to send a receipt."
+            }
+            
+        total_amt = float(active_doc.get("total_amount") or 0)
+        if total_amt <= 0:
+            return {
+                "success": False,
+                "error": "I couldn't fetch the exact total amount for your booking to generate a payment link. Please call reception."
+            }
+            
+        # Re-use existing link if possible to avoid double payment race condition
+        existing_url = active_doc.get("payment_link_url")
+        expires_at = active_doc.get("payment_expires_at", 0)
+        
+        asyncio.create_task(_handle_stripe_and_guest_email(
+            booking_ref=active_doc.get("booking_reference", ""),
+            room_type=active_doc.get("room_type", ""),
+            total_amt=total_amt,
+            guest_email=guest_email,
+            guest_name=active_doc.get("guest_name", ""),
+            guest_phone=active_doc.get("guest_phone", ""),
+            check_in=active_doc.get("check_in_date", ""),
+            check_out=active_doc.get("check_out_date", ""),
+            db_service=db_service,
+            existing_stripe_url=existing_url,
+            existing_expires_at=expires_at
+        ))
+        
+        return {
+            "success": True,
+            "message": f"I've resent the payment link to {guest_email}. Please check your inbox."
+        }
+    except Exception as e:
+        logger.error(f"Error resending payment link: {e}")
+        return {
+            "success": False,
+            "message": "I had a bit of trouble sending that email right now. I can ask reception to follow up with you."
+        }
+
+
 # =============================================================================
 # STRIPE + EMAIL COLD PATH HELPER
 # =============================================================================
@@ -1257,11 +1469,19 @@ async def _handle_stripe_and_guest_email(
     check_out: str,
     db_service,
     saved_doc_id: str | None = None,
+    notify_event: asyncio.Event | None = None,
+    notify_result: list | None = None,
+    existing_stripe_url: str | None = None,
+    existing_expires_at: int | None = None,
 ) -> None:
     """
     Cold-path task: creates Stripe checkout session, PATCHes Appwrite reservation
     to pending_payment with expiry, and emails the guest payment link.
     Never raises — all errors are logged and swallowed.
+
+    N2 SMTP feedback: If notify_event and notify_result are provided, sets
+    notify_result[0] to the email send status (True/False) and fires notify_event
+    so the caller can synchronously inform the AI of SMTP failures.
 
     P11-C: If saved_doc_id is provided (from the save_reservation_fn response),
     it is used directly to PATCH Appwrite, eliminating the get_booking_by_reference
@@ -1270,23 +1490,40 @@ async def _handle_stripe_and_guest_email(
     try:
         from .stripe_handlers import create_checkout_session
         expiry_ts = int(time.time()) + 1800
-        stripe_url = create_checkout_session(
-            amount_aud=int(total_amt),
-            room_type=room_type,
-            booking_ref=booking_ref,
-            guest_email=guest_email or None,
-            guest_name=guest_name or None,
-            check_in=check_in or None,
-            check_out=check_out or None,
-            expires_at=expiry_ts,
-        )
+        
+        if total_amt <= 0:
+            logger.error("💳 Cannot generate Stripe session for %s with amount 0", booking_ref)
+            if notify_event and notify_result is not None:
+                notify_result[0] = False
+                notify_event.set()
+            return
+
+        if existing_stripe_url and existing_expires_at and time.time() < (existing_expires_at - 300):
+            stripe_url = existing_stripe_url
+            stripe_session_id = None  # existing session — ID already saved in Appwrite
+            logger.info("💳 Reusing existing Stripe URL to prevent double-payment race conditions for %s", booking_ref)
+            doc_id = saved_doc_id
+        else:
+            if existing_stripe_url:
+                logger.info("💳 Existing Stripe URL is expired or expiring soon. Forcing new session generation.")
+                existing_stripe_url = None  # Ensure we PATCH Appwrite with the new link
+            stripe_url, stripe_session_id = create_checkout_session(
+                amount_aud=int(total_amt),
+                room_type=room_type,
+                booking_ref=booking_ref,
+                guest_email=guest_email or None,
+                guest_name=guest_name or None,
+                check_in=check_in or None,
+                check_out=check_out or None,
+                expires_at=expiry_ts,
+            )
 
         if not stripe_url:
             logger.info("💳 Stripe not configured — skipping payment link dispatch for %s", booking_ref)
             return
 
         # ── 1. PATCH Appwrite reservation to pending_payment ────────────────────
-        if db_service:
+        if db_service and not existing_stripe_url:
             try:
                 if saved_doc_id:
                     # P11-C: Fast path — no re-fetch, no race condition
@@ -1298,15 +1535,17 @@ async def _handle_stripe_and_guest_email(
                     doc_id = doc.get("$id") if doc else None
 
                 if doc_id:
+                    # Step A: mark pending_payment + save payment_link_url
                     await db_service.update_booking_payment_status(
                         booking_id=doc_id,
                         payment_status="pending_payment",
                         payment_link_url=stripe_url,
-                        payment_expires_at=expiry_ts,
                     )
+                    # Step B: Log the stripe_session_id (Appwrite attribute does not exist natively yet, lookup fallback handles it dynamically in webhook if we miss)
                     logger.info(
-                        "💳 Reservation %s → pending_payment | expiry=%d",
+                        "💳 Reservation %s → pending_payment | sid=%s | expiry=%d",
                         booking_ref,
+                        stripe_session_id or "reused",
                         expiry_ts,
                     )
             except Exception as db_err:
@@ -1332,6 +1571,7 @@ async def _handle_stripe_and_guest_email(
                     check_in=check_in,
                     check_out=check_out,
                     amount=int(total_amt),
+                    business_name="Coal Creek Motel",  # M2: explicit brand name — never falls through to "Motel" default
                     tenant_id="coalcreek",
                     message_context=(
                         "Your room hold is confirmed. Please complete your payment via "
@@ -1341,12 +1581,22 @@ async def _handle_stripe_and_guest_email(
                 if not success:
                     raise Exception("SMTP Provider failed to send email (bounce simulated).")
                 logger.info("💳 Payment link emailed to guest for %s", booking_ref)
+                # N2: Signal success to waiting caller
+                if notify_result is not None:
+                    notify_result[0] = True
+                if notify_event is not None:
+                    notify_event.set()
             except Exception as email_err:
                 logger.error("💳 Guest email failed for %s: %s", booking_ref, email_err)
                 if doc_id and db_service:
                     await db_service.update_booking_payment_status(
                         booking_id=doc_id, payment_status="email_failed"
                     )
+                # N2: Signal failure to waiting caller
+                if notify_result is not None:
+                    notify_result[0] = False
+                if notify_event is not None:
+                    notify_event.set()
         else:
             logger.info("💳 Invalid or missing guest email — skipping dispatch for %s", booking_ref)
             if doc_id and db_service and guest_email:
@@ -1354,6 +1604,11 @@ async def _handle_stripe_and_guest_email(
                 await db_service.update_booking_payment_status(
                     booking_id=doc_id, payment_status="email_failed"
                 )
+            # N2: Signal format failure to waiting caller
+            if notify_result is not None:
+                notify_result[0] = False
+            if notify_event is not None:
+                notify_event.set()
 
     except Exception as outer_err:
         logger.error("💳 _handle_stripe_and_guest_email outer error for %s: %s", booking_ref, outer_err)
@@ -1531,7 +1786,13 @@ class CoalCreekFunctionDispatcher:
                 # P11-C: Use saved doc $id to skip race-prone get_booking_by_reference
                 saved_doc_id = result.get("_saved_doc_id")
 
-                # ── Task 1: Stripe Checkout + Email (Cold Path, fire-and-forget) ──
+                # ── Task 1: Stripe Checkout + Email (N2: await email status) ──────
+                # N2: We wait up to 6s for the email dispatch to complete so the AI
+                # can immediately correct the caller if SMTP bounces.  After the timeout
+                # we fall through and let the fire-and-forget path finish in the background.
+                email_notify_event: asyncio.Event = asyncio.Event()
+                email_notify_result: list = [None]  # [True=ok, False=failed, None=unknown]
+
                 asyncio.create_task(_handle_stripe_and_guest_email(
                     booking_ref=booking_ref,
                     room_type=room_type,
@@ -1543,8 +1804,28 @@ class CoalCreekFunctionDispatcher:
                     check_out=check_out,
                     db_service=self.db_service,
                     saved_doc_id=saved_doc_id,
+                    notify_event=email_notify_event,
+                    notify_result=email_notify_result,
                 ))
 
+                try:
+                    await asyncio.wait_for(email_notify_event.wait(), timeout=6.0)
+                except asyncio.TimeoutError:
+                    logger.warning("ARGS DUMP: %s", args); logger.warning("N2: Email dispatch timeout (6s) for %s — continuing", booking_ref)
+
+                # N2: If email failed propagate the error into the function result
+                # so the AI is forced to tell the caller immediately.
+                if email_notify_result[0] is False:
+                    result = {
+                        "success": False,
+                        "error": (
+                            f"Email bounced. The payment link could not be delivered to {guest_email}. "
+                            "Tell the user their email address bounced and ask them to spell it again."
+                        ),
+                        "booking_reference": booking_ref,
+                        "_email_bounce": True,
+                    }
+                    logger.warning("ARGS DUMP: %s", args); logger.warning("N2: SMTP bounce injected into function result for %s", booking_ref)
 
                 # ── Task 3: ADK Cold Path session state update ─────────────────
                 if self.call_sid:
@@ -1566,41 +1847,20 @@ class CoalCreekFunctionDispatcher:
         
         elif function_name == "resend_payment_confirmation":
             return await handle_resend_payment_confirmation(args, self.db_service, self.user_phone)
+            
+        elif function_name == "resend_payment_link":
+            return await handle_resend_payment_link(args, self.db_service, self.user_phone)
 
         # Knowledge Base (Direct calls to motel_knowledge_base service)
-        elif function_name == "get_room_pricing":
-             return get_room_pricing(args.get("room_type"))
-             
-        elif function_name == "get_room_details":
-             return get_room_details(args.get("room_type", "queen"))
-             
-        elif function_name == "recommend_room":
-             return recommend_room(args.get("num_guests", 2), args.get("needs_accessibility", False))
-             
-        elif function_name == "get_check_in_out_info":
-             return get_check_in_out_info()
-             
-        elif function_name == "get_location_info":
-             return get_location_info(args.get("detail"))
-             
-        elif function_name == "get_amenities":
-             return get_amenities(args.get("category"))
-             
-        elif function_name == "get_activities_nearby":
-             return get_activities_nearby()
-             
-        elif function_name == "search_motel_info":
-             return search_motel_info(args.get("query", ""))
-             
         elif function_name == "perform_live_search":
              query = args.get("query", "")
              if not query:
                  return {"error": "No query provided"}
 
              # ── Direct Vertex AI call (Hot Path optimized) ────────────────────
-             # Uses gemini-2.5-flash-lite — optimized for grounding
+             # Uses gemini-2.5-flash — optimized for grounding
              # tasks with no quality loss for weather/news lookups. Thinking is
-             # explicitly disabled (budget=0) to cut another 300-500ms per call.
+             # explicitly disabled to cut another 300-500ms per call.
              # ─────────────────────────────────────────────────────────────────
              try:
                  from google import genai
@@ -1626,10 +1886,6 @@ class CoalCreekFunctionDispatcher:
                  return {"success": False, "error": str(e), "message": "My search service is currently unavailable."}
 
 
-             
-        elif function_name == "get_policies":
-             return get_policies(args.get("policy_type"))
-             
         # Human / Reporting
         elif function_name == "request_human_callback":
              return await handle_request_human_callback(args, self.user_phone)
@@ -1654,16 +1910,23 @@ class CoalCreekFunctionDispatcher:
              return result
              
         # Common controls
-        elif function_name == "end_call":
-             return {
-                "action": "end_call",
-                "success": True,
-                "message": args.get("message", ""),
-                "user_utterance": args.get("_user_utterance", ""),
-                "ai_should_say": "Thanks for calling Coal Creek Motel, goodbye.",
+        elif function_name == "hang_up_call":
+            return {
+                "action": "hangup",
+                "message": args.get("farewell_message", "Goodbye. Have a great day!")
             }
              
         elif function_name == "transfer_to_staff":
+             user_utt = (args.get("_user_utterance") or "").lower().strip()
+             negation_words = {"no", "dont", "don't", "stop", "never", "cancel"}
+             words = set(re.sub(r'[^\w\s]', '', user_utt).split())
+             if negation_words & words or user_utt in ("no", "no no", "no thanks", "no thank you"):
+                 logger.warning("ARGS DUMP: %s", args); logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
+                 return {
+                     "success": False,
+                     "error": "The user explicitly said NO to the transfer. Do not transfer them. Ask how else you can help.",
+                     "message": "Sorry about that. How else can I help you today?"
+                 }
              from core.config import settings
              return {
                 "action": "transfer",

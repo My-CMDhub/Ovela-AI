@@ -13,7 +13,7 @@ Used to dynamically generate system prompts and answer function queries.
 COALCREEK_DATA = {
     "info": {
         "name": "Coal Creek Motel",
-        "phone": "0492 897 718",
+        "phone": "+61468088990",
         "email": "coalcreekmotel@gmail.com",
         "address": "8444 South Gippsland Highway, Korumburra VIC 3950",
         "website": "coalcreekmotel.com.au",
@@ -37,7 +37,7 @@ COALCREEK_DATA = {
     },
     "rooms": {
         "queen": {
-            "name": "Queen/Double",
+            "name": "Double Room",
             "price": 135,
             "bedding": "1 Queen Bed",
             "max_guests": 2,

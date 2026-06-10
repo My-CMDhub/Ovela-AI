@@ -117,31 +117,55 @@ export function PmsBoard({ reservations }: { reservations: Reservation[] }) {
                                     <div className="font-semibold text-slate-900 text-base tracking-tight">Room {room.room_number}</div>
                                     <div className="text-xs font-medium text-slate-500 capitalize bg-slate-100 inline-block px-2 py-0.5 rounded-md mt-1 border border-slate-200">{room.room_type}</div>
                                 </td>
-                                {dates.map(date => {
-                                    const booking = getBookingForRoomDate(room.room_number, date);
-                                    const isToday = date === dates[0];
+                                {(() => {
+                                    const cells = [];
+                                    let skipUntilIdx = -1;
                                     
-                                    return (
-                                        <td key={`${room.room_number}-${date}`} className={`p-2 border-r border-slate-100 relative ${isToday && !booking ? "bg-blue-50/20" : ""}`}>
-                                            {booking ? (
-                                                <div className={`p-3 rounded-lg border shadow-sm h-full flex flex-col justify-center transition-all ${
-                                                    booking.status === "confirmed" ? "bg-gradient-to-b from-green-50 to-green-100/50 border-green-200 text-green-900" :
-                                                    booking.status === "checked_in" ? "bg-gradient-to-b from-blue-50 to-blue-100/50 border-blue-200 text-blue-900" :
-                                                    "bg-gradient-to-b from-yellow-50 to-yellow-100/50 border-yellow-200 text-yellow-900"
-                                                }`}>
-                                                    <div className="font-bold truncate text-[13px] tracking-tight">{booking.guest_name}</div>
-                                                    <div className="text-[10px] font-medium opacity-80 mt-1 uppercase tracking-wider flex items-center justify-between">
-                                                        <span>{booking.status.replace("_", " ")}</span>
+                                    for (let i = 0; i < dates.length; i++) {
+                                        if (i < skipUntilIdx) continue;
+                                        
+                                        const date = dates[i];
+                                        const booking = getBookingForRoomDate(room.room_number, date);
+                                        const isToday = date === dates[0];
+                                        
+                                        if (booking) {
+                                            let colSpan = 1;
+                                            for (let j = i + 1; j < dates.length; j++) {
+                                                const nextBooking = getBookingForRoomDate(room.room_number, dates[j]);
+                                                if (nextBooking && nextBooking.$id === booking.$id) {
+                                                    colSpan++;
+                                                } else {
+                                                    break;
+                                                }
+                                            }
+                                            skipUntilIdx = i + colSpan;
+                                            
+                                            cells.push(
+                                                <td key={`${room.room_number}-${date}`} colSpan={colSpan} className={`p-2 border-r border-slate-100 relative ${isToday && !booking ? "bg-blue-50/20" : ""}`}>
+                                                    <div className={`p-3 rounded-lg border shadow-sm h-full flex flex-col justify-center transition-all ${
+                                                        booking.status === "confirmed" ? "bg-gradient-to-b from-green-50 to-green-100/50 border-green-200 text-green-900" :
+                                                        booking.status === "checked_in" ? "bg-gradient-to-b from-blue-50 to-blue-100/50 border-blue-200 text-blue-900" :
+                                                        "bg-gradient-to-b from-yellow-50 to-yellow-100/50 border-yellow-200 text-yellow-900"
+                                                    }`}>
+                                                        <div className="font-bold truncate text-[13px] tracking-tight">{booking.guest_name}</div>
+                                                        <div className="text-[10px] font-medium opacity-80 mt-1 uppercase tracking-wider flex items-center justify-between">
+                                                            <span>{booking.status.replace("_", " ")}</span>
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            ) : (
-                                                <div className="h-full w-full min-h-[64px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider bg-slate-100 px-2 py-1 rounded-md">Available</span>
-                                                </div>
-                                            )}
-                                        </td>
-                                    );
-                                })}
+                                                </td>
+                                            );
+                                        } else {
+                                            cells.push(
+                                                <td key={`${room.room_number}-${date}`} className={`p-2 border-r border-slate-100 relative ${isToday ? "bg-blue-50/20" : ""}`}>
+                                                    <div className="h-full w-full min-h-[64px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                                        <span className="text-[11px] text-slate-400 font-semibold uppercase tracking-wider bg-slate-100 px-2 py-1 rounded-md">Available</span>
+                                                    </div>
+                                                </td>
+                                            );
+                                        }
+                                    }
+                                    return cells;
+                                })()}
                             </tr>
                         ))}
                     </tbody>

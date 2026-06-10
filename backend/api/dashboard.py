@@ -878,10 +878,10 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
             return {"status": "ignored", "reason": "invalid_signature"}
             
         event = verification.get("event")
-        event_type = event.get("type")
+        event_type = getattr(event, "type", None) or event.get("type")
         
         if event_type == "checkout.session.completed":
-            session = event.get("data", {}).get("object", {})
+            session = getattr(event.data, "object", None) or event.get("data", {}).get("object", {})
             
             # Handle success (Payment or Setup)
             result = await coalcreek_stripe_service.handle_checkout_completion(session)
@@ -890,83 +890,120 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                 # Update Booking Status in DB
                 booking_ref = result.get("booking_ref")
                 mode = result.get("mode", "payment")
-                
-                # Find booking by reference
-                query_endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
-                q_str = f'?queries[]=equal("booking_reference", "{booking_ref}")'
-                search_res = await appwrite_request("GET", query_endpoint + q_str)
-                
-                if search_res.get("documents"):
-                    doc = search_res["documents"][0]
-                    doc_id = doc.get("$id")
-                    
-                    update_data = {
-                        "updated_at": datetime.now().isoformat()
-                    }
+                stripe_session_id = getattr(session, "id", None) or session.get("id", "")
+                stripe_payment_id = result.get("payment_intent")
+                amount_total_cents = result.get("amount_total", 0)
 
-                    # CASE 1: CARD SAVED (Pre-Auth / Setup)
+                # PRIMARY lookup: booking_reference from Stripe metadata
+                # FALLBACK: stripe_session_id stored on doc during booking creation
+                from services.appwrite import db_service as _db
+                booking_doc = None
+                if booking_ref:
+                    booking_doc = await _db.get_booking_by_reference(booking_ref)
+                if not booking_doc and stripe_session_id:
+                    logger.warning(
+                        "⚠️ Webhook: booking_ref lookup missed for %s — falling back to stripe_session_id",
+                        booking_ref,
+                    )
+                    booking_doc = await _db.get_booking_by_stripe_session(stripe_session_id)
+
+                if booking_doc:
+                    doc_id = booking_doc.get("$id")
+                    
                     if mode == "setup":
-                        update_data["status"] = "confirmed" # Card confirmed, but not paid
-                        update_data["payment_status"] = "card_on_file"
-                        update_data["stripe_setup_intent"] = result.get("setup_intent")
-                        logger.info(f"💳 Booking {booking_ref} card securely saved (SetupIntent)")
-
-                    # CASE 2: PAID (Payment)
+                        # Card saved — mark confirmed but not paid
+                        await _db.update_motel_reservation(doc_id, {
+                            "status": "confirmed",
+                            "payment_status": "card_on_file",
+                            "stripe_setup_intent": result.get("setup_intent"),
+                        })
+                        logger.info("💳 Booking %s card securely saved (SetupIntent)", booking_ref)
                     else:
-                        update_data["status"] = "paid"
-                        update_data["payment_status"] = "paid"
-                        update_data["payment_received_at"] = datetime.now().isoformat()
-                        update_data["stripe_payment_id"] = result.get("payment_intent")
-                        logger.info(f"💰 Booking {booking_ref} marked as PAID")
-                    
-                    await appwrite_request("PATCH", f"{query_endpoint}/{doc_id}", {"data": update_data})
-                    
-                    # Send Notifications
+                        # Paid — mark paid and confirmed atomically
+                        await _db.update_booking_payment_status(
+                            booking_id=doc_id,
+                            payment_status="paid",
+                            stripe_payment_id=stripe_payment_id,
+                            deposit_paid=float(amount_total_cents) / 100.0,
+                            status="confirmed"
+                        )
+                        logger.info("💰 Booking %s marked as PAID | amount=AUD$%.2f", booking_ref, amount_total_cents / 100.0)
+
+                    # Send notifications using the fully-populated doc
+                    doc = booking_doc
                     try:
                         from services.email import email_service
-                        from services.appwrite import db_service
-                        
+
                         tenant_id = doc.get("tenant_id", "coalcreek")
-                        tenant_config = await db_service.get_tenant_config(tenant_id)
-                        staff_email = tenant_config.get("staff_email")
-                        guest_email = doc.get("guest_email")
                         
-                        # 1. Notify Staff (Ovela Branded)
-                        await email_service.send_staff_payment_notification(
-                            staff_email=staff_email,
-                            booking_reference=booking_ref,
-                            customer_name=doc.get("guest_name", "Guest"),
-                            customer_email=guest_email,
-                            room_type=doc.get("room_type", ""),
-                            check_in=doc.get("check_in_date", ""),
-                            check_out=doc.get("check_out_date", ""),
-                            num_nights=doc.get("num_nights", 1),
-                            amount_paid=result.get("amount_total", 0) / 100.0 if mode == "payment" else 0.0,
-                            mode=mode
-                        )
-                        
-                        # 2. Notify Guest (Client Branded Receipt)
-                        if guest_email:
-                            await email_service.send_guest_booking_confirmation(
-                                guest_email=guest_email,
-                                guest_name=doc.get("guest_name", "Guest"),
+                        # Use DB email, but fallback to the email entered during Stripe checkout if missing
+                        guest_email = doc.get("guest_email") or result.get("customer_email")
+                        if not guest_email:
+                            logger.error("❌ No guest_email found on booking doc or Stripe session for %s", booking_ref)
+
+                        _COALCREEK_DEFAULTS = {
+                            "staff_email": "officialcoalcreek@gmail.com",
+                            "business_name": "Coal Creek Motel",
+                            "business_phone": "+61468088990",
+                            "location": "8444 South Gippsland Highway, Korumburra VIC 3950",
+                        }
+                        if tenant_id == "coalcreek":
+                            tenant_config = _COALCREEK_DEFAULTS
+                        else:
+                            from services.appwrite import db_service as _db2
+                            tenant_config = await _db2.get_tenant_config(tenant_id) or {}
+
+                        staff_email = tenant_config.get("staff_email") or _COALCREEK_DEFAULTS["staff_email"]
+                        business_name = tenant_config.get("business_name", "Coal Creek Motel")
+
+                        # 1. Notify Staff — isolated so guest email still fires if this fails
+                        try:
+                            await email_service.send_staff_payment_notification(
+                                staff_email=staff_email,
                                 booking_reference=booking_ref,
+                                customer_name=doc.get("guest_name", "Guest"),
+                                customer_email=guest_email,
                                 room_type=doc.get("room_type", ""),
                                 check_in=doc.get("check_in_date", ""),
                                 check_out=doc.get("check_out_date", ""),
                                 num_nights=doc.get("num_nights", 1),
-                                total_amount=result.get("amount_total", 0) / 100.0 if mode == "payment" else doc.get("total_amount", 0),
-                                business_name=tenant_config.get("business_name", "Motel"),
-                                business_phone=tenant_config.get("business_phone", ""),
-                                business_location=tenant_config.get("location", ""),
-                                tenant_id=tenant_id
+                                amount_paid=amount_total_cents / 100.0 if mode == "payment" else 0.0,
+                                mode=mode,
                             )
-                             
+                            logger.info("📧 Staff payment notification sent to %s", staff_email)
+                        except Exception as staff_err:
+                            logger.error("❌ Staff notification failed (non-fatal): %s", staff_err)
+
+                        # 2. Notify Guest — isolated so staff email failure cannot block this
+                        if guest_email:
+                            try:
+                                await email_service.send_guest_booking_confirmation(
+                                    guest_email=guest_email,
+                                    guest_name=doc.get("guest_name", "Guest"),
+                                    booking_reference=booking_ref,
+                                    room_type=doc.get("room_type", ""),
+                                    check_in=doc.get("check_in_date", ""),
+                                    check_out=doc.get("check_out_date", ""),
+                                    num_nights=doc.get("num_nights", 1),
+                                    total_amount=amount_total_cents / 100.0 if mode == "payment" else doc.get("total_amount", 0),
+                                    business_name=business_name,
+                                    business_phone=tenant_config.get("business_phone", ""),
+                                    business_location=tenant_config.get("location", ""),
+                                    tenant_id=tenant_id,
+                                )
+                                logger.info("📧 Guest confirmation sent to %s (%s)", guest_email, booking_ref)
+                            except Exception as guest_err:
+                                logger.error("❌ Guest confirmation failed for %s: %s", booking_ref, guest_err)
+                        else:
+                            logger.error("❌ No guest_email on booking doc — skipping guest confirmation for %s", booking_ref)
+
                     except Exception as email_err:
-                        logger.error(f"Failed to send payment/setup emails: {email_err}")
-                        
+                        logger.error("Failed to send payment/setup emails for %s: %s", booking_ref, email_err)
+
+
                 else:
-                    logger.warning(f"Booking {booking_ref} not found for payment/setup update")
+                    logger.warning("Booking not found for webhook update: ref=%s sid=%s", booking_ref, stripe_session_id)
+
 
         elif event_type == "checkout.session.expired":
             session = event.get("data", {}).get("object", {})
@@ -1015,8 +1052,8 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
         return {"status": "received"}
 
     except Exception as e:
-        logger.error(f"Stripe webhook error: {e}")
-        return {"status": "error", "message": str(e)}
+        logger.warning(f"Stripe webhook processing warning (non-fatal): {type(e).__name__}: {e}")
+        return {"status": "received"}
 
 
 # -----------------------------------------------------------------------------

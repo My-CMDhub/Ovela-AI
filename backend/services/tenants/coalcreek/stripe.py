@@ -182,7 +182,22 @@ class CoalCreekStripeService:
         Returns dict with details and 'type' ('payment' or 'setup').
         """
         try:
-            metadata = session.get("metadata", {})
+            if not isinstance(session, dict):
+                mode = getattr(session, "mode", None)
+                metadata_obj = getattr(session, "metadata", {})
+                metadata = metadata_obj if isinstance(metadata_obj, dict) else (metadata_obj.to_dict() if hasattr(metadata_obj, "to_dict") else dict(metadata_obj))
+                customer_email = getattr(session, "customer_email", None)
+                setup_intent = getattr(session, "setup_intent", None)
+                payment_intent = getattr(session, "payment_intent", None)
+                amount_total = getattr(session, "amount_total", None)
+            else:
+                metadata = session.get("metadata", {})
+                mode = session.get("mode")
+                customer_details = session.get("customer_details") or {}
+                customer_email = session.get("customer_email") or customer_details.get("email")
+                setup_intent = session.get("setup_intent")
+                payment_intent = session.get("payment_intent")
+                amount_total = session.get("amount_total")
             
             # Only process Coal Creek
             if metadata.get("tenant_id") != self.tenant_id:
@@ -192,13 +207,12 @@ class CoalCreekStripeService:
             if not booking_ref:
                 return {"success": False, "error": "Missing booking_ref"}
             
-            mode = session.get("mode")
             logger.info(f"✅ [Coal Creek] Checkout completed: {booking_ref} (Mode: {mode})")
             
             result = {
                 "success": True,
                 "booking_ref": booking_ref,
-                "customer_email": session.get("customer_email") or metadata.get("customer_email"),
+                "customer_email": customer_email or metadata.get("customer_email"),
                 "customer_name": metadata.get("customer_name"),
                 "room_type": metadata.get("room_type"),
                 "check_in": metadata.get("check_in"),
@@ -208,11 +222,11 @@ class CoalCreekStripeService:
             }
 
             if mode == "setup":
-                result["setup_intent"] = session.get("setup_intent")
+                result["setup_intent"] = setup_intent
                 result["type"] = "setup"
             else:
-                result["payment_intent"] = session.get("payment_intent")
-                result["amount_total"] = session.get("amount_total")
+                result["payment_intent"] = payment_intent
+                result["amount_total"] = amount_total
                 result["type"] = "payment"
                 
             return result

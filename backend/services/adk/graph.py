@@ -70,7 +70,7 @@ class VertexGemini(AdkGemini):
             return self.model == other
         return super().__eq__(other)
 
-_ADK_MODEL = "gemini-2.5-flash-lite"
+_ADK_MODEL = "gemini-2.5-flash"
 _ADK_MODEL_VERTEX = VertexGemini(model=_ADK_MODEL)  
 
 
@@ -115,12 +115,26 @@ Your responsibilities:
 - Create provisional booking records in the PMS.
 - Generate Stripe payment checkout links when requested.
 - Look up existing bookings by guest name or reference number.
+- Update guest details (guest name, email, phone) using update_guest_info. Use this when the caller corrects their name, phone, or email (which automatically updates their reservation and resends the payment link).
+
+PRE-BOOKING GATE (MANDATORY — ONE CONFIRMATION ONLY):
+To call create_booking_request you MUST have collected ALL of these:
+  1. Guest full name
+  2. Email address (spelled and confirmed letter by letter)
+  3. Check-in date and check-out date
+  4. Room type
+  5. User verbal confirmation of the full booking summary
+
+CONFIRMATION PROTOCOL:
+- Read the full summary ONCE: "Just to confirm: [Name], [room type], [check-in] to [check-out], [nights] night(s) at $[X]/night, total $[Y]. I'll send the payment link to [email]. Does that sound right?"
+- When the user says YES / "that's right" / "correct" / "perfect" / "go ahead" / any affirmative → IMMEDIATELY call create_booking_request with has_user_confirmed_summary=True.
+- NEVER repeat the confirmation summary a second time. One ask, one go.
+- NEVER say "just to confirm" again after they have already said yes.
 
 TONE RULES (NON-NEGOTIABLE):
 - Never open with "Great news!", "Absolutely!", "Certainly!", or similar excitement filler.
 - Be calm and direct -- like a professional receptionist, not a chatbot.
 - Speak in plain conversational English. No bullet points, no markdown.
-- Always confirm booking details before finalising.
 - Never proactively read out booking reference numbers, URLs, IDs, or phone country codes unless necessary or explicitly requested.
 - When stating booking references (e.g. 'CC-7777'), read them as individual characters and numbers (e.g., 'C C seven seven seven seven') and NEVER pronounce dashes, hyphens, plus symbols, or URL protocol names.
 """.strip()
@@ -191,31 +205,133 @@ def _get_dispatcher(tool_context: ToolContext) -> Any:
         call_sid=f"adk_call_{user_id[:10]}"
     )
 
-async def check_availability(check_in_date: str, check_out_date: str = "", room_type: str = "any", tool_context: ToolContext = None) -> str:
-    """Check live room availability for Coal Creek Motel.
+def _format_tool_error(tool_name: str, exception: Exception) -> dict:
+    """Format tool execution exceptions into G3-grade structured error returns."""
+    error_msg = str(exception)
     
+    # Check retry eligibility based on exception messages/types
+    # DB lock, connection error, timeout are retryable
+    retry_allowed = any(
+        term in error_msg.lower() 
+        for term in ["timeout", "connection", "rate limit", "busy", "temporary", "dns"]
+    )
+    
+    # Specific user facing message based on tool
+    if tool_name == "check_availability":
+        user_facing_message = "I couldn't check availability right now due to a temporary connection issue. Would you like me to try again, or put you through to reception?"
+    elif tool_name == "create_booking_request":
+        # Check if it's a pre-booking gate error
+        if "SYSTEM RULE VIOLATION" in error_msg:
+            user_facing_message = "I need to verify the booking summary details with you before I can save the hold. Let me read it back to make sure it's correct."
+            retry_allowed = False
+        elif "email bounced" in error_msg.lower() or ("email" in error_msg.lower() and "bounce" in error_msg.lower()):
+            user_facing_message = "It looks like the email address bounced. Could you please spell it again letter by letter?"
+            retry_allowed = False
+        else:
+            user_facing_message = "I ran into a problem saving your reservation. I can try again, or connect you to staff."
+    elif tool_name == "lookup_booking":
+        user_facing_message = "I'm having trouble retrieving your booking right now. Let me connect you to reception."
+        retry_allowed = False
+    elif tool_name == "update_guest_info":
+        user_facing_message = "I couldn't update your information right now. Let me connect you to staff."
+        retry_allowed = False
+    elif tool_name == "resend_payment_confirmation":
+        user_facing_message = "I couldn't resend the confirmation email right now. Let me connect you to staff."
+        retry_allowed = False
+    elif tool_name == "resend_payment_link":
+        user_facing_message = "I couldn't resend the payment link right now. Let me connect you to staff."
+        retry_allowed = False
+    elif tool_name == "perform_live_search":
+        user_facing_message = "My search service is currently unavailable. Let me try that again, or can I help with something else?"
+        retry_allowed = True
+    else:
+        user_facing_message = "I encountered an issue processing that request. Let me try again or put you through to staff."
+
+    return {
+        "success": False,
+        "user_facing_message": user_facing_message,
+        "retry_allowed": retry_allowed,
+        "error_details": error_msg
+    }
+
+async def _execute_with_error_handling(tool_name: str, dispatcher_coro) -> str:
+    """Helper to catch exceptions and wrap errors in a structured G3-compliant JSON response."""
+    try:
+        res = await dispatcher_coro
+        # Check if the returned dictionary indicates a failure
+        if isinstance(res, dict):
+            if "error" in res or res.get("success") is False:
+                err_msg = res.get("error") or res.get("message") or "Unknown error"
+                formatted_error = _format_tool_error(tool_name, Exception(err_msg))
+                return json.dumps(formatted_error)
+        return json.dumps(res)
+    except Exception as e:
+        logger.error("Error executing ADK tool %s: %s", tool_name, e, exc_info=True)
+        formatted_error = _format_tool_error(tool_name, e)
+        return json.dumps(formatted_error)
+
+async def check_availability(check_in_date: str, check_out_date: str = "", room_type: str = "any", tool_context: ToolContext = None) -> str:
+    """
+    Query live room availability at Coal Creek Motel.
+
+    Use ONLY when the caller asks about room availability, rates, or available dates.
+    Do NOT call for general motel policies, check-in times, or amenities.
+
     Args:
-        check_in_date: Check-in date in YYYY-MM-DD format
-        check_out_date: Check-out date in YYYY-MM-DD format
-        room_type: Specific room type ("queen", "twin", "family", "suite") or "any"
+        check_in_date: Check-in date in YYYY-MM-DD format (e.g., "2026-06-15"). Today's date/year is in the CURRENT SYSTEM CLOCK.
+        check_out_date: Check-out date in YYYY-MM-DD format. If unspecified, defaults to 1 night stay.
+        room_type: Mapped room type: "queen" (covers Double Room), "twin" (Twin Room), "family" (Family Suite), "suite" (Deluxe Spa Suite), or "any" to see all available types.
+
+    Returns JSON string with structure:
+      On Success:
+        {"available": true, "verified": true, "room_type": "...", "price_per_night": X, "total": Y, "ai_should_say": "..."}
+      On Sold Out / unavailable:
+        {"available": false, "verified": true, "ai_should_say": "..."}
+      On Error:
+        {"success": false, "user_facing_message": "...", "retry_allowed": true/false, "error_details": "..."}
+
+    Error Handling & Recovery:
+      - If success is false and retry_allowed is true, you may retry the check once.
+      - If retry fails or retry_allowed is false, offer to transfer the caller to reception on 03 5726 0303.
     """
     dispatcher = _get_dispatcher(tool_context)
     args = {"check_in_date": check_in_date, "check_out_date": check_out_date, "room_type": room_type}
-    res = await dispatcher.execute("check_availability", args)
-    return json.dumps(res)
+    return await _execute_with_error_handling("check_availability", dispatcher.execute("check_availability", args))
 
-async def create_booking_request(guest_name: str, check_in_date: str, room_type: str, num_guests: int = 1, check_out_date: str = "", guest_phone: str = "", guest_email: str = "", notes: str = "", tool_context: ToolContext = None) -> str:
-    """Create a provisional soft hold booking request.
-    
+async def create_booking_request(guest_name: str, check_in_date: str, room_type: str, num_guests: int = 1, check_out_date: str = "", guest_phone: str = "", guest_email: str = "", notes: str = "", has_user_confirmed_summary: str = "NO", tool_context: ToolContext = None) -> str:
+    """
+    Create a provisional soft hold booking request in the Coal Creek Motel PMS.
+
+    MANDATORY PRE-BOOKING GATES:
+    You MUST NOT invoke this tool until you have collected and verbally confirmed:
+      1. Guest's first and last name.
+      2. Email address (spelled out and confirmed character-by-character).
+      3. Resolved check-in and check-out dates.
+      4. Room type.
+      5. Explicit confirmation of the full summary (e.g. "[Name], checking in [date], checking out [date], [room] at $[price] per night. Does that sound right?")
+
     Args:
-        guest_name: The guest's full name
-        check_in_date: Check-in date in YYYY-MM-DD format
-        room_type: Room type to book ("queen", "twin", "family", "suite")
-        num_guests: Number of guests staying
-        check_out_date: Check-out date in YYYY-MM-DD format
-        guest_phone: Guest phone number for confirmation
-        guest_email: Guest email address for confirmation
-        notes: Any special requests or notes
+        guest_name: Guest's full name (first and last).
+        check_in_date: Check-in date in YYYY-MM-DD format.
+        room_type: Specific room type ("queen", "twin", "family", "suite").
+        num_guests: Number of guests staying (default 1).
+        check_out_date: Check-out date in YYYY-MM-DD format.
+        guest_phone: Guest's phone number. Defaults to calling number.
+        guest_email: Guest's email address.
+        notes: Special requests (accessible access, extra bed, late check-in).
+        has_user_confirmed_summary: Crucial status flag. Pass "YES" if caller explicitly agreed to the read-back summary. Defaults to "NO".
+        tool_context: Internal ADK context containing caller session state.
+
+    Returns JSON string with structure:
+      On Success:
+        {"success": true, "booking_reference": "CC-XXXXXX", "guest_name": "...", "total_amount": X, "message": "..."}
+      On Pre-booking gate violation / Error:
+        {"success": false, "user_facing_message": "...", "retry_allowed": false, "error_details": "..."}
+
+    Error Handling & Recovery:
+      - If the error indicates a summary confirmation check was bypassed, immediately read the summary to the caller and wait for their yes before invoking the tool again.
+      - If the email bounces or fails, tell the guest their email failed/bounced and ask them to spell it again.
+      - For system errors, apologize and offer to transfer the call to reception.
     """
     dispatcher = _get_dispatcher(tool_context)
     args = {
@@ -226,59 +342,186 @@ async def create_booking_request(guest_name: str, check_in_date: str, room_type:
         "check_out_date": check_out_date,
         "guest_phone": guest_phone,
         "guest_email": guest_email,
-        "notes": notes
+        "notes": notes,
+        "has_user_confirmed_summary": has_user_confirmed_summary
     }
-    res = await dispatcher.execute("create_booking_request", args)
-    return json.dumps(res)
+    return await _execute_with_error_handling("create_booking_request", dispatcher.execute("create_booking_request", args))
 
 async def lookup_booking(guest_name: str = "", phone: str = "", email: str = "", reference: str = "", tool_context: ToolContext = None) -> str:
-    """Look up an existing booking by guest name, phone, email, or reference.
-    
+    """
+    Look up an existing reservation in the PMS system.
+
+    PRIVACY & SECURITY RULES:
+    - To prevent data leaks, you can only lookup booking details for the phone number the guest is currently calling from.
+    - If a caller asks to lookup a booking registered under a different phone number, the tool will refuse and request staff intervention.
+
     Args:
-        guest_name: Guest name as spoken
-        phone: Phone number to search
-        email: Email to search
-        reference: Booking reference as spoken (e.g. 'CC-EVAL-C2')
+        guest_name: Guest name on the reservation.
+        phone: Phone number to search (if different from caller phone).
+        email: Email address linked to the booking.
+        reference: Booking reference code (e.g., "CC-AB1234").
+        tool_context: Internal ADK context containing caller session state.
+
+    Returns JSON string with structure:
+      On Success:
+        {"found": true, "booking_reference": "...", "guest_name": "...", "status": "...", "payment_status": "...", "message": "..."}
+      On Privacy/Access Block:
+        {"found": false, "privacy_refusal": true, "message": "..."}
+      On Error:
+        {"success": false, "user_facing_message": "...", "retry_allowed": false, "error_details": "..."}
+
+    Error/Failure Handling:
+      - If found is false and privacy_refusal is true, explain that for security reasons, we cannot display details for other phone numbers and offer a transfer to staff.
+      - If booking is not found, verify the reference spelling or search parameters with the user.
     """
     dispatcher = _get_dispatcher(tool_context)
     args = {"guest_name": guest_name, "phone": phone, "email": email, "reference": reference}
-    res = await dispatcher.execute("lookup_booking", args)
-    return json.dumps(res)
+    return await _execute_with_error_handling("lookup_booking", dispatcher.execute("lookup_booking", args))
+
+async def resend_payment_confirmation(guest_email: str, tool_context: ToolContext = None) -> str:
+    """
+    Manually resend the booking confirmation or receipt email to the guest.
+
+    Use when the customer asks to resend their booking confirmation or receipt.
+    Do NOT call this tool if the booking's payment status is still pending_payment;
+    explain to the user that they must pay first, and offer to resend the payment link.
+
+    Args:
+        guest_email: Guest email address to resend the confirmation to.
+        tool_context: Internal ADK context containing caller session state.
+
+    Returns JSON string with structure:
+      On Success:
+        {"success": true, "message": "..."}
+      On Error / Guard Block:
+        {"success": false, "user_facing_message": "...", "retry_allowed": false, "error_details": "..."}
+    """
+    dispatcher = _get_dispatcher(tool_context)
+    args = {"guest_email": guest_email}
+    return await _execute_with_error_handling("resend_payment_confirmation", dispatcher.execute("resend_payment_confirmation", args))
+
+async def resend_payment_link(guest_email: str, tool_context: ToolContext = None) -> str:
+    """
+    Resend the payment link email. ONLY use this when the user has an unpaid or pending booking and explicitly says they haven't received the payment link, or they ask you to send it again.
+
+    Args:
+        guest_email: Guest email address to send the payment link to.
+        tool_context: Internal ADK context containing caller session state.
+
+    Returns JSON string with structure:
+      On Success:
+        {"success": true, "message": "..."}
+      On Error:
+        {"success": false, "user_facing_message": "...", "retry_allowed": false, "error_details": "..."}
+    """
+    dispatcher = _get_dispatcher(tool_context)
+    args = {"guest_email": guest_email}
+    return await _execute_with_error_handling("resend_payment_link", dispatcher.execute("resend_payment_link", args))
+
+async def update_guest_info(guest_name: str = "", guest_email: str = "", guest_phone: str = "", tool_context: ToolContext = None) -> str:
+    """
+    Update guest profile details in the CRM (guest name, phone, email) or corrected email address.
+
+    Use when:
+      - The caller corrects their email address after a failed payment confirmation/link delivery.
+      - The caller corrects or updates their name or phone details.
+      - The caller requests to update their guest profile information.
+
+    If the caller has a pending or pending_payment booking, updating the guest email address
+    via this tool will automatically patch the booking record and resend the Stripe payment link.
+
+    Args:
+        guest_name: Updated guest full name.
+        guest_email: Updated or corrected guest email address.
+        guest_phone: Guest phone number (if different from caller phone).
+        tool_context: Internal ADK context containing caller session state.
+
+    Returns JSON string with structure:
+      On Success:
+        {"success": true, "message": "...", "email_resent": true/false}
+      On Error:
+        {"success": false, "user_facing_message": "...", "retry_allowed": false, "error_details": "..."}
+    """
+    dispatcher = _get_dispatcher(tool_context)
+    args = {"guest_name": guest_name, "guest_email": guest_email, "guest_phone": guest_phone}
+    return await _execute_with_error_handling("update_guest_info", dispatcher.execute("update_guest_info", args))
 
 async def wait_on_request(reason: str = "", wait_seconds: int = 90, tool_context: ToolContext = None) -> str:
-    """Pause silence detection if the user needs a moment or asks to wait.
-    
-    Args:
-        reason: Short reason for waiting
-        wait_seconds: Wait duration in seconds
     """
-    return json.dumps({"action": "wait_on_request", "duration_seconds": wait_seconds, "message": "No worries, take your time."})
+    Pause silence monitoring / VAD timers to give the caller time to fetch details.
+
+    Use proactively whenever the guest says they need a moment, need to find their credit card, are checking their inbox for a payment link, or need to verify a detail.
+    Do NOT wait for the user to explicitly ask you to wait if they state they are doing something.
+
+    Args:
+        reason: Short explanation of why the agent is waiting (e.g., "waiting for payment", "searching for email").
+        wait_seconds: Duration to wait in seconds (minimum 30, maximum 120, defaults to 90).
+
+    Returns JSON string:
+        {"action": "wait_on_request", "duration_seconds": X, "message": "No worries, take your time. I'll stay on the line."}
+    """
+    return json.dumps({"action": "wait_on_request", "duration_seconds": wait_seconds, "message": "No worries, take your time. I'll stay on the line."})
 
 async def flag_off_topic(reason: str, tool_context: ToolContext = None) -> str:
-    """Flag off-topic behavior or inappropriate queries.
-    
+    """
+    Flag inappropriate, abusive, or highly off-topic user behavior.
+
+    Use when the caller goes completely off-topic (e.g., asking about unrelated politics, recipe suggestions, personal life) or exhibits abusive behavior.
+
     Args:
-        reason: Reason for flagging
+        reason: Description of the off-topic or abusive behavior.
+
+    Returns JSON string:
+        {"action": "flag_off_topic", "flagged": true}
     """
     return json.dumps({"action": "flag_off_topic", "flagged": True})
 
 async def transfer_to_staff(tool_context: ToolContext = None) -> str:
-    """Transfer the caller to a staff member or receptionist."""
-    return json.dumps({"action": "transfer_to_staff", "message": "Transferring to staff."})
-
-async def end_call(message: str = "", tool_context: ToolContext = None) -> str:
-    """End the call by saying goodbye when the conversation is finished.
-    
-    Args:
-        message: Optional goodbye message
     """
-    return json.dumps({"action": "end_call", "message": message or "Goodbye!"})
+    Transfer the caller to a human staff member at the Coal Creek Motel.
+
+    Use ONLY when:
+      - The caller explicitly asks for a human ("put me through", "let me speak to a person").
+      - There is an unrecoverable system error or availability calendar timeout.
+      - A privacy block occurs and the caller needs manual assistance.
+      - The caller has a complex request (e.g., modifying a booking that has already been paid).
+      - CRITICAL: If you just attempted a transfer and NO ONE ANSWERED (fallback flow), DO NOT call this again in the same turn until explicitly asked by user again to do so.
+
+    Returns JSON string:
+        {"action": "transfer_to_staff", "message": "Sure, I'll transfer you to reception now."}
+    """
+    return json.dumps({"action": "transfer_to_staff", "message": "Sure, I'll transfer you to reception now."})
+
+async def end_call(message: str = "", confidence_score: int = 100, tool_context: ToolContext = None) -> str:
+    """
+    End the active phone call by playing a farewell message and disconnecting.
+
+    ONLY use when the caller explicitly wants to finish the conversation, such as 'bye', 'goodbye', 'see you', 'that's all', or when they clearly confirm they are done after your final help-offer. If they only say thanks, appreciation, or a polite wrap-up, do ONE final natural help-offer first instead of ending immediately. NEVER use this when they want to speak to staff or be transferred.
+
+    Args:
+        message: Goodbye/farewell message to read to the caller.
+        confidence_score: Your confidence score (1-100) that the user genuinely wants to end the call right now. Must be >= 80 to use this tool.
+
+    Returns JSON string:
+        {"action": "end_call", "message": message or "Thanks for calling Coal Creek Motel, goodbye.", "confidence_score": confidence_score}
+    """
+    return json.dumps({"action": "end_call", "message": message or "Thanks for calling Coal Creek Motel, goodbye.", "confidence_score": confidence_score})
 
 async def perform_live_search(query: str, tool_context: ToolContext = None) -> str:
-    """Perform a live Google Search to retrieve current information (weather, news, events, attractions).
-    
+    """
+    Perform a live Google Search to retrieve current, up-to-date information.
+
+    Use ONLY when the caller asks about dynamic, real-time facts such as Chiltern weather, local tourist attractions, events near Chiltern, road conditions, or other external info.
+    Do NOT use for general motel check-in times or policies.
+
     Args:
-        query: The search query string.
+        query: Specific search query string (e.g., "current weather in Chiltern Victoria").
+
+    Returns JSON string with structure:
+      On Success:
+        {"success": true, "answer": "..."}
+      On Error:
+        {"success": false, "user_facing_message": "...", "retry_allowed": true, "error_details": "..."}
     """
     from google import genai
     from google.genai import types
@@ -291,12 +534,18 @@ async def perform_live_search(query: str, tool_context: ToolContext = None) -> s
             model="gemini-2.5-flash-lite",
             contents=query,
             config=types.GenerateContentConfig(
-                tools=[{"google_search": {}}]
+                tools=[{"google_search": {}}],
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                http_options=types.HttpOptions(timeout=8000),
             )
         )
-        return json.dumps({"action": "perform_live_search", "result": response.text})
+        if not response or not response.text:
+            raise Exception("Search service returned an empty response")
+        return json.dumps({"success": True, "answer": response.text})
     except Exception as e:
-        return json.dumps({"action": "perform_live_search", "error": str(e)})
+        logger.error("Error executing perform_live_search: %s", e, exc_info=True)
+        formatted_error = _format_tool_error("perform_live_search", e)
+        return json.dumps(formatted_error)
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +591,7 @@ class ADKOrchestrator:
             model=_ADK_MODEL_VERTEX,
             instruction="",
             static_instruction=dynamic_booking_instruction,
-            tools=[check_availability, create_booking_request, lookup_booking, wait_on_request, flag_off_topic, transfer_to_staff, end_call],
+            tools=[check_availability, create_booking_request, lookup_booking, resend_payment_confirmation, resend_payment_link, update_guest_info, wait_on_request, flag_off_topic, transfer_to_staff, end_call],
         )
         self.info_worker = LlmAgent(
             name="InfoWorker",
@@ -359,7 +608,7 @@ class ADKOrchestrator:
             instruction="",
             static_instruction=dynamic_manager_instruction,
             sub_agents=[self.booking_worker, self.info_worker],
-            tools=[end_call],
+            tools=[end_call, transfer_to_staff, wait_on_request],  # G1: manager can handle transfers/waits directly
         )
 
         # Session service — AppwriteSessionService persists state to Appwrite

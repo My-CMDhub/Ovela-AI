@@ -111,14 +111,14 @@ export function ThemeStudio() {
 
     return (
         <>
-            <button
+            {/* <button
                 onClick={() => setIsOpen(true)}
                 className="fixed bottom-6 right-6 p-4 rounded-full shadow-lg hover:opacity-90 transition-all z-50 flex items-center justify-center group"
                 style={{ backgroundColor: "var(--theme-primary)", color: "var(--theme-bg)" }}
                 title="Ovela Theme Studio"
             >
                 <Palette className="w-6 h-6 group-hover:scale-110 transition-transform duration-300" />
-            </button>
+            </button> */}
 
             {isOpen && (
                 <div className="fixed bottom-24 right-6 w-80 border rounded-2xl shadow-2xl z-50 overflow-hidden transform origin-bottom-right transition-all duration-300"

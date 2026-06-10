@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     """
     Handle Stripe webhook events.
@@ -63,7 +62,7 @@ async def stripe_webhook(request: Request):
             # Extract metadata (all fields set by create_checkout_session)
             metadata = session.get("metadata", {})
             booking_ref = metadata.get("booking_ref", "")
-            guest_email = metadata.get("guest_email", "")
+            guest_email = metadata.get("guest_email") or session.get("customer_email") or session.get("customer_details", {}).get("email") or ""
             guest_name = metadata.get("guest_name", "Guest")
             room_type = metadata.get("room_type", "Queen Room")
             check_in = metadata.get("check_in", "")
@@ -105,6 +104,8 @@ async def stripe_webhook(request: Request):
                             booking_id=booking_doc_id,
                             payment_status="paid",
                             stripe_payment_id=stripe_payment_id,
+                            deposit_paid=amount_total,
+                            status="confirmed"
                         )
                         logger.info(f"✅ Booking {booking_ref} marked as paid in Appwrite")
                     else:

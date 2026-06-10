@@ -96,8 +96,12 @@ const BASELINE_SCORES: Record<string, number> = {
     "C1: Race Condition — Last Room Pressure": 60,
     "C2: Payment Status Lookup by Return Caller": 52,
     "C3: Backend Failure — Graceful Human Handoff": 71,
+    "C4: Pre-Booking Hard Gate Enforcement": 45,
+    "C5: Privacy Boundary Verification": 50,
+    "C6: Unpaid Confirmation Resend Guard": 40,
+    "C7: Interruption Tolerance": 55,
 };
-const GLOBAL_BASELINE_AVG = 72.4;
+const GLOBAL_BASELINE_AVG = 61.1;
 
 // ─── Utility helpers ───────────────────────────────────────────────────────────
 
@@ -165,7 +169,7 @@ function HeroHeader({ run }: { run: EvaluationRun }) {
                 <h1 className="mb-6 text-2xl font-bold tracking-tight text-white">
                     Agent Observability Dashboard
                     <span className="ml-2 text-slate-500 font-normal text-base">
-                        — 10 adversarial scenarios, independent LLM judge
+                        — {run.scenario_count} adversarial scenarios, independent LLM judge
                     </span>
                 </h1>
 
@@ -214,7 +218,7 @@ function HeroHeader({ run }: { run: EvaluationRun }) {
                         <div className="mt-2 flex items-center gap-3 text-xs">
                             <span className="flex items-center gap-1 text-slate-400">
                                 <Zap className="h-3 w-3 text-amber-400" />
-                                Avg voice latency: &lt;850ms
+                                Avg voice latency: ~ 850ms
                             </span>
                             <span className="flex items-center gap-1 text-slate-400">
                                 <Activity className="h-3 w-3 text-violet-400" />
@@ -380,13 +384,12 @@ function ScenarioAccordion({ scenario }: { scenario: ScenarioResult }) {
                         <p className="text-[11px] text-slate-600 mb-0.5">Delta</p>
                         {delta !== null ? (
                             <span
-                                className={`inline-flex items-center gap-0.5 text-xs font-bold ${
-                                    delta > 0
-                                        ? "text-emerald-400"
-                                        : delta < 0
+                                className={`inline-flex items-center gap-0.5 text-xs font-bold ${delta > 0
+                                    ? "text-emerald-400"
+                                    : delta < 0
                                         ? "text-red-400"
                                         : "text-slate-400"
-                                }`}
+                                    }`}
                             >
                                 {delta > 0 ? (
                                     <TrendingUp className="h-3 w-3" />
@@ -442,13 +445,12 @@ function ScenarioAccordion({ scenario }: { scenario: ScenarioResult }) {
                                         </p>
                                         <div className="mt-1.5 h-1 w-full rounded-full bg-slate-800">
                                             <div
-                                                className={`h-1 rounded-full transition-all ${
-                                                    pct >= 80
-                                                        ? "bg-emerald-500"
-                                                        : pct >= 60
+                                                className={`h-1 rounded-full transition-all ${pct >= 80
+                                                    ? "bg-emerald-500"
+                                                    : pct >= 60
                                                         ? "bg-amber-500"
                                                         : "bg-red-500"
-                                                }`}
+                                                    }`}
                                                 style={{ width: `${pct}%` }}
                                             />
                                         </div>
@@ -458,18 +460,7 @@ function ScenarioAccordion({ scenario }: { scenario: ScenarioResult }) {
                         </div>
                     )}
 
-                    {/* Turn-by-turn trace */}
-                    <div>
-                        <p className="mb-3 flex items-center gap-2 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                            <Brain className="h-3.5 w-3.5 text-violet-400" />
-                            ADK Runtime Trace — Phase 1 (Clean Input)
-                        </p>
-                        <div className="space-y-2">
-                            {scenario.phase_1.transcript.map((item, i) => (
-                                <TraceItem key={i} item={item} />
-                            ))}
-                        </div>
-                    </div>
+
 
                     {/* Judge reasoning */}
                     {scenario.phase_1.evaluation_report?.detailed_reasoning && (

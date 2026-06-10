@@ -116,7 +116,7 @@ class MemoryService:
                 config=genai.types.GenerateContentConfig(
                     system_instruction=CONSOLIDATION_PROMPT,
                     temperature=0.3,
-                    max_tokens=300
+                    max_output_tokens=300
                 )
             )
             
@@ -156,7 +156,7 @@ class MemoryService:
                 config=genai.types.GenerateContentConfig(
                     system_instruction=ULTRA_COMPACT_PROMPT,
                     temperature=0.3,
-                    max_tokens=200
+                    max_output_tokens=200
                 )
             )
             

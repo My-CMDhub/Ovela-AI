@@ -257,13 +257,13 @@ def get_booking_functions() -> list:
         },
         {
             "name": "request_human_callback",
-            "description": "Request a human staff member to call the customer back. Use this when: (1) caller asks to speak to a human/manager, (2) you cannot answer their question (e.g., cancellation policies, refunds, complaints), (3) caller seems frustrated. Collects their name and phone, then notifies reception.",
+            "description": "Request a human staff member to call the customer back. Use this when: (1) caller asks to speak to a human/manager, (2) you cannot answer their question (e.g., cancellation policies, refunds, complaints), (3) caller seems frustrated. MANDATORY GATE: You MUST ask the customer for their name before invoking this tool if it is not already in memory (e.g., 'Sure, could I please get your name so I can arrange that callback?'). Do NOT invent placeholders or generic names. Only call this tool after receiving their name.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "customer_name": {
                         "type": "string",
-                        "description": "The customer's name"
+                        "description": "The customer's name (MUST ask the caller for this first if not already known)"
                     },
                     "customer_phone": {
                         "type": "string",
@@ -279,7 +279,7 @@ def get_booking_functions() -> list:
                         "description": "How urgent is this callback request"
                     }
                 },
-                "required": ["customer_name", "customer_phone", "reason"]
+                "required": ["reason"]
             }
         },
         {

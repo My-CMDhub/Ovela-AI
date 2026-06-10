@@ -80,7 +80,7 @@ export default function CallLogsPage() {
             log.duration_seconds + "s",
             log.exchange_count.toString(),
             log.outcome,
-            log.transcript.map(m => `[${m.role}] ${m.text}`).join(" | ").slice(0, 500)
+            (log.transcript || []).map(m => `[${m.role}] ${m.text}`).join(" | ").slice(0, 500)
         ]);
 
         const csvContent = [

@@ -117,22 +117,14 @@ class EmailService:
         
         if payment_link:
             is_setup = (amount == 0)
-            btn_text = "Pay to Secure Booking" if is_setup else f"Pay ${amount} to Secure Booking"
-            
-            # White professional rounded button
-            btn_style = (
-                "display: inline-block; padding: 14px 32px; "
-                "background-color: #ffffff; color: #111827; "
-                "text-decoration: none; font-weight: 600; "
-                "border-radius: 30px; border: 1px solid #d1d5db; "
-                "box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); font-size: 15px;"
-            )
+            btn_text = "Save Card to Secure Booking" if is_setup else f"Complete Payment — ${amount} AUD"
+            note_text = "No charge is made today. Your card is saved securely to hold the reservation." if is_setup else "Your payment is processed securely via Stripe. Standard cancellation policies apply."
             
             payment_section = f'''
-            <div style="text-align: center; margin: 30px 0; padding: 30px 20px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px;">
-                <h3 style="margin-top: 0; color: #111827; font-size: 18px;">Payment Required</h3>
-                <p style="font-size: 15px; color: #4b5563; margin-bottom: 25px; line-height: 1.5;">Please complete your payment securely using the link below to finalize and secure your reservation. Standard cancellation policies apply.</p>
-                <a href="{payment_link}" style="{btn_style}">{btn_text}</a>
+            <div style="margin: 28px 0; padding: 24px; background: #f8f8f8; border: 1px solid #e0e0e0; border-radius: 6px;">
+                <div style="font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #888888; margin-bottom: 12px;">Payment Required</div>
+                <p style="font-size: 14px; color: #555555; margin: 0 0 20px 0; line-height: 1.6;">{note_text}</p>
+                <a href="{payment_link}" style="display: inline-block; padding: 13px 28px; background-color: #111111; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 5px; font-size: 14px; letter-spacing: 0.2px;">{btn_text}</a>
             </div>
             '''
         
@@ -249,7 +241,7 @@ class EmailService:
 
     async def send_booking_confirmation(self, name: str, email: str, date: str, time: str, service: str = "Beauty Consultation", business_name: str = "ibrow threading"):
         """Send a beautiful booking confirmation email."""
-        subject = f"✨ Booking Confirmed - {service}"
+        subject = f"Booking Confirmed — {service}"
         
         html = self._base_template(
             badge="Booking Confirmed",
@@ -511,7 +503,7 @@ class EmailService:
             logger.warning("No owner email provided for booking approval")
             return False
         
-        subject = f"📋 NEW BOOKING: {guest_name} - {room_type.title()} Room"
+        subject = f"New Booking Request: {guest_name} — {room_type.title()} Room"
         
         # Format dates nicely
         try:
@@ -534,36 +526,22 @@ class EmailService:
             dashboard_url = "https://ovela.dev/motel/notifications"
             
             action_buttons_html = f'''
-            <div style="margin: 32px 0; padding: 24px; background: #f9f9fa; border-radius: 12px; border: 1px solid #e5e5e7;">
-                <div style="font-size: 14px; font-weight: 700; color: #1d1d1f; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px;">Quick Actions</div>
+            <div style="margin: 28px 0; padding: 24px; background: #f8f8f8; border: 1px solid #e0e0e0; border-radius: 6px;">
+                <div style="font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #888888; margin-bottom: 16px;">Actions</div>
                 
-                <div style="margin-bottom: 12px;">
-                    <a href="{approve_url}" style="display: inline-block; padding: 12px 24px; background: #22c55e; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">✅ Approve Booking</a>
+                <div style="margin-bottom: 10px;">
+                    <a href="{approve_url}" style="display: inline-block; padding: 11px 22px; background: #1a7f4b; color: white; text-decoration: none; border-radius: 5px; font-weight: 600; font-size: 13px; letter-spacing: 0.2px;">Approve Booking</a>
                 </div>
                 
-                <div style="margin-bottom: 12px;">
-                    <a href="{reject_url}" style="display: inline-block; padding: 12px 24px; background: #ef4444; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">❌ Reject - Call Guest</a>
+                <div style="margin-bottom: 10px;">
+                    <a href="{reject_url}" style="display: inline-block; padding: 11px 22px; background: #c0392b; color: white; text-decoration: none; border-radius: 5px; font-weight: 600; font-size: 13px; letter-spacing: 0.2px;">Decline &amp; Contact Guest</a>
                 </div>
                 
                 <div>
-                    <a href="{dashboard_url}" style="display: inline-block; padding: 12px 24px; background: #3b82f6; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 14px;">📝 Open Dashboard</a>
+                    <a href="{dashboard_url}" style="display: inline-block; padding: 11px 22px; background: #ffffff; color: #333333; text-decoration: none; border-radius: 5px; font-weight: 600; font-size: 13px; border: 1px solid #cccccc;">Open Dashboard</a>
                 </div>
                 
-                <div style="margin-top: 20px; padding: 16px; background: #e8f4fd; border-radius: 8px; border-left: 4px solid #0066cc;">
-                    <div style="font-size: 13px; color: #1d4ed8; font-weight: 600; margin-bottom: 8px;">ℹ️ How These Links Work:</div>
-                    <ul style="margin: 0; padding-left: 18px; font-size: 12px; color: #1e40af; line-height: 1.6;">
-                        <li><strong>One-time use only</strong> — each link can only be clicked once</li>
-                        <li><strong>Approve</strong> = Confirms booking + sends guest confirmation email</li>
-                        <li><strong>Reject</strong> = Cancels booking + shows phone to call guest</li>
-                        <li><strong>Need to change?</strong> Use the Dashboard after first click</li>
-                    </ul>
-                </div>
-                
-                <p style="margin-top: 16px; font-size: 12px; color: #86868b;">Links expire in 48 hours.</p>
-            </div>
-            
-            <div style="background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-top: 16px;">
-                <span style="font-size: 14px; color: #856404;">⚠️ <strong>Reminder:</strong> Add to your CRM after approving!</span>
+                <p style="margin: 16px 0 0 0; font-size: 12px; color: #aaaaaa;">Each link is single-use. Approve sends the guest a confirmation email. Decline cancels the hold and shows you the guest contact details. Links expire in 48 hours.</p>
             </div>
             '''
         
@@ -573,42 +551,66 @@ class EmailService:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
-    <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
-        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
-            <div style="padding: 40px 30px 30px; text-align: center; background: #ffffff; border-bottom: 1px solid #f0f0f0;">
-                <div style="font-size: 32px; font-weight: 700; letter-spacing: -0.03em; color: #000000; margin-bottom: 8px;">{business_name}</div>
-                <div style="font-size: 14px; color: #86868b; font-weight: 500;">New Booking Request</div>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #1a1a1a; background-color: #f0f0f0; margin: 0; padding: 0; -webkit-font-smoothing: antialiased;">
+    <div style="width: 100%; background-color: #f0f0f0; padding: 40px 10px;">
+        <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08);">
+
+            <!-- Header -->
+            <div style="padding: 32px 40px 24px; border-bottom: 1px solid #e8e8e8;">
+                <div style="font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: #888888; margin-bottom: 8px;">Coal Creek Motel &mdash; New Booking</div>
+                <div style="font-size: 20px; font-weight: 700; color: #111111; letter-spacing: -0.3px;">Booking Request: Approval Required</div>
             </div>
-            
-            <div style="padding: 32px 30px;">
-                <div style="display: inline-block; padding: 6px 12px; background: #000000; color: #ffffff; border-radius: 20px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 24px;">Approval Needed</div>
-                
-                <h1 style="font-size: 24px; font-weight: 700; color: #1d1d1f; margin-bottom: 20px;">New booking from {guest_name}</h1>
-                
-                <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
-                    <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Guest:</strong> {guest_name}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Phone:</strong> <a href="tel:{guest_phone}" style="color: #0066cc;">{guest_phone}</a></td></tr>
-                        {f'<tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Email:</strong> <a href="mailto:{guest_email}" style="color: #0066cc;">{guest_email}</a></td></tr>' if guest_email else ''}
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Room:</strong> {room_type.title()} Room</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-in:</strong> {check_in_fmt}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-out:</strong> {check_out_fmt}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Nights:</strong> {num_nights}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 18px; color: #1d1d1f; font-weight: 700;"><strong>Total:</strong> ${total_amount}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 13px; color: #86868b;">Ref: {booking_reference}</td></tr>
+
+            <!-- Body -->
+            <div style="padding: 28px 40px;">
+
+                <p style="font-size: 15px; line-height: 1.65; color: #555555; margin: 0 0 24px 0;">A new booking request has been received via Ovela AI. Please review the details below and take action.</p>
+
+                <!-- Booking Details -->
+                <div style="border: 1px solid #e4e4e4; border-left: 3px solid #1a1a1a; border-radius: 4px; padding: 20px 24px; margin: 0 0 24px 0; background: #fafafa;">
+                    <div style="font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #888888; margin-bottom: 8px;">Booking Reference</div>
+                    <div style="font-size: 22px; font-weight: 700; color: #111111; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #eeeeee;">{booking_reference}</div>
+                    <table style="width: 100%; border-collapse: collapse;" border="0" cellpadding="0" cellspacing="0">
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; width: 100px; vertical-align: top;">Guest</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; font-weight: 600;">{guest_name}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Phone</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;"><a href="tel:{guest_phone}" style="color: #1a1a1a; text-decoration: underline;">{guest_phone}</a></td>
+                        </tr>
+                        {f'<tr><td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Email</td><td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;"><a href="mailto:{guest_email}" style="color: #1a1a1a; text-decoration: underline;">{guest_email}</a></td></tr>' if guest_email else ''}
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Room</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;">{room_type.title()} Room</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Check-in</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;">{check_in_fmt}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Check-out</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;">{check_out_fmt}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Nights</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;">{num_nights}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 12px 0 8px; font-size: 13px; color: #888888; border-top: 1px solid #dddddd; vertical-align: top; font-weight: 600;">Total</td>
+                            <td style="padding: 12px 0 8px; font-size: 18px; color: #111111; border-top: 1px solid #dddddd; font-weight: 700;">${total_amount} AUD</td>
+                        </tr>
                     </table>
                 </div>
-                
-                <div style="text-align: center; margin: 30px 0;">
-                    <a href="tel:{guest_phone}" style="display: inline-block; padding: 14px 28px; background-color: #000000; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">📞 Call {guest_name}</a>
-                </div>
-                
+
+                <p style="font-size: 13px; color: #888888; margin: 0 0 16px 0;">To call the guest directly: <a href="tel:{guest_phone}" style="color: #1a1a1a; font-weight: 600;">{guest_phone}</a></p>
+
                 {action_buttons_html}
             </div>
-            
-            <div style="padding: 30px; text-align: center; background: #f9f9fa; border-top: 1px solid #f0f0f0;">
-                <p style="font-size: 12px; color: #86868b;">Powered by Ovela AI</p>
+
+            <!-- Footer -->
+            <div style="padding: 20px 40px; background: #f7f7f7; border-top: 1px solid #e8e8e8;">
+                <p style="margin: 0; font-size: 12px; color: #aaaaaa; line-height: 1.6; text-align: center;">Ovela AI &bull; Booking Management System<br>This is a system notification. Please do not reply to this email.</p>
             </div>
         </div>
     </div>
@@ -760,7 +762,7 @@ class EmailService:
             logger.info("No guest email - skipping confirmation")
             return False
         
-        subject = f"✅ Booking Confirmed - {business_name} ({booking_reference})"
+        subject = f"Booking Confirmed — {business_name} ({booking_reference})"
         
         # Format dates nicely
         try:
@@ -812,13 +814,13 @@ class EmailService:
             return False
         
         if mode == "setup":
-            subject = f"🛡️ Card Secured - Booking {booking_reference}"
-            title = "Booking Secured (Card on File)"
-            desc = "The customer has securely saved their card on file. This booking is confirmed and ready to be added to your CRM."
+            subject = f"Card Secured — Booking {booking_reference}"
+            title = "Card Secured"
+            desc = f"The guest has securely saved their card details via Stripe. Booking {booking_reference} is confirmed and ready to be entered into your property management system."
         else:
-            subject = f"💰 Payment Received - Booking {booking_reference}"
-            title = "Booking Paid & Confirmed"
-            desc = "The customer has completed payment. This booking is ready to be added to your CRM."
+            subject = f"Payment Received — Booking {booking_reference}"
+            title = "Payment Confirmed"
+            desc = f"Payment for booking {booking_reference} has been received in full. Please add this reservation to your property management system at your earliest convenience."
         
         # Format dates nicely
         try:
@@ -836,47 +838,69 @@ class EmailService:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; color: #1d1d1f; background-color: #f5f5f7; margin: 0; padding: 0;">
-    <div style="width: 100%; background-color: #f5f5f7; padding: 40px 10px;">
-        <div style="max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
-            <div style="padding: 40px 30px 30px; text-align: center; background: #ffffff; border-bottom: 1px solid #f0f0f0;">
-                <div style="font-size: 24px; font-weight: 700; letter-spacing: -0.03em; color: #000000;">{title}</div>
-                <div style="font-size: 14px; color: #86868b; font-weight: 500; margin-top: 4px;">Ready to Process</div>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #1a1a1a; background-color: #f0f0f0; margin: 0; padding: 0; -webkit-font-smoothing: antialiased;">
+    <div style="width: 100%; background-color: #f0f0f0; padding: 40px 10px;">
+        <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.08);">
+
+            <!-- Header -->
+            <div style="padding: 32px 40px 24px; border-bottom: 1px solid #e8e8e8;">
+                <div style="font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: #888888; margin-bottom: 8px;">Coal Creek Motel — Staff Notification</div>
+                <div style="font-size: 20px; font-weight: 700; color: #111111; letter-spacing: -0.3px;">{title}</div>
             </div>
-            
-            <div style="padding: 32px 30px;">
-                <h1 style="font-size: 20px; font-weight: 700; color: #1d1d1f; margin-bottom: 16px;">{title}</h1>
-                
-                <p style="font-size: 15px; color: #86868b; margin-bottom: 24px;">{desc}</p>
-                
-                <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 12px; padding: 24px; margin: 24px 0;">
-                    <table style="width: 100%;" border="0" cellpadding="0" cellspacing="0">
-                        <tr><td style="padding: 8px 0; font-size: 13px; color: #86868b;">Booking Reference</td></tr>
-                        <tr><td style="padding: 0 0 16px; font-size: 20px; color: #1d1d1f; font-weight: 700;">{booking_reference}</td></tr>
-                        
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Customer:</strong> {customer_name}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Email:</strong> {customer_email}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Room:</strong> {room_type.title()} Room</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-in:</strong> {check_in_fmt}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Check-out:</strong> {check_out_fmt}</td></tr>
-                        <tr><td style="padding: 8px 0; font-size: 15px; color: #1d1d1f;"><strong>Nights:</strong> {num_nights}</td></tr>
-                        <tr><td style="padding: 16px 0 8px; font-size: 22px; color: #22c55e; font-weight: 700; border-top: 1px solid #e5e5e7;">Amount Paid: ${amount_paid}</td></tr>
+
+            <!-- Body -->
+            <div style="padding: 28px 40px;">
+
+                <p style="font-size: 15px; line-height: 1.65; color: #555555; margin: 0 0 24px 0;">{desc}</p>
+
+                <!-- Booking Details -->
+                <div style="border: 1px solid #e4e4e4; border-left: 3px solid #1a1a1a; border-radius: 4px; padding: 20px 24px; margin: 0 0 24px 0; background: #fafafa;">
+                    <div style="font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #888888; margin-bottom: 8px;">Booking Reference</div>
+                    <div style="font-size: 22px; font-weight: 700; color: #111111; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #eeeeee;">{booking_reference}</div>
+                    <table style="width: 100%; border-collapse: collapse;" border="0" cellpadding="0" cellspacing="0">
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; width: 100px; vertical-align: top;">Guest</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; font-weight: 600;">{customer_name}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Email</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;">{customer_email}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Room</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;">{room_type.title()} Room</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Check-in</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;">{check_in_fmt}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Check-out</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;">{check_out_fmt}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 7px 0; font-size: 13px; color: #888888; border-top: 1px solid #eeeeee; vertical-align: top;">Nights</td>
+                            <td style="padding: 7px 0; font-size: 13px; color: #333333; border-top: 1px solid #eeeeee;">{num_nights}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 12px 0 8px; font-size: 13px; color: #888888; border-top: 1px solid #dddddd; vertical-align: top; font-weight: 600;">Amount</td>
+                            <td style="padding: 12px 0 8px; font-size: 18px; color: #1a7f4b; border-top: 1px solid #dddddd; font-weight: 700;">${amount_paid} AUD</td>
+                        </tr>
                     </table>
                 </div>
-                
-                <div style="background: #f9f9fa; border: 1px solid #e5e5e7; border-radius: 8px; padding: 16px; margin: 24px 0;">
-                    <p style="margin: 0; font-size: 14px; color: #1d1d1f;">
-                        <strong>✅ Next Step:</strong> Add this booking to your PMS/CRM
-                    </p>
+
+                <div style="padding: 16px 20px; background: #f8f8f8; border: 1px solid #e0e0e0; border-radius: 4px; margin-bottom: 24px;">
+                    <p style="margin: 0; font-size: 13px; color: #555555; line-height: 1.6;">Please add this booking to your property management system. Guest confirmation has been sent automatically.</p>
                 </div>
-                
-                <div style="text-align: center; margin: 30px 0;">
-                    <a href="https://ovela-backend-278930799830.australia-southeast1.run.app/dashboard" style="display: inline-block; padding: 14px 28px; background-color: #3b82f6; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 30px; font-size: 15px;">View in Dashboard</a>
+
+                <div style="text-align: center;">
+                    <a href="https://ovela.dev/dashboard/reservations" style="display: inline-block; padding: 12px 24px; background-color: #111111; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 5px; font-size: 13px;">View in Dashboard</a>
                 </div>
             </div>
-            
-            <div style="padding: 30px; text-align: center; background: #f9f9fa; border-top: 1px solid #f0f0f0;">
-                <p style="font-size: 12px; color: #86868b;">Powered by Ovela AI</p>
+
+            <!-- Footer -->
+            <div style="padding: 20px 40px; background: #f7f7f7; border-top: 1px solid #e8e8e8;">
+                <p style="margin: 0; font-size: 12px; color: #aaaaaa; line-height: 1.6; text-align: center;">Ovela AI &bull; Booking Management System<br>This notification was sent automatically upon payment confirmation.</p>
             </div>
         </div>
     </div>

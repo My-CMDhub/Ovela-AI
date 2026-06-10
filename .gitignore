@@ -28,14 +28,15 @@
 **/.venv/
 **/logs/
 
-# Ignore test files and local dev configurations
-backend/tests/
+backend/tests/**
+!backend/tests/run_multi_agent_evaluation.py
+!backend/tests/evaluation_run.json
+!backend/tests/asr_noise_simulator.py
 backend/scripts/test_email_zoho.py
 backend/redeploy-guide.md
 backend/Procfile
 backend/stream
 
-# Ignore all markdown files except root README.md and evaluation methodology
 **/*.md
 !/README.md
 !/docs/EVALUATION_METHODOLOGY.md

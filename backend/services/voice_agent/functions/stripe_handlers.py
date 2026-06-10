@@ -45,14 +45,18 @@ def create_checkout_session(
     success_url: Optional[str] = None,
     cancel_url: Optional[str] = None,
     expires_at: Optional[int] = None,
+    tenant_id: Optional[str] = "coalcreek",
 ) -> Optional[str]:
     """
     Create a Stripe Checkout Session for a motel room booking.
 
-    Returns the hosted checkout URL as a string so it can be sent to the
-    guest via SMS or email immediately after the booking call.
+    Returns a ``(url, session_id)`` tuple so callers can:
+      - Send the ``url`` to the guest via email/SMS.
+      - Persist the ``session_id`` to Appwrite for webhook fallback lookup
+        (``checkout.session.completed`` event carries only the session ID,
+         not the booking_ref, when metadata is missing or corrupted).
 
-    Never raises — returns None on any Stripe API error.
+    Returns ``(None, None)`` on any Stripe API error — never raises.
 
     Args:
         amount_aud:   Booking amount in AUD dollars (e.g. 150 for $150).
@@ -67,11 +71,11 @@ def create_checkout_session(
         expires_at:   Unix timestamp for session expiry; defaults to now+1800.
 
     Returns:
-        Stripe hosted checkout URL (str) or None on failure.
+        ``(url: str, session_id: str)`` on success, or ``(None, None)`` on failure.
     """
     if not _STRIPE_CONFIGURED:
         logger.warning("💳 Stripe not configured (STRIPE_SECRET_KEY missing) — skipping checkout creation")
-        return None
+        return None, None
 
     try:
         # Normalize room type formatting
@@ -87,6 +91,8 @@ def create_checkout_session(
         _expires_at = expires_at if expires_at else int(time.time()) + 1800
 
         metadata = {"room_type": room_type}
+        if tenant_id:
+            metadata["tenant_id"] = tenant_id
         if booking_ref:
             metadata["booking_ref"] = booking_ref
         if guest_email:
@@ -132,12 +138,13 @@ def create_checkout_session(
         )
 
         logger.info(
-            "💳 Stripe checkout session created | ref=%s | amount=AUD$%d | room=%s",
+            "💳 Stripe checkout session created | ref=%s | amount=AUD$%d | room=%s | sid=%s",
             booking_ref or "N/A",
             amount_aud,
             room_type,
+            session.id,
         )
-        return session.url
+        return session.url, session.id
 
     except Exception as exc:
         logger.error(
@@ -146,4 +153,4 @@ def create_checkout_session(
             amount_aud,
             exc,
         )
-        return None
+        return None, None

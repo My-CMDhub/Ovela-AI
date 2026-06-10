@@ -53,7 +53,7 @@ from .latency_tracker import LatencyTracker
 from .memory import CallerMemoryBank
 from services.motel_knowledge_base import set_tenant_context
 
-CARTESIA_VOICE_ID = "f9836c6e-a0bd-460e-9d3c-f7299fa60f94"
+CARTESIA_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
 # CARTESIA_VOICE_ID = "3e1ed423-17e5-4773-b87c-25b031106e41" - Paul AU
 # CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab" - Blake US
 # CARTESIA_VOICE_ID = "47c38ca4-5f35-497b-b1a3-415245fb35e1" - Daniel US
@@ -162,7 +162,6 @@ class VoiceAgentHandler:
         self.call_start_time = None
         self.call_sid = None
         self.exchange_count = 0
-        self.customer_id = None # Track Square Customer ID for order linking
 
         self.booking_completed = False
         
@@ -204,7 +203,7 @@ class VoiceAgentHandler:
         # Transcript for analytics
         self.transcript = []
         self.call_outcome = "completed"
-        self.call_reference = None # Unified reference for bookings/orders
+        self.call_reference = None # Unified reference for bookings
         
         # Environment detection (demo vs production call)
         self.is_demo_call = False  # Set in _handle_twilio_start based on custom parameters
@@ -216,8 +215,6 @@ class VoiceAgentHandler:
         # Smart Memory (for latency optimization & amnesia fix)
         self.memory = {
             "name": None,
-            "order_summary": None,
-            "pickup_time": None,
             # Coal Creek motel booking context (session-only)
             "check_in": None,
             "check_out": None,
@@ -226,9 +223,6 @@ class VoiceAgentHandler:
             "notes": None,
         }
         
-        # Order Tracking
-        self.order_id = None
-        self.pending_order = None # [NEW] Batch/Draft order buffer
         self._availability_cache = {}
         
         # Tenant Configuration (Database Driven)
@@ -327,6 +321,65 @@ class VoiceAgentHandler:
             "ending the call now",
         }
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # N4: GLOBAL MEANINGLESS INTERRUPTION FILTER
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # ── Single-word affirmations (checked word-by-word after split) ───────────
+    _MEANINGLESS_SINGLE_WORDS = frozenset([
+        "sure", "okay", "ok", "yep", "yes", "right",
+        "cool", "perfect", "alright", "yeah",
+        "mhm", "mm", "mmm", "gotcha", "yea", "yup",
+        "uh", "um", "ah", "oh", "okey", "okey-dokey",
+        "hhmm", "hmm", "ahh",
+    ])
+
+    # ── Multi-word / hyphenated phrases (checked as whole normalized phrase) ──
+    _MEANINGLESS_PHRASES = frozenset([
+        "uh huh", "uh-huh", "go ahead", "all right",
+        "yeah okay", "yeah sure", "okay sure", "ok sure",
+        "uh yeah", "hmm okay", "yeah yeah", "ok ok",
+        "sure okay", "right okay", "yep okay", "yeah ok",
+        "oh okay", "oh ok", "ah okay", "ah ok",
+        "yep sure", "yes sure", "yes okay", "yes ok",
+        "i see", "got it",
+    ])
+
+    # ── Wait keywords for safety-net silence pause extension (C2/I5) ──────────
+    _WAIT_KEYWORDS_EXTENDED = (
+        "sec", "moment", "hold", "paying", "checking", "minute", "doing",
+        "processing", "just a", "bear with", "one sec", "hang on",
+        "let me", "i'm looking", "i have", "yeah i", "give me", "finding",
+        "wait", "hang tight",
+    )
+
+    def _is_meaningless_interruption(self, text: str) -> bool:
+        """
+        N4: Returns True when the utterance is a short affirmation-only noise
+        that should be silently discarded while the system is busy.
+
+        Two-stage check:
+          Stage 1 — direct whole-phrase match for multi-word affirmations
+                     ("uh huh", "go ahead", etc. won't survive word-splitting)
+          Stage 2 — word-by-word check. If ALL words in the utterance are
+                     single-word fillers, it is discarded.
+        """
+        if not text or not text.strip():
+            return False
+        normalized = self._normalize_phrase(text)
+        if not normalized:
+            return False
+
+        # Stage 1: direct whole-phrase match (handles multi-word affirmations)
+        if normalized in self._MEANINGLESS_PHRASES:
+            return True
+
+        # Stage 2: word-by-word check (entirely composed of fillers)
+        words = normalized.split()
+        if not words:
+            return False
+        return all(w in self._MEANINGLESS_SINGLE_WORDS for w in words)
+
 
 
     # =========================================================================
@@ -340,7 +393,7 @@ class VoiceAgentHandler:
         This configures:
         - Audio encoding (mulaw for Twilio)
         - STT model (flux-general-en)
-        - LLM (Google gemini-2.5-flash-lite / gpt-4.1-nano edge-gateway)
+        - LLM (Google gemini-2.5-flash / gemini-2.0-flash edge-gateway)
         - TTS (Deepgram aura-2-thalia-en)
         - System prompt and functions
         """
@@ -372,14 +425,12 @@ class VoiceAgentHandler:
             
         # Extract voice settings from DB config
         voice_settings = self.tenant_config.get("voice_settings", {})
-        _stt_model = voice_settings.get("model", "nova-2")
-        _endpointing = voice_settings.get("endpointing",
-                        voice_settings.get("utterance_end_ms", 300 if "nova-3" in _stt_model else 300))
+        _stt_model = voice_settings.get("model", "flux-general-en")
+        _is_flux = _stt_model.startswith("flux-")
 
         # ── Domain vocabulary for accent-resilient STT ────────────────────────
-        # Nova-2 uses 'keyterms' (flat list of strings).
-        # Nova-3 uses 'vocabulary' (list of {"word": str} dicts).
-        # Sending the wrong one is silently ignored — wasting the accuracy boost.
+        # All Deepgram models (Nova-2, Nova-3, Flux) accept 'keyterms' as a flat
+        # list of strings inside the Voice Agent API settings payload.
         # ─────────────────────────────────────────────────────────────────────
         _domain_terms = [
             "Coal Creek", "Chiltern", "Queen Room", "King Room",
@@ -387,12 +438,47 @@ class VoiceAgentHandler:
             "gmail", "hotmail", "yahoo", "outlook", "icloud",
             "booking", "check-in", "check-out",
         ]
+
         _stt_provider: dict = {
             "type": "deepgram",
             "model": _stt_model,
-            "endpointing": _endpointing,
             "keyterms": _domain_terms,
         }
+
+        if _is_flux:
+            # Flux requires version:v2 to activate the /v2/listen engine inside
+            # the Voice Agent API.  EOT params replace legacy 'endpointing'.
+            #
+            # eot_threshold      — confidence gate to close a turn (0.5-0.9).
+            #                      Higher = more reliable but slightly slower.
+            # eot_timeout_ms     — hard silence fallback in ms.  If the user
+            #                      stops talking and confidence never crosses
+            #                      eot_threshold, the turn is force-closed here.
+            # eager_eot_threshold — (optional) lower confidence gate that fires
+            #                      BEFORE eot_threshold to start LLM processing
+            #                      early.  Must be <= eot_threshold.  Increases
+            #                      LLM call volume (~50-70%) — enable for demo.
+            _stt_provider["version"] = "v2"
+            _stt_provider["eot_threshold"]  = float(voice_settings.get("eot_threshold", os.getenv("FLUX_EOT_THRESHOLD", "0.75")))
+            _stt_provider["eot_timeout_ms"] = int(voice_settings.get("eot_timeout_ms", os.getenv("FLUX_EOT_TIMEOUT_MS", "4000")))
+            _eager = voice_settings.get("eager_eot_threshold", os.getenv("FLUX_EAGER_EOT_THRESHOLD", ""))
+            if _eager:
+                _stt_provider["eager_eot_threshold"] = float(_eager)
+            logger.info(
+                "🌊 STT: flux (%s) | eot_threshold=%.2f | eot_timeout_ms=%d%s",
+                _stt_model,
+                _stt_provider["eot_threshold"],
+                _stt_provider["eot_timeout_ms"],
+                f" | eager_eot={_stt_provider['eager_eot_threshold']}" if _eager else "",
+            )
+        else:
+            # Nova-2 / Nova-3 legacy path — uses silence-based endpointing.
+            _endpointing = voice_settings.get(
+                "endpointing",
+                voice_settings.get("utterance_end_ms", 300)
+            )
+            _stt_provider["endpointing"] = _endpointing
+            logger.info("🔷 STT: nova (%s) | endpointing=%dms", _stt_model, _endpointing)
 
         return {
             "type": "Settings",
@@ -425,11 +511,11 @@ class VoiceAgentHandler:
         Model priority (highest → lowest):
           1. voice_settings.llm_model in tenant DB  
           2. LLM_MODEL env var (Cloud Run)             ← global override
-          3. gemini-2.5-flash-lite primary default
+          3. gemini-2.5-flash primary default
 
         All models below are Deepgram-managed — only your DEEPGRAM_API_KEY needed.
 
-          Google   : gemini-2.5-flash-lite*, gemini-2.5-flash-lite-lite, gemini-2.0-flash
+          Google   : gemini-2.5-flash*, gemini-2.5-flash-lite, gemini-2.0-flash
           OpenAI   : gpt-4.1-nano, gpt-4.1-mini, gpt-4o-mini
           Anthropic: claude-sonnet-4-6, claude-sonnet-4-5
           (* = current default)
@@ -454,8 +540,8 @@ class VoiceAgentHandler:
         elif llm_model.startswith("gpt-") or llm_model.startswith("openai/"):
             provider_type, model = "open_ai", llm_model
         else:
-            provider_type = "open_ai"
-            model = "gpt-4.1-mini"
+            provider_type = "google"
+            model = "gemini-2.5-flash"
             source = "default"
 
         logger.info(f"🧠 LLM [{source}]: {provider_type} / {model}")
@@ -464,7 +550,10 @@ class VoiceAgentHandler:
             "provider": {
                 "type": provider_type,
                 "model": model,
-                "temperature": 0.45
+                # 0.35 — stable-creative sweet spot for multi-turn voice booking:
+                # low enough to keep dates/names/emails consistent across turns,
+                # high enough to vary phrasing so it doesn't sound robotic.
+                "temperature": 0.35
             },
             "prompt": self._get_active_prompt(),
             "functions": self._get_active_functions()
@@ -500,32 +589,47 @@ class VoiceAgentHandler:
         )
         
         # Smart Memory Injection
-        memory_context = ""
-        _cc_booking = (
-            self.tenant_id == "coalcreek" and
-            any(self.memory[k] for k in ("check_in", "check_out", "room_type", "num_guests", "notes"))
-        )
-        if self.memory["name"] or self.memory["order_summary"] or _cc_booking:
-            memory_context = f"\n\n=== CURRENT MEMORY (DO NOT FORGET) ===\n"
-            if self.memory["name"]:
-                memory_context += f"• Guest Name: {self.memory['name']}\n"
-            if self.memory["order_summary"]:
-                memory_context += f"• Current Order: {self.memory['order_summary']}\n"
-            if self.memory["pickup_time"]:
-                memory_context += f"• Desired Pickup: {self.memory['pickup_time']}\n"
-            # Coal Creek booking details
-            if self.tenant_id == "coalcreek":
-                if self.memory["check_in"]:
-                    memory_context += f"• Preferred Check-in: {self.memory['check_in']}\n"
-                if self.memory["check_out"]:
-                    memory_context += f"• Preferred Check-out: {self.memory['check_out']}\n"
-                if self.memory["room_type"]:
-                    memory_context += f"• Preferred Room Type: {self.memory['room_type']}\n"
-                if self.memory["num_guests"]:
-                    memory_context += f"• Number of Guests: {self.memory['num_guests']}\n"
-                if self.memory["notes"]:
-                    memory_context += f"• Special Requests / Notes: {self.memory['notes']}\n"
-            memory_context += "========================================\n"
+        memory_context = f"\n\n=== CURRENT MEMORY (DO NOT FORGET) ===\n"
+        memory_context += f"• Caller Phone: {self.user_phone}\n"
+        if self.memory.get("name"):
+            memory_context += f"• Guest Name: {self.memory['name']}\n"
+        
+        # Tenant-Specific Memory Injection
+        if self.tenant_id == "coalcreek":
+            if self.memory.get("check_in"):
+                memory_context += f"• Preferred Check-in: {self.memory['check_in']}\n"
+            if self.memory.get("check_out"):
+                memory_context += f"• Preferred Check-out: {self.memory['check_out']}\n"
+            if self.memory.get("room_type"):
+                memory_context += f"• Preferred Room Type: {self.memory['room_type']}\n"
+            if self.memory.get("num_guests"):
+                memory_context += f"• Number of Guests: {self.memory['num_guests']}\n"
+            if self.memory.get("notes"):
+                memory_context += f"• Special Requests / Notes: {self.memory['notes']}\n"
+                        
+        if self.custom_params.get("transfer_failed") == "true":
+            memory_context += "• CRITICAL: You just attempted to transfer the user to staff, but NO ONE ANSWERED. The user has been returned to you. Apologize that the front desk is busy right now, and ask if there's anything else you can help them with directly or if they want to leave a message. DO NOT attempt to transfer them  until user explicitly ask for it again.\n"
+            
+        # Inject Pre-Loaded Active Booking (For fuzzy-matching / instant confirmation)
+        if self.memory.get("active_booking"):
+            ab = self.memory["active_booking"]
+            memory_context += f"\n=== ACTIVE BOOKING PRE-LOADED ===\n"
+            memory_context += f"• Reference: {ab.get('booking_reference')}\n"
+            memory_context += f"• Guest Name: {ab.get('guest_name')}\n"
+            memory_context += f"• Guest Email: {ab.get('guest_email', '')}\n"
+            memory_context += f"• Room Type: {ab.get('room_type')}\n"
+            memory_context += f"• Dates: {ab.get('check_in_date')} to {ab.get('check_out_date')} ({ab.get('num_nights')} nights)\n"
+            memory_context += f"• Status: {ab.get('status')} / Payment: {ab.get('payment_status')}\n"
+            memory_context += (
+                "IMPORTANT: You ALREADY have the user's booking details loaded above. "
+                "If the user asks to check or confirm their booking and you found correct matching then doesn't need to call lookup_booking. "
+                "Instead, fuzzy-match their spoken name against the 'Guest Name' above (e.g. 'Drew' matches 'Dhruv'). "
+                "If it's a match, just confirm the details directly with them. if not then call lookup_booking function explicitly with proper details.\n"
+                "SECURITY RULE: Before making any changes or sending links for this booking, politely ask the user to verify their email address to confirm their identity.\n"
+            )
+
+        memory_context += "========================================\n"
+
         
         # Append function-call speaking rules to the prompt.
         # These go into agent.think.prompt (the ONLY valid place for 
@@ -561,7 +665,7 @@ class VoiceAgentHandler:
             voice_id = CARTESIA_VOICE_ID
             
         # Get dynamic speed and volume parameters for Cartesia provider
-        speed = voice_settings.get("speed", 0.8)
+        speed = voice_settings.get("speed", "fast")
         volume = voice_settings.get("volume", 0.8)
         
         logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
@@ -662,16 +766,25 @@ class VoiceAgentHandler:
             ))
 
         # =====================================================================
-        # ASYNC INIT: Fetch profile and tenant config concurrently
+        # ASYNC INIT: Fetch profile, tenant config, and active bookings concurrently
         # Reduces cold start TTFT latency by not blocking sequentially.
         # =====================================================================
         try:
-            logger.info(f"📥 Loading config for tenant: {self.tenant_id} and profile for {self.user_phone[:4]}****")
-            caller_profile, tenant_config = await asyncio.gather(
+            logger.info(f"📥 Loading config, profile, and bookings for tenant: {self.tenant_id} / phone: {self.user_phone[:4]}****")
+            caller_profile, tenant_config, cached_memory, active_bookings = await asyncio.gather(
                 self.caller_memory_bank.get_profile(self.user_phone),
                 db_service.get_tenant_config(self.tenant_id),
+                db_service.get_hot_path_state(self.call_sid),
+                db_service.lookup_motel_reservation(phone=self.user_phone, tenant_id=self.tenant_id),
                 return_exceptions=True
             )
+            
+            # Handle cached memory
+            if isinstance(cached_memory, Exception):
+                logger.error("Failed to load cached memory: %s", cached_memory)
+            elif cached_memory:
+                self.memory.update(cached_memory)
+                logger.info("💾 Hot path state rehydrated for %s", self.call_sid)
             
             # Handle profile result
             if isinstance(caller_profile, Exception):
@@ -682,6 +795,22 @@ class VoiceAgentHandler:
                     logger.info("🧠 Returning guest recognised: %s", self.user_phone[:4] + "****")
                 if caller_profile.get("room_preference"):
                     self.memory["room_type"] = caller_profile["room_preference"]
+            
+            # Handle active bookings result to enable fuzzy-matching pre-load context
+            if isinstance(active_bookings, Exception):
+                logger.error("Failed to load active bookings: %s", active_bookings)
+            elif active_bookings:
+                # Find most recent active/pending reservation
+                for doc in active_bookings:
+                    _ps = doc.get("payment_status") or ""
+                    _bs = doc.get("status") or ""
+                    is_pending = (
+                        _bs in ("reserved", "pending", "pending_payment", "link_sent", "confirmed", "paid")
+                    )
+                    if is_pending:
+                        self.memory["active_booking"] = doc
+                        logger.info("📅 Pre-loaded active booking into memory for fuzzy context: %s", doc.get("booking_reference"))
+                        break
             
             # Handle config result
             if isinstance(tenant_config, Exception):
@@ -900,6 +1029,7 @@ class VoiceAgentHandler:
             
             await self.twilio_ws.send_json(media_message)
             self._twilio_audio_frames_sent += 1
+            self._twilio_audio_bytes_sent = getattr(self, '_twilio_audio_bytes_sent', 0) + len(audio_bytes)
             self.latency.mark_first_audio_out()  # no-op after first frame per turn
             
         except Exception as e:
@@ -989,22 +1119,102 @@ class VoiceAgentHandler:
                 logger.info(f"[User]: {content}")
             
             # ─────────────────────────────────────────────────────────────────
-            # HEURISTIC FILTER DURING FUNCTION CALLS:
-            # Audio now flows to Deepgram while a tool is executing so that
-            # genuine corrections ("wait, I meant next week") are transcribed
-            # and land in the LLM context before the function result arrives.
-            #
-            # Filter rules:
-            #  ≤ 2 words → filler noise ("okay", "uh huh", "yeah") → discard
-            #  > 2 words → meaningful correction → let Deepgram context carry
-            #              it; the LLM will address it when responding to the
-            #              function result.  Add to local transcript for analytics.
+            # N4 & C2/I5: GLOBAL MEANINGLESS INTERRUPTION FILTER & WAIT SIGNAL
             # ─────────────────────────────────────────────────────────────────
-            if self._is_processing_function:
-                word_count = len(content.strip().split())
-                if word_count <= 2:
-                    logger.debug(f"🙉 Short noise during function call ({word_count}w) — discarded")
+            # N4: Global meaningless interruption filter — applied whenever the
+            # system is busy (audio playing, injection pending, silence wait
+            # active via wait_on_request, OR a tool is executing). This prevents
+            # short affirmations from breaking states or triggering response cycles.
+            _silence_paused = (
+                self.silence_monitor.silence_pause_end_time is not None
+                and time.time() < self.silence_monitor.silence_pause_end_time
+            )
+            is_busy = (
+                self._is_system_audio_playing
+                or self._pending_injection_event is not None
+                or _silence_paused
+                or self._is_processing_function
+                or getattr(self, '_ai_is_speaking', False)
+            )
+
+            # Pre-calculate wait and completion signals for advanced filtering
+            _lower = content.lower()
+            is_wait_signal = any(kw in _lower for kw in self._WAIT_KEYWORDS_EXTENDED)
+            is_completion_signal = any(kw in _lower for kw in ["done", "paid", "finished", "ready", "complete", "completed", "sent", "that's it", "all good"])
+            word_count = len(content.strip().split())
+
+            if is_busy:
+                # Discard meaningless noise OR any short utterance (<= 3 words) that isn't a deliberate wait/completion command
+                if self._is_meaningless_interruption(content) or (word_count <= 3 and not (is_wait_signal or is_completion_signal)):
+                    logger.info(
+                        "🙉 N4: Short or meaningless noise '%s' (%dw) discarded while system busy "
+                        "(audio=%s / injection=%s / wait_pause=%s / processing=%s / ai_speaking=%s)",
+                        content[:40],
+                        word_count,
+                        self._is_system_audio_playing,
+                        self._pending_injection_event is not None,
+                        _silence_paused,
+                        self._is_processing_function,
+                        getattr(self, '_ai_is_speaking', False)
+                    )
                     return
+
+            # If we survived the meaningless filter, it's a MEANINGFUL interruption!
+            # If the AI was actively speaking, we must now fire the deferred `clear` 
+            # event and trim the transcript.
+            if getattr(self, '_ai_is_speaking', False):
+                logger.info(f"🛑 Meaningful interruption confirmed ('{content}'). Firing clear event.")
+                
+                # Send clear event to Twilio to stop agent audio
+                clear_message = {
+                    "event": "clear",
+                    "streamSid": self.stream_sid
+                }
+                asyncio.create_task(self.twilio_ws.send_json(clear_message))
+                
+                # INTERRUPTION TRIM
+                tts_start = getattr(self, '_tts_playback_start', None)
+                if tts_start and self.transcript and self.transcript[-1].get('role') == 'ai':
+                    elapsed = time.time() - tts_start
+                    original_text = self.transcript[-1].get('text', '')
+                    trimmed = trim_assistant_transcript(original_text, elapsed)
+                    if trimmed != original_text:
+                        self.transcript[-1]['text'] = trimmed
+                        logger.info(
+                            "✂️ Interruption trim (Sync Layer): %.1fs elapsed → %d→%d words | '%s…'",
+                            elapsed,
+                            len(original_text.split()),
+                            len(trimmed.split()) if trimmed else 0,
+                            trimmed[:40] if trimmed else "(empty)",
+                        )
+                        
+                        # INJECT SYSTEM TAG
+                        if self.deepgram_ws:
+                            try:
+                                inject_msg = {
+                                    "type": "InjectUserMessage",
+                                    "content": "[System Note: Caller interrupted. Continue from last confirmed point.]"
+                                }
+                                asyncio.create_task(self.deepgram_ws.send(json.dumps(inject_msg)))
+                                logger.info("💉 Injected interruption system tag into Deepgram context")
+                            except Exception as e:
+                                logger.warning(f"Failed to inject system tag: {e}")
+
+                # Force AI speaking state to False now that it's truly interrupted
+                self._ai_is_speaking = False
+                self._tts_playback_started_this_turn = False
+                self._final_help_offer_active = False
+
+            # I5: Wait-signal safety net — if the user uses wait keywords,
+            # proactively extend the silence pause by 30s so the soft prompt
+            # doesn't fire while they search for their card/wallet/inbox.
+            if is_wait_signal:
+                logger.info(f"I5: Wait-signal detected in user utterance ('{content}') — extending silence pause +30s")
+                self.silence_monitor.pause_silence(30)
+
+            # HEURISTIC FILTER DURING FUNCTION CALLS:
+            # If a tool is executing, let meaningful corrections (> 3 words or signals) flow through.
+            if self._is_processing_function:
                 # Meaningful correction: record locally but skip all state
                 # changes — the LLM sees it via Deepgram's conversation context.
                 logger.info(f"📝 Meaningful correction during function call ({word_count}w) — LLM will handle post-result")
@@ -1069,6 +1279,9 @@ class VoiceAgentHandler:
             _words = content.split()
             if self._is_explicit_terminal_goodbye(content) or self._is_soft_close_only(content):
                 self.latency.set_turn_type("goodbye")
+                if self._is_explicit_terminal_goodbye(content):
+                    self.silence_monitor.stop()
+                    logger.info("👋 Explicit goodbye detected - stopping silence monitor to prevent 'still there?' prompts")
             elif len(_words) <= 7:
                 self.latency.set_turn_type("short_answer")
             else:
@@ -1083,6 +1296,8 @@ class VoiceAgentHandler:
                     return
                 elif spam_result.get("warning"):
                     await self._speak_system_message(spam_result["warning"], clip_key="abuse_warning")
+
+            # I5: Wait-signal safety net check moved to top of user block.
 
 
 
@@ -1165,9 +1380,31 @@ class VoiceAgentHandler:
         # 'clear' event so injected TTS audio (filler phrases) cannot be wiped.
         # Audio still flows to Deepgram — see _handle_twilio_media.
         # Meaningful corrections are filtered in _handle_conversation_text.
-        if self._is_processing_function:
+        if getattr(self, '_is_processing_function', False):
             logger.debug("🛡️ Suppressing Twilio clear during function call (TTS guard)")
             return
+        
+        # ─────────────────────────────────────────────────────────────────
+        # TTS SYNC LAYER: Check if AI audio is actually still playing in the
+        # user's ear based on bytes sent vs elapsed time.
+        # If it's still playing, suppress immediate `clear` to prevent "mmhmm"
+        # from cutting off the AI prematurely.
+        # ─────────────────────────────────────────────────────────────────
+        if getattr(self, '_ai_is_speaking', False) and hasattr(self, '_tts_playback_start'):
+            bytes_sent = getattr(self, '_twilio_audio_bytes_sent', 0)
+            elapsed_time = time.time() - self._tts_playback_start
+            expected_duration = bytes_sent / 8000.0  # 8000 bytes/sec for 8kHz mulaw
+            
+            if elapsed_time < expected_duration + 0.3:  # 300ms grace period
+                logger.debug(f"🛡️ Sync Layer: Suppressing clear. AI audio still playing ({elapsed_time:.2f}s / {expected_duration:.2f}s)")
+                # Don't clear Twilio audio buffer yet. `_handle_conversation_text` will
+                # clear it if the text proves to be a meaningful interruption.
+                
+                # Still track latency and VAD
+                self.user_speech_start_time = time.time()
+                self.latency.mark_user_vad()
+                self.has_user_spoken = True
+                return
         
         # ─────────────────────────────────────────────────────────────────
         # SYSTEM AUDIO PROTECTION: If we injected system audio (ACKs, farewells),
@@ -1207,48 +1444,12 @@ class VoiceAgentHandler:
         # Notify silence monitor
         self.silence_monitor.on_user_speech()
         
-        # Send clear event to Twilio to stop agent audio immediately
-        clear_message = {
-            "event": "clear",
-            "streamSid": self.stream_sid
-        }
-        await self.twilio_ws.send_json(clear_message)
-
-        # INTERRUPTION TRIM: Prune last AI transcript entry to only include
-        # words actually spoken before the interruption, keeping LLM context
-        # coherent with what the caller heard. Pure math — zero I/O.
-        tts_start = getattr(self, '_tts_playback_start', None)
-        if tts_start and self.transcript and self.transcript[-1].get('role') == 'ai':
-            elapsed = time.time() - tts_start
-            original_text = self.transcript[-1].get('text', '')
-            trimmed = trim_assistant_transcript(original_text, elapsed)
-            if trimmed != original_text:
-                self.transcript[-1]['text'] = trimmed
-                logger.info(
-                    "✂️ Interruption trim: %.1fs elapsed → %d→%d words | '%s…'",
-                    elapsed,
-                    len(original_text.split()),
-                    len(trimmed.split()) if trimmed else 0,
-                    trimmed[:40] if trimmed else "(empty)",
-                )
-                
-                # INJECT SYSTEM TAG
-                if self.deepgram_ws:
-                    try:
-                        inject_msg = {
-                            "type": "InjectUserMessage",
-                            "content": "[System Note: Caller interrupted. Continue from last confirmed point.]"
-                        }
-                        await self.deepgram_ws.send(json.dumps(inject_msg))
-                        logger.info("💉 Injected interruption system tag into Deepgram context")
-                    except Exception as e:
-                        logger.warning(f"Failed to inject system tag: {e}")
-
-        # CRITICAL: Force AI speaking state to False immediately
-        # Deepgram might skip AgentAudioDone if interrupted, causing state lock
-        self._ai_is_speaking = False
-        self._tts_playback_started_this_turn = False
-        self._final_help_offer_active = False
+        # We NO LONGER clear the Twilio audio buffer here.
+        # It is deferred to `_handle_conversation_text` (Sync Layer) which verifies
+        # the text is a meaningful interruption before stopping the AI's speech.
+        
+        # CRITICAL: Do NOT force AI speaking state to False yet!
+        # If it was a false interruption, the AI is actually still speaking.
         # NOTE: do NOT call on_ai_finished_speaking() here — it sets silence_check_start_time
         # to the moment user speaks, which races with the 300ms grace in _handle_agent_audio_done
         # and causes abandon-silence to fire even when user has spoken.
@@ -1276,6 +1477,7 @@ class VoiceAgentHandler:
         
         # Cancel any silence escalation - AI is responding
         self._in_silence_escalation = False
+        self._twilio_audio_bytes_sent = 0
     
     async def _handle_agent_audio_done(self):
         """
@@ -1396,26 +1598,10 @@ class VoiceAgentHandler:
         elif "name" in function_args and function_args["name"]:
             self.memory["name"] = function_args["name"]
             logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
+        elif "guest_name" in function_args and function_args["guest_name"]:
+            self.memory["name"] = function_args["guest_name"]
+            logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
         
-        if "items" in function_args:
-             # Summarize items
-            try:
-                items = function_args["items"]
-                summary_parts = []
-                for item in items:
-                    qty = item.get("quantity", 1)
-                    name = item.get("name", "Item")
-                    mods = item.get("modifiers", [])
-                    mod_str = f" ({', '.join(mods)})" if mods else ""
-                    summary_parts.append(f"{qty}x {name}{mod_str}")
-                self.memory["order_summary"] = ", ".join(summary_parts)
-                logger.info(f"🧠 Memory Updated: Order = {self.memory['order_summary']}")
-            except Exception as e:
-                logger.warning(f"Failed to parse memory items: {e}")
-
-        if "pickup_time" in function_args:
-            self.memory["pickup_time"] = function_args["pickup_time"]
-
         # COAL CREEK BOOKING MEMORY: Capture preferred dates, room type, guest
         # count and notes from check_availability and create_booking_request so
         # the AI never has to ask again mid-conversation.
@@ -1435,6 +1621,10 @@ class VoiceAgentHandler:
             if function_args.get("notes"):
                 self.memory["notes"] = function_args["notes"]
                 logger.info(f"🧠 Memory Updated: notes = {self.memory['notes']}")
+                
+        # Background save of the hot path state so it survives reconnects
+        if getattr(self, "call_sid", None):
+            asyncio.create_task(db_service.save_hot_path_state(self.call_sid, self.memory))
         
         # ─────────────────────────────────────────────────────────────────
         # FAST-START PATH: For check_availability we always need a filler
@@ -1506,7 +1696,7 @@ class VoiceAgentHandler:
         try:
             # ── Execute via dispatcher ──────────────────────────────────────
             ctx = {
-                "pending_order": self.pending_order,
+                "pending_order": getattr(self, "pending_order", None),
                 "availability_cache": self._availability_cache,
             }
             try:
@@ -1625,21 +1815,22 @@ class VoiceAgentHandler:
                 await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
                 return
 
-            # Check for end_call signal (LLM explicitly requested call termination)
-            if result.get("action") == "end_call":
-                confidence = result.get("confidence_level", "unknown")
-                logger.info(f"👋 end_call function called - injecting farewell + scheduling hangup (confidence: {confidence})")
+            # Check for hangup signal (LLM explicitly requested call termination)
+            if result.get("action") == "hangup":
+                confidence = 100
+                logger.info(f"👋 hang_up_call function called - injecting farewell + instant hangup")
                 self._is_hanging_up = True
+                self.silence_monitor.stop()
                 message = result.get("message")
                 if not message:
                     message = get_random_farewell(self.tenant_id)
                     logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
                 # Use the pre-recorded farewell clip if available to eliminate Cartesia TTS network latency
                 # (falls back gracefully to live Cartesia TTS if missing).
-                await self._speak_system_message(message, clip_key="farewell")
-                delay = max(4.0, (len(message) * 0.1) + 2.0)
-                logger.info(f"⏳ Farewell TTS ({len(message)} chars), hangup in {delay:.1f}s")
-                asyncio.create_task(self._scheduled_hangup(delay))
+                # Play farewell and wait for playback to finish, then hang up instantly.
+                await self._speak_system_message(message, clip_key="farewell", wait_for_playback=True)
+                logger.info("👋 Farewell finished playing — hanging up call instantly.")
+                await self._hangup_call()
                 return
 
             # Check for wait_on_request signal
@@ -1665,24 +1856,10 @@ class VoiceAgentHandler:
                 self.booking_completed = True
 
             # Check for order completion
-            if function_name == "submit_order":
-                 if result.get("success") and result.get("action") == "hold":
-                     self.pending_order = result.get("order_details")
-                     logger.info(f"📝 Order Held in Batch: {len(self.pending_order.get('items', []))} items")
-                 elif result.get("success") and result.get("order_id"):
-                     self.order_id = result.get("order_id")
-                     self.call_reference = self.order_id
-                     logger.info(f"🛒 Order captured (Immediate): {self.order_id}")
-
             # Check for booking completion (Motel)
             if function_name == "create_booking_request" and result.get("success"):
                 self.call_reference = result.get("booking_reference")
                 logger.info(f"🏨 Booking captured: {self.call_reference}")
-
-            # SMART MEMORY UPDATE: Capture Customer ID from Lookup
-            if function_name == "lookup_customer" and result.get("found") and result.get("customer_id"):
-                self.customer_id = result.get("customer_id")
-                logger.info(f"🆔 Captured Customer ID: {self.customer_id}")
 
             # I1: Wait for injection ack audio to finish before sending result
             # This creates the natural "Got it. [pause] Here's what I found..." gap.
@@ -1704,6 +1881,7 @@ class VoiceAgentHandler:
             # Release Go Deaf AFTER all post-function speech & transfers are done
             self._is_processing_function = False
             self._filler_played_this_turn = False  # BS3: reset on error path so next turn is not locked
+            self._blocking_interruptions = False
     
     async def _send_function_response(self, call_id: str, function_name: str, result: dict):
         """Send function result back to Deepgram (V1 API format).
@@ -1933,12 +2111,17 @@ class VoiceAgentHandler:
                         logger.info("📨 Sending Hard Cap Summary SMS (Blocking)...")
                         
                         # Build context
-                        intent = self.memory.get("order_summary") or "Customer Inquiry"
+                        intent = "Customer Inquiry"
                         sms_context = ""
-                        if self.pending_order:
-                             items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
-                             sms_context = f" | DRAFT: {items}"
-                        
+                        if self.tenant_id == "coalcreek":
+                            booking_details = []
+                            if self.memory.get("check_in"):
+                                booking_details.append(f"In: {self.memory['check_in']}")
+                            if self.memory.get("room_type"):
+                                booking_details.append(f"Room: {self.memory['room_type']}")
+                            if booking_details:
+                                intent = "Motel Booking Request"
+                                sms_context = f" | Details: {', '.join(booking_details)}"
                         summary_msg = f"⏱️ HARD CAP TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
                         
                         # Use immediate dispatch & AWAIT it
@@ -2078,8 +2261,31 @@ class VoiceAgentHandler:
             self._last_system_tts_error = "CARTESIA_API_KEY missing or empty text"
             return None
         voice_id = self._get_cartesia_voice_id()
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        
+        # Convert config speed (numeric or preset string) to Cartesia ratio (0.6 - 1.5)
+        db_speed = voice_settings.get("speed", "fast")
+        db_volume = voice_settings.get("volume", 0.8)
+        
+        speed_map = {
+            "slowest": 0.7,
+            "slow": 0.85,
+            "normal": 1.0,
+            "fast": 1.25,
+            "fastest": 1.5
+        }
+        try:
+            speed = float(db_speed)
+        except (ValueError, TypeError):
+            speed = speed_map.get(str(db_speed).lower(), 1.25)
+            
+        try:
+            volume = float(db_volume)
+        except (ValueError, TypeError):
+            volume = 0.8
+
         payload = {
-            "model_id": "sonic-3",
+            "model_id": "sonic-3.5",
             "transcript": text,
             "voice": {"mode": "id", "id": voice_id},
             "output_format": {
@@ -2087,7 +2293,10 @@ class VoiceAgentHandler:
                 "encoding": "pcm_mulaw",
                 "sample_rate": 8000,
             },
-            "language": "en",
+            "generation_config": {
+                "speed": speed,
+                "volume": volume,
+            }
         }
         headers = {
             "X-API-Key": settings.CARTESIA_API_KEY,
@@ -2201,6 +2410,10 @@ class VoiceAgentHandler:
                 response.raise_for_status()
             
             logger.info("✅ Call terminated successfully")
+            
+            # Clean up ephemeral hot path cache
+            asyncio.create_task(db_service.delete_hot_path_state(self.call_sid))
+            
             self.is_running = False
         except Exception as e:
             logger.error(f"Failed to hangup call: {e}")
@@ -2301,14 +2514,18 @@ class VoiceAgentHandler:
         # [NEW] SEND TRANSFER SUMMARY SMS (Non-blocking)
         if not skip_summary_sms:
             try:
-                # Check for pending order to include context
+                # Check for pending order/booking to include context
                 sms_context = ""
-                if self.pending_order:
-                    items = ", ".join([f"{i['quantity']}x {i['name']}" for i in self.pending_order.get('items', [])])
-                    sms_context = f" | DRAFT ORDER: {items}"
-                
-                # Default intent if none
-                intent = self.memory.get("order_summary") or "Customer Inquiry"
+                intent = "Customer Inquiry"
+                if self.tenant_id == "coalcreek":
+                    booking_details = []
+                    if self.memory.get("check_in"):
+                        booking_details.append(f"In: {self.memory['check_in']}")
+                    if self.memory.get("room_type"):
+                        booking_details.append(f"Room: {self.memory['room_type']}")
+                    if booking_details:
+                        intent = "Motel Booking Request"
+                        sms_context = f" | Details: {', '.join(booking_details)}"
                 
                 from services.sms import sms_service
                 summary_msg = f"📞 INCALL TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
@@ -2456,11 +2673,10 @@ class VoiceAgentHandler:
                         booking_ref=self.call_reference,
                         status=self.call_outcome,
                         call_summary=await self._generate_call_summary(),
-                        customer_name=self.memory.get("name"),
+                        customer_name=self.memory.get("name") or (self.memory.get("active_booking", {}).get("guest_name")),
                         metadata={
                             "exchange_count": self.exchange_count,
-                            "outcome": self.call_outcome,
-                            "order_id": self.order_id
+                            "outcome": self.call_outcome
                         }
                     )
                     logger.info(f"📝 Saved transcript: {len(self.transcript)} entries, {duration}s")
@@ -2502,7 +2718,7 @@ class VoiceAgentHandler:
             system_instruction = (
                 "You are a helpful assistant that summarizes customer service calls. "
                 "Provide an ultra-concise, 1-sentence summary of what happened in the call "
-                "(e.g., 'Customer ordered 2 large pepperoni rooms for 7:30pm pickup'). Focus on the intent and result."
+                "(e.g., 'Customer booked a Queen room for 2 nights and received payment link'). Focus on the intent and result."
             )
             
             # Run in a threadpool to prevent blocking the async event loop
