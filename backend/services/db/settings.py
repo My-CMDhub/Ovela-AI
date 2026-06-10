@@ -202,10 +202,19 @@ class SettingsMixin:
 
             config = {}
             if result.get("config"):
+                raw_config = result["config"].strip()
                 try:
-                    config = json.loads(result["config"])
+                    config = json.loads(raw_config)
                 except Exception:
-                    config = {}
+                    # Fallback for malformed frontend saves like `"voice_settings": {...}`
+                    if raw_config.startswith('"') or raw_config.startswith("'"):
+                        try:
+                            config = json.loads("{" + raw_config + "}")
+                            logger.info(f"Successfully recovered malformed config JSON for {tenant_id}")
+                        except Exception:
+                            config = {}
+                    else:
+                        config = {}
 
             config["tenant_id"] = tenant_id
             config["business_name"] = result.get("name")

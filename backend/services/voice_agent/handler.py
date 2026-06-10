@@ -540,8 +540,8 @@ class VoiceAgentHandler:
         elif llm_model.startswith("gpt-") or llm_model.startswith("openai/"):
             provider_type, model = "open_ai", llm_model
         else:
-            provider_type = "open_ai"
-            model = "gpt-4.1-mini"
+            provider_type = "google"
+            model = "gemini-2.0-flash"
             source = "default"
 
         logger.info(f"🧠 LLM [{source}]: {provider_type} / {model}")
