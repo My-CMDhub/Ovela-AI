@@ -593,6 +593,8 @@ class VoiceAgentHandler:
         memory_context += f"• Caller Phone: {self.user_phone}\n"
         if self.memory.get("name"):
             memory_context += f"• Guest Name: {self.memory['name']}\n"
+        if self.memory.get("guest_email"):
+            memory_context += f"• Guest Email: {self.memory['guest_email']}\n"
         
         # Tenant-Specific Memory Injection
         if self.tenant_id == "coalcreek":
@@ -796,6 +798,11 @@ class VoiceAgentHandler:
                     logger.info("🧠 Returning guest recognised: %s", self.user_phone[:4] + "****")
                 if caller_profile.get("room_preference"):
                     self.memory["room_type"] = caller_profile["room_preference"]
+                if caller_profile.get("email"):
+                    self.memory["guest_email"] = caller_profile["email"]
+                    logger.info("🧠 Pre-loaded guest email from CRM profile: %s", caller_profile["email"])
+                if caller_profile.get("notes"):
+                    self.memory["notes"] = caller_profile["notes"]
             
             # Handle active bookings result to enable fuzzy-matching pre-load context
             if isinstance(active_bookings, Exception):
@@ -811,6 +818,10 @@ class VoiceAgentHandler:
                     if is_pending:
                         self.memory["active_booking"] = doc
                         logger.info("📅 Pre-loaded active booking into memory for fuzzy context: %s", doc.get("booking_reference"))
+                        if not self.memory.get("name") and doc.get("guest_name"):
+                            self.memory["name"] = doc["guest_name"]
+                        if not self.memory.get("guest_email") and doc.get("guest_email"):
+                            self.memory["guest_email"] = doc["guest_email"]
                         break
             
             # Handle config result
@@ -1670,9 +1681,9 @@ class VoiceAgentHandler:
         # Block interruptions for the entire ack+function window
         self._blocking_interruptions = True
 
-        # Only inject if LLM hasn't already played an ack this turn
+        # Only inject if LLM hasn't already played an ack this turn, and function is not hang_up_call
         injection_event = None
-        if not getattr(self, '_filler_played_this_turn', False) and self.deepgram_ws:
+        if function_name != "hang_up_call" and not getattr(self, '_filler_played_this_turn', False) and self.deepgram_ws:
             try:
                 injection_event = asyncio.Event()
                 self._pending_injection_event = injection_event

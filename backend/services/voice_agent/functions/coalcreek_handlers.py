@@ -699,7 +699,78 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     
     rate = room_data["price"]
     total = rate * num_nights
-    
+
+    # ── Duplicate check: update existing pending reservation instead of creating new one ──
+    if db_service and guest_phone:
+        try:
+            docs = await db_service.lookup_motel_reservation(phone=guest_phone, tenant_id="coalcreek")
+            for doc in (docs or []):
+                _ci = doc.get("check_in_date")
+                _rt = doc.get("room_type", "").lower()
+                _bs = doc.get("status") or ""
+                _ps = doc.get("payment_status") or ""
+                
+                # Normalize room types for comparison
+                _rt_search = _rt.split()[0] if _rt else ""
+                _rt_final = key_map.get(_rt_search, "queen")
+                
+                is_pending = (
+                    _bs in ("reserved", "pending", "pending_payment", "link_sent")
+                    and _ps not in ("paid", "confirmed")
+                )
+                
+                if _ci == check_in and _rt_final == final_key and is_pending:
+                    logger.info("🔍 Found matching existing pending reservation: %s. Patching instead of duplicating.", doc.get("booking_reference"))
+                    booking_ref = doc.get("booking_reference")
+                    
+                    patch_data = {
+                        "guest_name": guest_name,
+                        "guest_email": guest_email,
+                        "num_guests": num_guests,
+                        "notes": notes or doc.get("notes") or "Updated via AI",
+                        "updated_at": datetime.now().isoformat()
+                    }
+                    
+                    await db_service.update_motel_reservation(
+                        booking_id=doc["$id"],
+                        data=patch_data
+                    )
+                    
+                    # Fire email and Stripe link handler for the updated booking
+                    asyncio.create_task(_handle_stripe_and_guest_email(
+                        booking_ref=booking_ref,
+                        room_type=doc.get("room_type", room_data["name"]),
+                        total_amt=float(doc.get("total_amount", total)),
+                        guest_email=guest_email,
+                        guest_name=guest_name,
+                        guest_phone=guest_phone,
+                        check_in=check_in,
+                        check_out=check_out,
+                        db_service=db_service,
+                        saved_doc_id=doc["$id"],
+                        existing_stripe_url=doc.get("payment_link_url"),
+                        existing_expires_at=doc.get("payment_expires_at", 0)
+                    ))
+                    
+                    return {
+                        "success": True,
+                        "booking_reference": booking_ref,
+                        "guest_name": guest_name,
+                        "guest_email": guest_email,
+                        "check_in_date": check_in,
+                        "check_out_date": check_out,
+                        "room_type": doc.get("room_type", room_data["name"]),
+                        "total_amount": float(doc.get("total_amount", total)),
+                        "_saved_doc_id": doc["$id"],
+                        "message": (
+                            f"I've updated your existing hold for {ci_spoken}. Your reference number is still {booking_ref.split('-')[-1]}. "
+                            f"The payment link has been resent to {guest_email} — "
+                            "please check your inbox and confirm once you receive it."
+                        )
+                    }
+        except Exception as dup_err:
+            logger.error(f"Error checking for duplicate reservation in create_booking: {dup_err}", exc_info=True)
+
     # Booking Ref — 36^6 = 2.17B combos, effectively zero collision risk
     booking_ref = f"CC-{''.join(random.choices(string.ascii_uppercase + string.digits, k=6))}"
     now = datetime.now().isoformat()
