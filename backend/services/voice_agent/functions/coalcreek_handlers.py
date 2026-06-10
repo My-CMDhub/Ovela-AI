@@ -257,25 +257,36 @@ async def _check_appwrite_availability(db_service, check_in_str: str, check_out_
                          and res.get("check_out_date") > current_date_str]
                          
             booked_room_numbers = set(res.get("room_number") for res in night_res if res.get("room_number"))
-            
             available_this_night = []
-            
+
             for room in active_rooms:
                 room_num = room.get("room_number")
-                r_type = room.get("room_type")
-                
-                # We group by mapped room types to match scraper semantics
+                r_type = room.get("room_type") or ""
+
+                # Map raw DB room_type to the display names used throughout the system.
+                # Handles null-safe: r_type is coerced to "" above.
                 mapped_type = r_type.title()
-                if mapped_type == "Queen": mapped_type = "Double Room"
-                elif mapped_type == "Twin": mapped_type = "Twin Room"
-                elif mapped_type == "Family": mapped_type = "Family Suite"
-                
+                if mapped_type == "Queen":
+                    mapped_type = "Double Room"
+                elif mapped_type == "Twin":
+                    mapped_type = "Twin Room"
+                elif mapped_type == "Family":
+                    mapped_type = "Family Suite"
+                elif mapped_type in ("Spa", "Deluxe", "Suite"):
+                    mapped_type = "Deluxe Spa Suite"
+                # Any unrecognised room_type passes through as-is (safe fallback)
+
+                # CRITICAL: use `or` not .get(key, default) because Appwrite stores
+                # null values as None even when the key exists — .get() returns None,
+                # not the default, when the key is present but null.
+                base_rate = room.get("base_rate") or 150
+
                 if room_num not in booked_room_numbers:
                     available_this_night.append({
-                        "room_type": mapped_type,
-                        "room_number": room_num,
-                        "price_per_night": room.get("base_rate", 150),
-                        "available": True
+                        "room_type":      mapped_type,
+                        "room_number":    room_num,
+                        "price_per_night": base_rate,
+                        "available":      True
                     })
             
             # Aggregate available room types for this night
