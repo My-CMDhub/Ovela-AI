@@ -967,7 +967,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             if details:
                 opener = f"{opener} {details}"
             if name_mismatch:
-                return f"{opener}. I have a different name on file though — what name is it under?"
+                return f"{opener}. However, the name on file is '{guest}'. If '{guest}' sounds like a misspelled version of what the user said (e.g. 'B H R U V' vs 'Drew', or 'Smith' vs 'Smyth'), ignore the mismatch and confirm it with them naturally. If it is completely different, tell them 'I have a different name on file though — what name is it under?'"
             if name_already_provided:
                 return f"{opener}. And since you've already given your name, I can confirm it's yours. How can I help you with it?"
             return f"{opener}. could you just verify the first name on the reservation?"
@@ -1076,8 +1076,6 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         return n in db_name or db_name in n
 
     try:
-        caller_phone_name_mismatch = False
-
         # ── Step 0: Caller's own phone (Twilio) — always try first ──────────
         if caller_phone:
             docs = await db_service.lookup_motel_reservation(
@@ -1089,7 +1087,9 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                     matched = [d for d in docs if _name_matches(d, guest_name)]
                     if matched:
                         return _format_doc(matched[0], len(matched), found_by="caller_phone", name_already_provided=True)
-                    caller_phone_name_mismatch = True
+                    # If python's strict string check fails, pass the doc to the LLM anyway
+                    # so the LLM can evaluate if it's a fuzzy match (e.g. 'B H R U V' vs 'Drew Patel')
+                    return _format_doc(docs[0], len(docs), found_by="caller_phone", name_mismatch=True)
                 # No name given — return booking, let AI confirm with user
                 else:
                     return _format_doc(docs[0], len(docs), found_by="caller_phone")
@@ -1144,14 +1144,6 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 return _format_doc(docs[0], len(docs), found_by="email")
 
         # ── Nothing found ────────────────────────────────────────────────────
-        if caller_phone_name_mismatch:
-            return {
-                "found": False,
-                "name_mismatch": True,
-                "needs_reference": True,
-                "message": "I can see a booking linked to this phone number, but it is not under that name. Could you give me the booking reference, or would you like me to put you through to reception?",
-            }
-
         return {
             "found": False,
             "message": "I couldn't find a booking linked to your number or the details I have here - want me to put you through to reception?"

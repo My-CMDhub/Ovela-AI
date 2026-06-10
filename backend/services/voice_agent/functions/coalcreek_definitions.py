@@ -115,7 +115,9 @@ If this tool fails validation, it will return a natural language error (e.g., 'E
         # =================================================================
         {
             "name": "lookup_booking",
-            "description": """Look up an existing booking. Call this as soon as the guest mentions their name or booking reference. The system auto-uses the caller's Twilio number; DO NOT ask for phone number first. 
+            "description": """Look up an existing booking. CRITICAL RULE: DO NOT call this if the ACTIVE BOOKING is already loaded in your memory above. If it is already in memory, verify it directly with the guest instead of calling this tool. 
+Only call this tool if no booking is loaded in memory, or if the guest explicitly rejects the booking you have in memory.
+When calling: The system auto-uses the caller's Twilio number; DO NOT ask for phone number first. 
 If found=true, use the surfaced semantic booking details (e.g., semantic booking_id like CC-123, NOT uuids) to confirm naturally. 
 If found_by=caller_phone is returned, confirm the likely booking instead of asking for brittle identifiers. 
 Only pass email or reference if a previous call returned found=false.
