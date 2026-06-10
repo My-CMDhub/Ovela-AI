@@ -957,7 +957,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             details.append(f"with a total of ${doc['total_amount']}")
         return " ".join(details)
 
-    def _build_confirmation_prompt(result: dict, found_by: str, name_mismatch: bool = False) -> str:
+    def _build_confirmation_prompt(result: dict, found_by: str, name_mismatch: bool = False, name_already_provided: bool = False) -> str:
         guest = result.get("guest_name") or "that guest"
         details = _booking_detail_tail(result)
         
@@ -968,6 +968,8 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 opener = f"{opener} {details}"
             if name_mismatch:
                 return f"{opener}. I have a different name on file though — what name is it under?"
+            if name_already_provided:
+                return f"{opener}. And since you've already given your name, I can confirm it's yours. How can I help you with it?"
             return f"{opener}. could you just verify the first name on the reservation?"
             
         elif found_by == "phone":
@@ -984,7 +986,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             return f"{opener} - is that the one?"
         return f"{opener} - is that yours?"
 
-    def _format_doc(doc, total_docs, found_by: str = "", name_mismatch: bool = False):
+    def _format_doc(doc, total_docs, found_by: str = "", name_mismatch: bool = False, name_already_provided: bool = False):
         # Strict Caller-Phone Lock verification (Approach 1)
         if found_by != "caller_phone":
             doc_phone = doc.get("guest_phone", "")
@@ -1064,7 +1066,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         if name_mismatch:
             result["name_mismatch"] = True
         result["lookup_confidence"] = "high" if found_by in {"caller_phone", "reference"} and not name_mismatch else "medium"
-        result["confirmation_prompt"] = _build_confirmation_prompt(result, found_by, name_mismatch=name_mismatch)
+        result["confirmation_prompt"] = _build_confirmation_prompt(result, found_by, name_mismatch=name_mismatch, name_already_provided=name_already_provided)
         result["message"] = result["confirmation_prompt"]
         return result
 
@@ -1086,7 +1088,7 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 if guest_name:
                     matched = [d for d in docs if _name_matches(d, guest_name)]
                     if matched:
-                        return _format_doc(matched[0], len(matched), found_by="caller_phone")
+                        return _format_doc(matched[0], len(matched), found_by="caller_phone", name_already_provided=True)
                     caller_phone_name_mismatch = True
                 # No name given — return booking, let AI confirm with user
                 else:

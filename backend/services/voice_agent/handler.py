@@ -1841,6 +1841,16 @@ class VoiceAgentHandler:
                 # (falls back gracefully to live Cartesia TTS if missing).
                 # Play farewell and wait for playback to finish, then hang up instantly.
                 await self._speak_system_message(message, clip_key="farewell", wait_for_playback=True)
+                
+                # Check if hangup was aborted by user interruption
+                if not getattr(self, '_is_hanging_up', True):
+                    logger.info("🛑 ABORT HANGUP: User spoke during farewell. Resuming call.")
+                    await self._send_function_response(call_id, function_name, {
+                        "success": False, 
+                        "message": "The user interrupted before the call ended. Ask them what else they need."
+                    })
+                    return
+
                 logger.info("👋 Farewell finished playing — hanging up call instantly.")
                 await self._hangup_call()
                 return
