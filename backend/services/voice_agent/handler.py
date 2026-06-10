@@ -668,11 +668,12 @@ class VoiceAgentHandler:
         speed = voice_settings.get("speed", "fast")
         volume = voice_settings.get("volume", 0.8)
         
-        logger.info(f"🎤 Using Cartesia Sonic-3 TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
+        tts_model = voice_settings.get("tts_model", "sonic-3")
+        logger.info(f"🎤 Using Cartesia {tts_model} TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
         return {
             "provider": {
                 "type": "cartesia",
-                "model_id": "sonic-3",
+                "model_id": tts_model,
                 "speed": speed,
                 "volume": volume,
                 "voice": {
@@ -2284,8 +2285,9 @@ class VoiceAgentHandler:
         except (ValueError, TypeError):
             volume = 0.8
 
+        tts_model = voice_settings.get("tts_model", "sonic-3")
         payload = {
-            "model_id": "sonic-3.5",
+            "model_id": tts_model,
             "transcript": text,
             "voice": {"mode": "id", "id": voice_id},
             "output_format": {
