@@ -623,10 +623,11 @@ class VoiceAgentHandler:
             memory_context += f"• Dates: {ab.get('check_in_date')} to {ab.get('check_out_date')} ({ab.get('num_nights')} nights)\n"
             memory_context += f"• Status: {ab.get('status')} / Payment: {ab.get('payment_status')}\n"
             memory_context += (
-                "IMPORTANT: You ALREADY have the user's booking details loaded above. "
-                "If the user asks to check or confirm their booking and you found correct matching then doesn't need to call lookup_booking. "
-                "Instead, fuzzy-match their spoken name against the 'Guest Name' above (e.g. 'Drew' matches 'Dhruv'). "
-                "If it's a match, just confirm the details directly with them. if not then call lookup_booking function explicitly with proper details.\n"
+                "IMPORTANT: You ALREADY have the user's active booking details loaded above. "
+                "If the user asks to check or confirm their booking, DO NOT call lookup_booking. "
+                "Instead, check if their spoken name loosely matches the 'Guest Name' above (e.g. 'b h r u v' matches 'Dhruv'). "
+                "If it's a match, or even if it's slightly misspelled, just proactively confirm it with them (e.g., 'I see a booking here under Dhruv Patel, is that you?'). "
+                "Only call lookup_booking if they explicitly say no, or are asking about a completely different booking.\n"
                 "SECURITY RULE: Before making any changes or sending links for this booking, politely ask the user to verify their email address to confirm their identity.\n"
             )
 
