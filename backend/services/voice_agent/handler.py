@@ -1903,6 +1903,20 @@ class VoiceAgentHandler:
                 if isinstance(sanitized.get(field), str):
                     sanitized[field] = clean_tts_output(sanitized[field])
 
+            # ── _skip_ack guard (double-ack prevention) ──────────────────────
+            # When a tool sets _skip_ack=True it means I1 already played an ack
+            # phrase ("Got it, one moment.") before the tool ran. Strip the flag
+            # and prepend a system directive so the LLM skips its own ack word.
+            if sanitized.pop("_skip_ack", False):
+                for field in ("ai_should_say", "message"):
+                    if isinstance(sanitized.get(field), str) and sanitized[field].strip():
+                        sanitized[field] = (
+                            "[System: ack already played — begin response directly without any ack word] "
+                            + sanitized[field]
+                        )
+                        logger.debug("💉 _skip_ack: prepended no-ack directive to %s field", field)
+                        break
+
             response = {
                 "type": "FunctionCallResponse",
                 "id": call_id,

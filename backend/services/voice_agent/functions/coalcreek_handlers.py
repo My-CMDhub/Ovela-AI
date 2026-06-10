@@ -441,6 +441,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                 "available": "unknown",
                 "verified": False,
                 "message": "Technical issue accessing live calendar",
+                "_skip_ack": True,  # I1 already played "Got it, one moment" — skip LLM ack
                 "ai_should_say": "Sorry, I couldn't complete the live calendar check just now. If you want, I can put you through to reception."
             }
             if isinstance(availability_cache, dict):
@@ -482,13 +483,31 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
             first_night_data = result.get("per_night_results", {})
             first_date = list(first_night_data.keys())[0] if first_night_data else None
             price = None
-            
+
             if first_date:
                 for room in first_night_data[first_date]:
                     if room.get("room_type") == target_room:
                         price = room.get("price_per_night")
                         break
-            
+
+            # Fallback: if price_per_night is missing/null in PMS result,
+            # pull the base rate from COALCREEK_DATA so the f-string never
+            # does NoneType * int (root cause of the TypeError crash).
+            if price is None:
+                _room_key_map = {
+                    "Double Room": "queen",
+                    "Twin Room": "twin",
+                    "Family Suite": "family",
+                    "Deluxe Spa Suite": "spa",
+                }
+                _data_key = _room_key_map.get(target_room, "queen")
+                price = COALCREEK_DATA.get("rooms", {}).get(_data_key, {}).get("price", 150)
+                logger.warning(
+                    "⚠️ price_per_night missing in PMS result for '%s' — using fallback $%s from COALCREEK_DATA",
+                    target_room, price
+                )
+
+            total = price * nights
             payload = {
                 "available": True,
                 "verified": True,
@@ -497,8 +516,8 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                 "check_out": check_out,
                 "nights": nights,
                 "price_per_night": price,
-                "total": price * nights if price else None,
-                "ai_should_say": f"The {target_room} is available from {ci_spoken} for {nights} night{'s' if nights > 1 else ''}. The rate is ${price} per night{f', total ${price * nights}' if nights > 1 else ''}. Would you like me to place a hold?"
+                "total": total,
+                "ai_should_say": f"The {target_room} is available from {ci_spoken} for {nights} night{'s' if nights > 1 else ''}. The rate is ${price} per night{f', total ${total}' if nights > 1 else ''}. Would you like me to place a hold?"
             }
             if isinstance(availability_cache, dict):
                 availability_cache[cache_key] = copy.deepcopy(payload)
@@ -572,7 +591,10 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
             "available": "unknown",
             "verified": False,
             "error": str(e),
-            "ai_should_say": "Sorry, I couldn't complete the live calendar check. If you'd like, I can put you through to reception."
+            # _skip_ack=True: system already played "Got it, one moment" via I1 injection.
+            # Suppress LLM ack word so caller doesn't hear a double ack on the error path.
+            "_skip_ack": True,
+            "ai_should_say": "Sorry, I couldn't complete the live calendar check just now. If you'd like, I can put you through to reception."
         }
         if isinstance(availability_cache, dict):
             availability_cache[cache_key] = copy.deepcopy(payload)
