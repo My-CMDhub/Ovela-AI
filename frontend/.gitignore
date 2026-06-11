@@ -49,3 +49,7 @@ next-env.d.ts
 venv/
 __pycache__/
 .next/
+
+# temp studio tools
+/app/background-creator
+/app/frame-studio

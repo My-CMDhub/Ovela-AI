@@ -1,0 +1,2808 @@
+"""
+Voice Agent Handler Module.
+
+Main handler class that bridges Twilio Media Streams to Deepgram Voice Agent API.
+This is the primary orchestrator that uses all other modules:
+- config.py: Settings and constants
+- prompts.py: System prompts
+- abuse_protection.py: Abuse detection and escalation
+- silence_detection.py: Silence monitoring
+- functions/: Function definitions and handlers
+- bridges/: Twilio and Deepgram communication
+
+Architecture:
+    Twilio <─ Media Stream ─> VoiceAgentHandler <─ WebSocket ─> Deepgram Agent API
+"""
+
+import json
+import logging
+import asyncio
+import base64
+import time
+import random
+from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import httpx
+import websockets
+from fastapi import WebSocket
+from appwrite.id import ID
+
+from core.config import settings
+from services.appwrite import db_service
+import os
+
+# Import from sibling modules
+from .config import (
+    DEEPGRAM_AGENT_URL,
+    ABUSE_CONFIG,
+    get_random_greeting,
+    get_random_farewell,
+    get_random_silence_farewell,
+    get_random_silence_prompt,
+    get_random_filler_prompt,
+    get_preset_phrase,
+)
+from .prompts import get_system_prompt
+from .abuse_protection import AbuseProtection
+from .silence_detection import SilenceMonitor
+from .functions import get_booking_functions, get_coalcreek_functions
+from .functions.handlers import FunctionDispatcher, MOTEL_DB_ID
+from .text_utils import prepare_for_tts, clean_tts_output
+from .latency_tracker import LatencyTracker
+from .memory import CallerMemoryBank
+from services.motel_knowledge_base import set_tenant_context
+
+CARTESIA_VOICE_ID = "f786b574-daa5-4673-aa0c-cbe3e8534c02"
+# CARTESIA_VOICE_ID = "3e1ed423-17e5-4773-b87c-25b031106e41" - Paul AU
+# CARTESIA_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab" - Blake US
+# CARTESIA_VOICE_ID = "47c38ca4-5f35-497b-b1a3-415245fb35e1" - Daniel US
+# CARTESIA_VOICE_ID = "999df508-4de5-40a7-8bd3-8c12f678c284" - Layla US
+# CARTESIA_VOICE_ID = "41f3c367-e0a8-4a85-89e0-c27bae9c9b6d" - Liam AU
+# CARTESIA_VOICE_ID = "c63361f8-d142-4c62-8da7-8f8149d973d6" - Krishna IN
+# CARTESIA_VOICE_ID = "f9836c6e-a0bd-460e-9d3c-f7299fa60f94" - Caroline US
+# CARTESIA_VOICE_ID = "e8e5fffb-252c-436d-b842-8879b84445b6" - Cathy US - soft and slow
+
+SYSTEM_AUDIO_DIR = Path(__file__).resolve().parent / "audio"
+REQUIRED_SYSTEM_CLIP_KEYS = [
+    "smart_greeting",
+    "silence_soft",
+    "silence_hard",
+    "abuse_warning",
+    "filler_short",
+    "filler_long",
+    "transfer",
+    "transfer_failed",
+    "farewell",
+    "duration_soft",
+]
+
+logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Module-level pure function — importable by tests without instantiating handler
+# ─────────────────────────────────────────────────────────────────────────────
+
+def trim_assistant_transcript(text: str, elapsed_seconds: float, wpm: int = 150) -> str:
+    """
+    Trim an assistant transcript entry to reflect only what the caller *actually heard*
+    before a VAD interruption fired.
+
+    Uses a fixed speech-rate estimate (default 150 WPM) to calculate the number
+    of words delivered before the interruption. Trailing words that were generated
+    but not yet spoken are pruned from the history so the LLM context stays
+    coherent with the caller's actual auditory experience.
+
+    This is a pure function with zero side effects — safe to call on the Hot Path.
+
+    Args:
+        text:             The full assistant message text that started playing.
+        elapsed_seconds:  Seconds elapsed since TTS playback began (time.time() delta).
+        wpm:              Estimated TTS delivery rate (default 150 WPM ≈ natural speech).
+
+    Returns:
+        Trimmed string containing only the words the caller heard.
+        Returns "" if elapsed_seconds <= 0 or text is empty/whitespace.
+
+    Example:
+        >>> trim_assistant_transcript("Sure I can help you book a room.", 2.0, wpm=150)
+        'Sure I can help you'  # 2s × 150÷60 = 5 words
+    """
+    if not text or not text.strip():
+        return ""
+    if elapsed_seconds <= 0:
+        return ""
+
+    words = text.split()
+    words_spoken = int(elapsed_seconds * wpm / 60)  # floor via int()
+    return " ".join(words[:words_spoken])
+
+
+class VoiceAgentHandler:
+    """
+    Bridges Twilio Media Stream to Deepgram Voice Agent API.
+    
+    This handler orchestrates the entire voice call:
+    1. Receives audio from Twilio
+    2. Forwards to Deepgram for STT + LLM + TTS
+    3. Handles function calls (bookings, queries)
+    4. Monitors for abuse and silence
+    5. Sends audio back to Twilio
+    
+    Usage:
+        handler = VoiceAgentHandler(twilio_websocket)
+        await handler.start()
+    """
+    
+    # Demo limits (can be moved to config if needed)
+    MAX_DEMO_DURATION_SECONDS = 180  # 3 minutes
+    MAX_EXCHANGES = 12
+    
+    def __init__(self, websocket: WebSocket):
+        """
+        Initialize the voice agent handler.
+        
+        Args:
+            websocket: FastAPI WebSocket connection from Twilio
+        """
+        # WebSocket connections
+        self.twilio_ws = websocket
+        self.deepgram_ws = None
+        self.stream_sid = None
+        
+        # User info (populated from Twilio custom parameters)
+        self.user_name = "there"
+        self.business_name = "your business"
+        self.user_phone = "unknown"
+        self.custom_params = {}  # Store all custom params for later access
+        
+        # State tracking
+        self.is_running = True
+        self.call_start_time = None
+        self.call_sid = None
+        self.exchange_count = 0
+
+        self.booking_completed = False
+        
+        # Smart Greeting State
+        self.has_user_spoken = False
+        self.smart_greeting_task = None
+        
+        # Function tracking
+        self._is_processing_function = False
+        self._twilio_audio_frames_sent = 0
+        self._system_audio_cache = {}
+        self._last_system_tts_error = None
+        
+        # Transfer state tracking
+        self._transfer_pending = False
+        self._transfer_tts_done = asyncio.Event()
+        self._transfer_target = None
+        self._tts_lock = asyncio.Lock()
+
+        # I1: InjectAgentMessage ack state
+        # Set by _handle_function_call before injection; cleared by AgentAudioDone
+        self._pending_injection_event: asyncio.Event | None = None
+        self._injection_refused = False  # Set True if Deepgram sends InjectionRefused
+        
+        # Latency tracking (for debugging/analytics)
+        self.user_speech_start_time = None
+        self.ai_response_start_time = None
+        self.latency = LatencyTracker()
+        self.latency.mark_call_start()
+        
+        # Modular components
+        self.silence_monitor = SilenceMonitor()
+        self.abuse_protection = None  # Initialized after tenant_id is determined
+        self.function_dispatcher = None  # Initialized after getting user_phone
+        
+        # Background tasks
+        self.duration_monitor_task = None
+        
+        # Transcript for analytics
+        self.transcript = []
+        self.call_outcome = "completed"
+        self.call_reference = None # Unified reference for bookings
+        
+        # Environment detection (demo vs production call)
+        self.is_demo_call = False  # Set in _handle_twilio_start based on custom parameters
+        
+        # Multi-tenant support
+        self.tenant_id = "coalcreek"  # Default to coalcreek
+        self.demo_type = None
+        
+        # Smart Memory (for latency optimization & amnesia fix)
+        self.memory = {
+            "name": None,
+            # Coal Creek motel booking context (session-only)
+            "check_in": None,
+            "check_out": None,
+            "room_type": None,
+            "num_guests": None,
+            "notes": None,
+        }
+        
+        self._availability_cache = {}
+        
+        # Tenant Configuration (Database Driven)
+        self.tenant_config = {}
+        self._final_help_offer_active = False
+
+        # Persistent Caller Memory Bank (error-contained — never crashes the hot path)
+        self.caller_memory_bank = CallerMemoryBank()
+
+    def _normalize_phrase(self, text: str) -> str:
+        normalized = (text or "").lower()
+        for char in ".,!?:;()-":
+            normalized = normalized.replace(char, " ")
+        return " ".join(normalized.split())
+
+    def _contains_any_phrase(self, text: str, phrases: tuple[str, ...]) -> bool:
+        padded = f" {text} "
+        return any(f" {phrase} " in padded for phrase in phrases)
+
+    def _is_explicit_terminal_goodbye(self, text: str) -> bool:
+        normalized = self._normalize_phrase(text)
+        if not normalized:
+            return False
+        explicit_goodbyes = (
+            "bye",
+            "goodbye",
+            "bye bye",
+            "see you",
+            "see ya",
+            "catch you later",
+            "talk to you later",
+            "farewell",
+            "that's all",
+            "that is all",
+            "that's it",
+            "that is it",
+            "nothing else",
+            "no more help",
+            "i'm done",
+            "im done",
+            "all done",
+            "i'm all set",
+            "im all set",
+            "that'll be all",
+            "that will be all",
+            "thanks bye",
+            "thank you bye",
+        )
+        return self._contains_any_phrase(normalized, explicit_goodbyes)
+
+    def _is_soft_close_only(self, text: str) -> bool:
+        normalized = self._normalize_phrase(text)
+        if not normalized or self._is_explicit_terminal_goodbye(normalized):
+            return False
+        soft_close_markers = (
+            "thanks",
+            "thank you",
+            "cheers",
+            "no worries",
+            "appreciate it",
+            "appreciated",
+            "no thank you",
+            "no thanks",
+            "all good",
+            "alright",
+            "all right",
+            "okay",
+            "ok",
+            "righto",
+            "fair enough",
+        )
+        return self._contains_any_phrase(normalized, soft_close_markers)
+
+    def _is_final_help_offer_message(self, text: str) -> bool:
+        normalized = self._normalize_phrase(text)
+        if not normalized:
+            return False
+        help_offer_markers = (
+            "anything else i can help with",
+            "anything else i can do for you",
+            "anything else you need",
+            "if you need anything else",
+            "let me know if you need anything else",
+            "still need anything else",
+            "what else can i help with",
+        )
+        return self._contains_any_phrase(normalized, help_offer_markers)
+
+    def _is_end_call_narration_message(self, text: str) -> bool:
+        normalized = self._normalize_phrase(text)
+        return normalized in {
+            "i ll end the call now",
+            "i will end the call now",
+            "i ll hang up now",
+            "i will hang up now",
+            "ending the call now",
+        }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # N4: GLOBAL MEANINGLESS INTERRUPTION FILTER
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # ── Single-word affirmations (checked word-by-word after split) ───────────
+    _MEANINGLESS_SINGLE_WORDS = frozenset([
+        "sure", "okay", "ok", "yep", "yes", "right",
+        "cool", "perfect", "alright", "yeah",
+        "mhm", "mm", "mmm", "gotcha", "yea", "yup",
+        "uh", "um", "ah", "oh", "okey", "okey-dokey",
+        "hhmm", "hmm", "ahh",
+    ])
+
+    # ── Multi-word / hyphenated phrases (checked as whole normalized phrase) ──
+    _MEANINGLESS_PHRASES = frozenset([
+        "uh huh", "uh-huh", "go ahead", "all right",
+        "yeah okay", "yeah sure", "okay sure", "ok sure",
+        "uh yeah", "hmm okay", "yeah yeah", "ok ok",
+        "sure okay", "right okay", "yep okay", "yeah ok",
+        "oh okay", "oh ok", "ah okay", "ah ok",
+        "yep sure", "yes sure", "yes okay", "yes ok",
+        "i see", "got it",
+    ])
+
+    # ── Wait keywords for safety-net silence pause extension (C2/I5) ──────────
+    _WAIT_KEYWORDS_EXTENDED = (
+        "sec", "moment", "hold", "paying", "checking", "minute", "doing",
+        "processing", "just a", "bear with", "one sec", "hang on",
+        "let me", "i'm looking", "i have", "yeah i", "give me", "finding",
+        "wait", "hang tight",
+    )
+
+    def _is_meaningless_interruption(self, text: str) -> bool:
+        """
+        N4: Returns True when the utterance is a short affirmation-only noise
+        that should be silently discarded while the system is busy.
+
+        Two-stage check:
+          Stage 1 — direct whole-phrase match for multi-word affirmations
+                     ("uh huh", "go ahead", etc. won't survive word-splitting)
+          Stage 2 — word-by-word check. If ALL words in the utterance are
+                     single-word fillers, it is discarded.
+        """
+        if not text or not text.strip():
+            return False
+        normalized = self._normalize_phrase(text)
+        if not normalized:
+            return False
+
+        # Stage 1: direct whole-phrase match (handles multi-word affirmations)
+        if normalized in self._MEANINGLESS_PHRASES:
+            return True
+
+        # Stage 2: word-by-word check (entirely composed of fillers)
+        words = normalized.split()
+        if not words:
+            return False
+        return all(w in self._MEANINGLESS_SINGLE_WORDS for w in words)
+
+
+
+    # =========================================================================
+    # DEEPGRAM SETTINGS
+    # =========================================================================
+    
+    def _get_settings_message(self) -> dict:
+        """
+        Build the Deepgram Voice Agent Settings message.
+        
+        This configures:
+        - Audio encoding (mulaw for Twilio)
+        - STT model (flux-general-en)
+        - LLM (Google gemini-2.5-flash / gemini-2.0-flash edge-gateway)
+        - TTS (Deepgram aura-2-thalia-en)
+        - System prompt and functions
+        """
+        # Check for transfer failure (from failover loop)
+        transfer_failed = self.custom_params.get("transfer_failed") == "true"
+        
+        # Add welcome message to start conversation (unless we have context)
+        # Deepgram's "speak" -> "greeting" handles the audio, but we also want
+        # to seed the conversation history if we're resuming
+        system_context = ""
+        if transfer_failed:
+             # System message to inform AI of context (hidden from user)
+            system_context = "System: The user has returned because the staff transfer failed (no answer). Apologize and ask how you can help."
+            logger.info("⚠️ Resuming session after failed transfer")
+            
+            # Send hidden context message to AI
+            msg = {
+                "type": "ConversationText",
+                "role": "user",  # Simulate user or system prompt
+                "content": system_context
+            }
+            # We can't send this immediately as DG might not be ready, 
+            # but providing it on first valid interaction helps.
+            # Actually, better to inject it as the first "user" message logic
+            # or rely on the fact the user says "Hello?"
+            
+            # Better approach: Append to history immediately so model sees it
+            # self.conversation_history.append({"role": "system", "content": system_context})
+            
+        # Extract voice settings from DB config
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        _stt_model = voice_settings.get("model", "flux-general-en")
+        _is_flux = _stt_model.startswith("flux-")
+
+        # ── Domain vocabulary for accent-resilient STT ────────────────────────
+        # All Deepgram models (Nova-2, Nova-3, Flux) accept 'keyterms' as a flat
+        # list of strings inside the Voice Agent API settings payload.
+        # ─────────────────────────────────────────────────────────────────────
+        _domain_terms = [
+            "Coal Creek", "Chiltern", "Queen Room", "King Room",
+            "Twin Room", "Family Room", "Deluxe Room", "Standard Room",
+            "gmail", "hotmail", "yahoo", "outlook", "icloud",
+            "booking", "check-in", "check-out",
+        ]
+
+        _stt_provider: dict = {
+            "type": "deepgram",
+            "model": _stt_model,
+            "keyterms": _domain_terms,
+        }
+
+        if _is_flux:
+            # Flux requires version:v2 to activate the /v2/listen engine inside
+            # the Voice Agent API.  EOT params replace legacy 'endpointing'.
+            #
+            # eot_threshold      — confidence gate to close a turn (0.5-0.9).
+            #                      Higher = more reliable but slightly slower.
+            # eot_timeout_ms     — hard silence fallback in ms.  If the user
+            #                      stops talking and confidence never crosses
+            #                      eot_threshold, the turn is force-closed here.
+            # eager_eot_threshold — (optional) lower confidence gate that fires
+            #                      BEFORE eot_threshold to start LLM processing
+            #                      early.  Must be <= eot_threshold.  Increases
+            #                      LLM call volume (~50-70%) — enable for demo.
+            _stt_provider["version"] = "v2"
+            _stt_provider["eot_threshold"]  = float(voice_settings.get("eot_threshold", os.getenv("FLUX_EOT_THRESHOLD", "0.75")))
+            _stt_provider["eot_timeout_ms"] = int(voice_settings.get("eot_timeout_ms", os.getenv("FLUX_EOT_TIMEOUT_MS", "4000")))
+            _eager = voice_settings.get("eager_eot_threshold", os.getenv("FLUX_EAGER_EOT_THRESHOLD", ""))
+            if _eager:
+                _stt_provider["eager_eot_threshold"] = float(_eager)
+            logger.info(
+                "🌊 STT: flux (%s) | eot_threshold=%.2f | eot_timeout_ms=%d%s",
+                _stt_model,
+                _stt_provider["eot_threshold"],
+                _stt_provider["eot_timeout_ms"],
+                f" | eager_eot={_stt_provider['eager_eot_threshold']}" if _eager else "",
+            )
+        else:
+            # Nova-2 / Nova-3 legacy path — uses silence-based endpointing.
+            _endpointing = voice_settings.get(
+                "endpointing",
+                voice_settings.get("utterance_end_ms", 300)
+            )
+            _stt_provider["endpointing"] = _endpointing
+            logger.info("🔷 STT: nova (%s) | endpointing=%dms", _stt_model, _endpointing)
+
+        return {
+            "type": "Settings",
+            "audio": {
+                "input": {
+                    "encoding": "mulaw",
+                    "sample_rate": 8000
+                },
+                "output": {
+                    "encoding": "mulaw",
+                    "sample_rate": 8000,
+                    "container": "none"
+                }
+            },
+            "agent": {
+                "language": "en",
+                "listen": {
+                    "provider": _stt_provider
+                },
+                "think": self._get_llm_config(),
+                "speak": self._get_tts_config(),
+                "greeting": ""
+            }
+        }
+    
+    def _get_llm_config(self) -> dict:
+        """
+        Build the Deepgram Voice Agent think block.
+
+        Model priority (highest → lowest):
+          1. voice_settings.llm_model in tenant DB  
+          2. LLM_MODEL env var (Cloud Run)             ← global override
+          3. gemini-2.5-flash primary default
+
+        All models below are Deepgram-managed — only your DEEPGRAM_API_KEY needed.
+
+          Google   : gemini-2.5-flash*, gemini-2.5-flash-lite, gemini-2.0-flash
+          OpenAI   : gpt-4.1-nano, gpt-4.1-mini, gpt-4o-mini
+          Anthropic: claude-sonnet-4-6, claude-sonnet-4-5
+          (* = current default)
+        """
+        voice_settings = self.tenant_config.get("voice_settings", {})
+
+        db_model  = voice_settings.get("llm_model", "").strip()
+        env_model = os.getenv("LLM_MODEL", "").strip()
+
+        if db_model:
+            llm_model, source = db_model, "DB"
+        elif env_model:
+            llm_model, source = env_model, "ENV"
+        else:
+            llm_model, source = "", "default"
+
+        # Infer provider from model prefix
+        if llm_model.startswith("claude-"):
+            provider_type, model = "anthropic", llm_model
+        elif llm_model.startswith("gemini-"):
+            provider_type, model = "google", llm_model
+        elif llm_model.startswith("gpt-") or llm_model.startswith("openai/"):
+            provider_type, model = "open_ai", llm_model
+        else:
+            provider_type = "google"
+            model = "gemini-2.0-flash"
+            source = "default"
+
+        logger.info(f"🧠 LLM [{source}]: {provider_type} / {model}")
+
+        return {
+            "provider": {
+                "type": provider_type,
+                "model": model,
+                # 0.35 — stable-creative sweet spot for multi-turn voice booking:
+                # low enough to keep dates/names/emails consistent across turns,
+                # high enough to vary phrasing so it doesn't sound robotic.
+                "temperature": 0.35
+            },
+            "prompt": self._get_active_prompt(),
+            "functions": self._get_active_functions()
+        }
+    
+    
+    def _get_function_call_instructions(self) -> str:
+        """
+        Instructions the LLM follows when making function calls.
+
+        System-triggered fillers and status prompts are handled by the
+        deterministic system-audio lane. Keep LLM output focused on
+        user-facing results after tool execution.
+        """
+        return (
+            "FUNCTION CALL RULES (MANDATORY):\n"
+            "When calling a function, DO NOT speak extra filler before the call.\n"
+            "The system layer handles wait messages and silence prompts.\n"
+            "\n"
+            "check_availability:\n"
+            "  CRITICAL: If user asks about 'other options' or 'what's available', use room_type='any' to check ALL rooms in ONE call.\n"
+            "  NEVER call check_availability multiple times for different room types — always use 'any' first.\n"
+            "\n"
+            "After the function returns a result, respond naturally with the information."
+        )
+    
+    def _get_active_prompt(self) -> str:
+        """Get the active prompt based on tenant."""
+        base_prompt = get_system_prompt(
+            current_date=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%A, %d %B %Y"),
+            current_time=datetime.now(ZoneInfo("Australia/Melbourne")).strftime("%I:%M %p"),
+            tenant_id=self.tenant_id
+        )
+        
+        # Smart Memory Injection
+        memory_context = f"\n\n=== CURRENT MEMORY (DO NOT FORGET) ===\n"
+        memory_context += f"• Caller Phone: {self.user_phone}\n"
+        if self.memory.get("name"):
+            memory_context += f"• Guest Name: {self.memory['name']}\n"
+        if self.memory.get("guest_email"):
+            memory_context += f"• Guest Email: {self.memory['guest_email']}\n"
+        
+        # Tenant-Specific Memory Injection
+        if self.tenant_id == "coalcreek":
+            if self.memory.get("check_in"):
+                memory_context += f"• Preferred Check-in: {self.memory['check_in']}\n"
+            if self.memory.get("check_out"):
+                memory_context += f"• Preferred Check-out: {self.memory['check_out']}\n"
+            if self.memory.get("room_type"):
+                memory_context += f"• Preferred Room Type: {self.memory['room_type']}\n"
+            if self.memory.get("num_guests"):
+                memory_context += f"• Number of Guests: {self.memory['num_guests']}\n"
+            if self.memory.get("notes"):
+                memory_context += f"• Special Requests / Notes: {self.memory['notes']}\n"
+                        
+        if self.custom_params.get("transfer_failed") == "true":
+            memory_context += "• CRITICAL: You just attempted to transfer the user to staff, but NO ONE ANSWERED. The user has been returned to you. Apologize that the front desk is busy right now, and ask if there's anything else you can help them with directly or if they want to leave a message. DO NOT attempt to transfer them  until user explicitly ask for it again.\n"
+            
+        # Inject Pre-Loaded Active Booking (For fuzzy-matching / instant confirmation)
+        if self.memory.get("active_booking"):
+            ab = self.memory["active_booking"]
+            memory_context += f"\n=== ACTIVE BOOKING PRE-LOADED ===\n"
+            memory_context += f"• Reference: {ab.get('booking_reference')}\n"
+            memory_context += f"• Guest Name: {ab.get('guest_name')}\n"
+            memory_context += f"• Guest Email: {ab.get('guest_email', '')}\n"
+            memory_context += f"• Room Type: {ab.get('room_type')}\n"
+            memory_context += f"• Dates: {ab.get('check_in_date')} to {ab.get('check_out_date')} ({ab.get('num_nights')} nights)\n"
+            memory_context += f"• Status: {ab.get('status')} / Payment: {ab.get('payment_status')}\n"
+            memory_context += (
+                "IMPORTANT: You ALREADY have the user's active booking details loaded above. "
+                "If the user asks to check or confirm their booking, DO NOT call lookup_booking. "
+                "Instead, check if their spoken name loosely matches the 'Guest Name' above (e.g. 'b h r u v' matches 'Dhruv'). "
+                "If it's a match, or even if it's slightly misspelled, just proactively confirm it with them (e.g., 'I see a booking here under Dhruv Patel, is that you?'). "
+                "Only call lookup_booking if they explicitly say no, or are asking about a completely different booking.\n"
+                "SECURITY RULE: Before making any changes or sending links for this booking, politely ask the user to verify their email address to confirm their identity.\n"
+            )
+
+        memory_context += "========================================\n"
+
+        
+        # Append function-call speaking rules to the prompt.
+        # These go into agent.think.prompt (the ONLY valid place for 
+        # LLM behavioral instructions in the Deepgram API).
+        func_instructions = self._get_function_call_instructions()
+        
+        return base_prompt + memory_context + "\n\n" + func_instructions
+    
+    def _get_active_functions(self) -> list:
+        """Get the correct function definitions based on tenant."""
+        if self.tenant_id == "coalcreek":
+            return get_coalcreek_functions()
+        return get_booking_functions()
+    
+    def _get_active_greeting(self) -> str:
+        """Get the active greeting based on tenant."""
+        return get_random_greeting(self.tenant_id)
+    
+    def _get_tts_config(self) -> dict:
+        """
+        Get TTS configuration.
+        Uses Cartesia Sonic-3 for ultra-low latency (~200ms).
+        """
+        # Look for custom voice ID in DB config
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        voice_id = voice_settings.get("voice_id", "default")
+        
+        # MAP SLUGS TO UUIDS
+        if voice_id in ("default"):
+            voice_id = CARTESIA_VOICE_ID
+        elif len(voice_id) < 30: # Simple check for non-UUID
+            logger.warning(f"⚠️ Invalid Voice ID format: {voice_id} - falling back to default")
+            voice_id = CARTESIA_VOICE_ID
+            
+        # Get dynamic speed and volume parameters for Cartesia provider
+        speed = voice_settings.get("speed", "fast")
+        volume = voice_settings.get("volume", 0.8)
+        
+        tts_model = voice_settings.get("tts_model", "sonic-3")
+        logger.info(f"🎤 Using Cartesia {tts_model} TTS (Voice ID: {voice_id}) | Speed: {speed} | Volume: {volume}")
+        return {
+            "provider": {
+                "type": "cartesia",
+                "model_id": tts_model,
+                "speed": speed,
+                "volume": volume,
+                "voice": {
+                    "mode": "id",
+                    "id": voice_id
+                }
+            }
+        }
+    
+    # =========================================================================
+    # MAIN LOOP
+    # =========================================================================
+    
+    async def start(self):
+        """
+        Main loop - bridges Twilio and Deepgram.
+        
+        Listens for Twilio WebSocket messages and routes them appropriately:
+        - start: Initialize Deepgram connection
+        - media: Forward audio to Deepgram
+        - stop: Clean up and end
+        """
+        logger.info("🚀 VoiceAgentHandler starting")
+        
+        try:
+            async for message in self.twilio_ws.iter_text():
+                if not self.is_running:
+                    break
+                
+                data = json.loads(message)
+                event_type = data.get("event")
+                
+                if event_type == "start":
+                    await self._handle_twilio_start(data)
+                elif event_type == "media":
+                    await self._handle_twilio_media(data)
+                elif event_type == "stop":
+                    logger.info("📴 Twilio stream stopped")
+                    self.is_running = False
+                    break
+                    
+        except Exception as e:
+            logger.error(f"VoiceAgentHandler error: {e}", exc_info=True)
+        finally:
+            await self._cleanup()
+    
+    # =========================================================================
+    # TWILIO EVENT HANDLERS
+    # =========================================================================
+    
+    async def _handle_twilio_start(self, data: dict):
+        """
+        Handle Twilio stream start event.
+        
+        Extracts call metadata and connects to Deepgram Agent API.
+        """
+        self.stream_sid = data["start"]["streamSid"]
+        
+        # Extract Call SID for hangup capability
+        if "start" in data and "callSid" in data["start"]:
+            self.call_sid = data["start"]["callSid"]
+        
+        # Extract custom parameters from Twilio
+        custom_params = data["start"].get("customParameters", {})
+        self.custom_params = custom_params  # Store for later access (e.g., transfer_failed flag)
+        self.user_name = custom_params.get("user_name", "there")
+        self.business_name = custom_params.get("business_name", "your business")
+        self.user_phone = custom_params.get("user_phone", "unknown")
+
+        # Multi-tenant: Resolve tenant_id
+        explicit_tenant = custom_params.get("tenant_id")
+        self.tenant_id = explicit_tenant if explicit_tenant else (settings.TENANT_ID or "coalcreek")
+
+        # =====================================================================
+        # PLAY GREETING INSTANTLY: Stream pre-recorded greeting mulaw bytes 
+        # from memory cache immediately to Twilio. While it plays, the async
+        # database loading and Deepgram connection setup proceed in parallel.
+        # =====================================================================
+        transfer_failed = self.custom_params.get("transfer_failed") == "true"
+        if transfer_failed:
+            logger.info("🔊 Playing transfer_failed greeting instantly from cache")
+            asyncio.create_task(self._speak_system_message(
+                "Sorry about that, it looks like no one is available. How can I help you instead?",
+                clip_key="transfer_failed"
+            ))
+        else:
+            logger.info("🔊 Playing smart_greeting instantly from cache")
+            asyncio.create_task(self._speak_system_message(
+                self._get_active_greeting(),
+                clip_key="smart_greeting"
+            ))
+
+        # =====================================================================
+        # ASYNC INIT: Fetch profile, tenant config, and active bookings concurrently
+        # Reduces cold start TTFT latency by not blocking sequentially.
+        # =====================================================================
+        try:
+            logger.info(f"📥 Loading config, profile, and bookings for tenant: {self.tenant_id} / phone: {self.user_phone[:4]}****")
+            caller_profile, tenant_config, cached_memory, active_bookings = await asyncio.gather(
+                self.caller_memory_bank.get_profile(self.user_phone),
+                db_service.get_tenant_config(self.tenant_id),
+                db_service.get_hot_path_state(self.call_sid),
+                db_service.lookup_motel_reservation(phone=self.user_phone, tenant_id=self.tenant_id),
+                return_exceptions=True
+            )
+            
+            # Handle cached memory
+            if isinstance(cached_memory, Exception):
+                logger.error("Failed to load cached memory: %s", cached_memory)
+            elif cached_memory:
+                self.memory.update(cached_memory)
+                logger.info("💾 Hot path state rehydrated for %s", self.call_sid)
+            
+            # Handle profile result
+            if isinstance(caller_profile, Exception):
+                logger.error("🧠 CallerMemoryBank unexpected error in handler: %s", caller_profile)
+            elif caller_profile:
+                if caller_profile.get("name"):
+                    self.memory["name"] = caller_profile["name"]
+                    logger.info("🧠 Returning guest recognised: %s", self.user_phone[:4] + "****")
+                if caller_profile.get("room_preference"):
+                    self.memory["room_type"] = caller_profile["room_preference"]
+                if caller_profile.get("email"):
+                    self.memory["guest_email"] = caller_profile["email"]
+                    logger.info("🧠 Pre-loaded guest email from CRM profile: %s", caller_profile["email"])
+                if caller_profile.get("notes"):
+                    self.memory["notes"] = caller_profile["notes"]
+            
+            # Handle active bookings result to enable fuzzy-matching pre-load context
+            if isinstance(active_bookings, Exception):
+                logger.error("Failed to load active bookings: %s", active_bookings)
+            elif active_bookings:
+                # Find most recent active/pending reservation
+                for doc in active_bookings:
+                    _ps = doc.get("payment_status") or ""
+                    _bs = doc.get("status") or ""
+                    is_pending = (
+                        _bs in ("reserved", "pending", "pending_payment", "link_sent", "confirmed", "paid")
+                    )
+                    if is_pending:
+                        self.memory["active_booking"] = doc
+                        logger.info("📅 Pre-loaded active booking into memory for fuzzy context: %s", doc.get("booking_reference"))
+                        if not self.memory.get("name") and doc.get("guest_name"):
+                            self.memory["name"] = doc["guest_name"]
+                        if not self.memory.get("guest_email") and doc.get("guest_email"):
+                            self.memory["guest_email"] = doc["guest_email"]
+                        break
+            
+            # Handle config result
+            if isinstance(tenant_config, Exception):
+                logger.error(f"❌ Failed to load tenant config: {tenant_config}")
+                self.tenant_config = {}
+            elif not tenant_config:
+                logger.warning(f"⚠️ No config found for {self.tenant_id}, using defaults")
+                self.tenant_config = {}
+            else:
+                self.tenant_config = tenant_config
+                
+        except Exception as e:
+            logger.error(f"❌ Failed in concurrent init: {e}")
+            self.tenant_config = {}
+            
+        # Multi-tenant detection
+        self.is_demo_call = custom_params.get("is_demo", "false").lower() == "true"
+        self.demo_type = custom_params.get("demo_type", "")
+        
+        # Adjust duration for Brand Rep mode
+        if self.demo_type == "brand_rep":
+            self.MAX_DEMO_DURATION_SECONDS = 300  # 5 minutes
+            logger.info("🕒 Extended duration for Brand Rep demo (5 mins)")
+            
+        call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
+            
+        # Set context for knowledge base
+        set_tenant_context(self.tenant_id)
+
+        # Startup diagnostics for deterministic system-audio lane
+        self._log_system_audio_clip_health()
+        
+        # Initialize abuse protection
+        self.abuse_protection = AbuseProtection(tenant_id=self.tenant_id)
+        
+        logger.info(f"🟢 Twilio stream started: {self.stream_sid} for {self.user_name} [{call_type}] tenant={self.tenant_id}")
+        
+        # Initialize timing
+        self.call_start_time = time.time()
+        self.abuse_protection.set_call_start_time(self.call_start_time)
+        
+        # =====================================================================
+        # STRATEGY PATTERN: Select Dispatcher based on Config
+        # =====================================================================
+        pms_provider = self.tenant_config.get("integrations", {}).get("pms_provider")
+        tenant_type = self.tenant_config.get("type", "motel")
+        
+        logger.info(f"🧩 Configuring Dispatcher | PMS: {pms_provider} | Type: {tenant_type}")
+    
+        if self.tenant_id == "coalcreek" or pms_provider == "update 247":
+            from .functions import CoalCreekFunctionDispatcher
+            # Pass the in-process ADK orchestrator so perform_live_search queries
+            # it directly instead of making a loopback HTTP POST to Cloud Run.
+            _adk_orchestrator = getattr(getattr(self.twilio_ws, 'app', None), 'state', None)
+            _adk_orchestrator = getattr(_adk_orchestrator, 'adk_orchestrator', None)
+            self.function_dispatcher = CoalCreekFunctionDispatcher(
+                db_service=db_service,
+                user_phone=self.user_phone,
+                save_reservation_fn=self._save_motel_reservation,
+                abuse_protection=self.abuse_protection,
+                caller_memory_bank=self.caller_memory_bank,
+                call_sid=self.call_sid or "",
+                adk_orchestrator=_adk_orchestrator,
+            )
+            logger.info("✅ Using Coal Creek/update 247 Dispatcher")
+            
+        else:
+            self.function_dispatcher = FunctionDispatcher(
+                db_service=db_service,
+                user_phone=self.user_phone,
+                save_reservation_fn=self._save_motel_reservation,
+                abuse_protection=self.abuse_protection,
+                tenant_id=self.tenant_id
+            )
+            logger.info("✅ Using Generic Dispatcher")
+        
+
+        
+        # Connect to Deepgram Voice Agent API
+        try:
+            self.deepgram_ws = await websockets.connect(
+                DEEPGRAM_AGENT_URL,
+                subprotocols=["token", settings.DEEPGRAM_API_KEY],
+                ping_interval=5,
+                ping_timeout=20
+            )
+            
+            logger.info("🟢 Connected to Deepgram Voice Agent API")
+            self.latency.mark_deepgram_connected()
+            
+            # Send Settings message
+            settings_msg = self._get_settings_message()
+            await self.deepgram_ws.send(json.dumps(settings_msg))
+            logger.info("📤 Sent Settings to Deepgram Agent")
+            self.latency.mark_settings_sent()
+            
+            # Log TTS provider clearly
+            tts_provider = settings_msg["agent"]["speak"]["provider"]["type"]
+            if tts_provider == "eleven_labs":
+                logger.info("🎤 TTS PROVIDER: eleven_labs")
+            else:
+                provider_config = settings_msg["agent"]["speak"]["provider"]
+                model = provider_config.get("model") or provider_config.get("model_id", "unknown")
+                logger.info(f"🎤 TTS PROVIDER: {tts_provider} (model: {model})")
+            
+            # Start background tasks
+            asyncio.create_task(self._receive_from_deepgram())
+            self.duration_monitor_task = asyncio.create_task(self._monitor_call_duration())
+            
+        except Exception as e:
+            logger.error(f"Failed to connect to Deepgram Agent: {e}")
+            raise
+
+    async def _smart_greeting_logic(self):
+        """
+        Smart Wait for outbound calls:
+        Wait for user to speak first (e.g., "Hello?").
+        If silence for timeout (2.5s), assume user is waiting and break silence.
+        """
+        logger.info("⏳ Smart Wait: Waiting for user to speak first...")
+        try:
+            # Wait for 2.5 seconds
+            await asyncio.sleep(2.5)
+            
+            # If user hasn't spoken yet, break the silence
+            if not self.has_user_spoken:
+                logger.info("⏰ Smart Wait timeout: User silent, injecting greeting")
+                greeting = self._get_active_greeting()
+                await self._speak_system_message(greeting, clip_key="smart_greeting")
+            else:
+                logger.info("🗣️ User spoke before timeout, letting conversation flow naturally")
+                
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Error in smart greeting logic: {e}")
+    
+    async def _handle_twilio_media(self, data: dict):
+        """Forward Twilio audio to Deepgram Agent."""
+        # GO DEAF: Stop forwarding audio during hangup to ensure clean termination
+        # This prevents the AI from hearing/responding to user's "bye" after we said farewell
+        if getattr(self, '_is_hanging_up', False):
+            return  # Silently drop audio - user won't be heard after farewell
+        
+        # AUDIO PASSTHROUGH DURING FUNCTION CALLS:
+        # Audio continues to flow to Deepgram so meaningful user corrections
+        # ("wait, actually I mean next week") are transcribed and reach the LLM.
+        # The Twilio 'clear' guard lives in _handle_user_started_speaking —
+        # that is what protects injected TTS audio from being wiped.
+        
+        if not self.deepgram_ws:
+            return
+        
+        try:
+            # Twilio sends base64-encoded mulaw audio
+            payload = data["media"]["payload"]
+            audio_bytes = base64.b64decode(payload)
+            
+            # Forward raw audio to Deepgram
+            await self.deepgram_ws.send(audio_bytes)
+            
+        except websockets.exceptions.ConnectionClosed:
+            # Connection closed, stop trying to send
+            return
+        except Exception as e:
+            logger.warning(f"Error forwarding audio to Deepgram: {e}")
+    
+    # =========================================================================
+    # DEEPGRAM EVENT HANDLERS
+    # =========================================================================
+    
+    async def _receive_from_deepgram(self):
+        """
+        Receive audio/events from Deepgram Agent and process them.
+        
+        Routes:
+        - Binary data → Forward audio to Twilio
+        - JSON events → Handle based on type
+        """
+        logger.info("🎧 Started receiving from Deepgram Agent")
+        
+        try:
+            async for message in self.deepgram_ws:
+                if not self.is_running:
+                    break
+                
+                if isinstance(message, bytes):
+                    # Audio from TTS - forward to Twilio
+                    await self._send_audio_to_twilio(message)
+                else:
+                    # JSON event
+                    await self._handle_deepgram_event(json.loads(message))
+                    
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.info(f"🔌 Deepgram connection closed. Code: {e.code}, Reason: {e.reason}")
+        except Exception as e:
+            logger.error(f"Error receiving from Deepgram: {e}")
+    
+    async def _send_audio_to_twilio(self, audio_bytes: bytes):
+        """Send audio to Twilio Media Stream."""
+        try:
+            # Set exact playback start time if not set yet for this utterance
+            if getattr(self, '_ai_is_speaking', False) and not getattr(self, '_tts_playback_started_this_turn', False):
+                self._tts_playback_start = time.time()
+                self._tts_playback_started_this_turn = True
+
+            payload = base64.b64encode(audio_bytes).decode("utf-8")
+            
+            media_message = {
+                "event": "media",
+                "streamSid": self.stream_sid,
+                "media": {
+                    "payload": payload
+                }
+            }
+            
+            await self.twilio_ws.send_json(media_message)
+            self._twilio_audio_frames_sent += 1
+            self._twilio_audio_bytes_sent = getattr(self, '_twilio_audio_bytes_sent', 0) + len(audio_bytes)
+            self.latency.mark_first_audio_out()  # no-op after first frame per turn
+            
+        except Exception as e:
+            logger.warning(f"Error sending audio to Twilio: {e}")
+    
+    async def _handle_deepgram_event(self, event: dict):
+        """
+        Handle JSON events from Deepgram Agent.
+        
+        Event types:
+        - Welcome: Connection established
+        - SettingsApplied: Configuration confirmed
+        - ConversationText: Transcript of speech
+        - UserStartedSpeaking: VAD detected user voice
+        - AgentStartedSpeaking: AI started response
+        - AgentAudioDone: AI finished speaking
+        - FunctionCallRequest: AI wants to call a function
+        - Error/Close: Connection issues
+        """
+        event_type = event.get("type")
+        
+        # DEBUG: Log ALL events to understand what Deepgram sends
+        # This helps diagnose silence detection issues
+        ai_speaking = getattr(self, '_ai_is_speaking', False)
+        # OPTIMIZATION: Use debug instead of info to reduce I/O latency
+        logger.debug(f"📨 DG_EVENT: {event_type} | ai_speaking={ai_speaking} | full={event}")
+        
+        if event_type == "Welcome":
+            logger.info(f"🤝 Deepgram Agent welcome: {event}")
+            
+        elif event_type == "SettingsApplied":
+            logger.info("⚙️ Deepgram Agent settings applied")
+            self.latency.log_setup_latency()
+            
+        elif event_type == "ConversationText":
+            await self._handle_conversation_text(event)
+            
+        elif event_type == "UserStartedSpeaking":
+            await self._handle_user_started_speaking()
+            
+        elif event_type == "AgentStartedSpeaking":
+            await self._handle_agent_started_speaking()
+            
+        elif event_type == "AgentAudioDone":
+            await self._handle_agent_audio_done()
+            
+        elif event_type == "FunctionCallRequest":
+            # NON-BLOCKING: Run function handler as a task so the receive loop
+            # continues forwarding audio frames to Twilio.
+            asyncio.create_task(self._handle_function_call(event))
+            
+        elif event_type == "InjectionRefused":
+            # I1: Deepgram refused our InjectAgentMessage (LLM was already mid-response)
+            # Unblock the injection_event so _handle_function_call doesn't hang on wait()
+            logger.info("💉 I1: InjectionRefused — unblocking injection event")
+            self._injection_refused = True
+            if self._pending_injection_event is not None:
+                self._pending_injection_event.set()
+                self._pending_injection_event = None
+            
+        elif event_type == "Error":
+            logger.error(f"❌ Deepgram Agent error: {event}")
+            
+        elif event_type == "Close":
+            logger.info("👋 Deepgram Agent closing")
+            self.is_running = False
+            
+        else:
+            logger.debug(f"Deepgram event: {event_type}")
+    
+    async def _handle_conversation_text(self, event: dict):
+        """Handle transcribed conversation text from Deepgram."""
+        role = event.get("role", "")
+        content = event.get("content", "")
+        
+        if role == "user":
+            # Log with latency info.
+            # NOTE: "turn_ms" = VAD start → transcript ready.  For real-time STT
+            # this INCLUDES speech duration — the actual transcription overhead
+            # is roughly utterance_end_ms (~300ms) + transit, which is NOT
+            # separately observable via the Deepgram Voice Agent API.
+            # Long utterances showing e.g. 4000ms are expected: most are speaking time.
+            if self.user_speech_start_time:
+                turn_ms = int((time.time() - self.user_speech_start_time) * 1000)
+                logger.info(f"[User]: {content} (turn_ms incl. speech: {turn_ms}ms)")
+            else:
+                logger.info(f"[User]: {content}")
+            
+            # ─────────────────────────────────────────────────────────────────
+            # N4 & C2/I5: GLOBAL MEANINGLESS INTERRUPTION FILTER & WAIT SIGNAL
+            # ─────────────────────────────────────────────────────────────────
+            # N4: Global meaningless interruption filter — applied whenever the
+            # system is busy (audio playing, injection pending, silence wait
+            # active via wait_on_request, OR a tool is executing). This prevents
+            # short affirmations from breaking states or triggering response cycles.
+            _silence_paused = (
+                self.silence_monitor.silence_pause_end_time is not None
+                and time.time() < self.silence_monitor.silence_pause_end_time
+            )
+            is_busy = (
+                self._is_system_audio_playing
+                or self._pending_injection_event is not None
+                or _silence_paused
+                or self._is_processing_function
+                or getattr(self, '_ai_is_speaking', False)
+            )
+
+            # Pre-calculate wait and completion signals for advanced filtering
+            _lower = content.lower()
+            is_wait_signal = any(kw in _lower for kw in self._WAIT_KEYWORDS_EXTENDED)
+            is_completion_signal = any(kw in _lower for kw in ["done", "paid", "finished", "ready", "complete", "completed", "sent", "that's it", "all good"])
+            word_count = len(content.strip().split())
+
+            if is_busy:
+                # Discard meaningless noise OR any short utterance (<= 3 words) that isn't a deliberate wait/completion command
+                if self._is_meaningless_interruption(content) or (word_count <= 3 and not (is_wait_signal or is_completion_signal)):
+                    logger.info(
+                        "🙉 N4: Short or meaningless noise '%s' (%dw) discarded while system busy "
+                        "(audio=%s / injection=%s / wait_pause=%s / processing=%s / ai_speaking=%s)",
+                        content[:40],
+                        word_count,
+                        self._is_system_audio_playing,
+                        self._pending_injection_event is not None,
+                        _silence_paused,
+                        self._is_processing_function,
+                        getattr(self, '_ai_is_speaking', False)
+                    )
+                    return
+
+            # If we survived the meaningless filter, it's a MEANINGFUL interruption!
+            # If the AI was actively speaking, we must now fire the deferred `clear` 
+            # event and trim the transcript.
+            if getattr(self, '_ai_is_speaking', False):
+                logger.info(f"🛑 Meaningful interruption confirmed ('{content}'). Firing clear event.")
+                
+                # Send clear event to Twilio to stop agent audio
+                clear_message = {
+                    "event": "clear",
+                    "streamSid": self.stream_sid
+                }
+                asyncio.create_task(self.twilio_ws.send_json(clear_message))
+                
+                # INTERRUPTION TRIM
+                tts_start = getattr(self, '_tts_playback_start', None)
+                if tts_start and self.transcript and self.transcript[-1].get('role') == 'ai':
+                    elapsed = time.time() - tts_start
+                    original_text = self.transcript[-1].get('text', '')
+                    trimmed = trim_assistant_transcript(original_text, elapsed)
+                    if trimmed != original_text:
+                        self.transcript[-1]['text'] = trimmed
+                        logger.info(
+                            "✂️ Interruption trim (Sync Layer): %.1fs elapsed → %d→%d words | '%s…'",
+                            elapsed,
+                            len(original_text.split()),
+                            len(trimmed.split()) if trimmed else 0,
+                            trimmed[:40] if trimmed else "(empty)",
+                        )
+                        
+                        # INJECT SYSTEM TAG
+                        if self.deepgram_ws:
+                            try:
+                                inject_msg = {
+                                    "type": "InjectUserMessage",
+                                    "content": "[System Note: Caller interrupted. Continue from last confirmed point.]"
+                                }
+                                asyncio.create_task(self.deepgram_ws.send(json.dumps(inject_msg)))
+                                logger.info("💉 Injected interruption system tag into Deepgram context")
+                            except Exception as e:
+                                logger.warning(f"Failed to inject system tag: {e}")
+
+                # Force AI speaking state to False now that it's truly interrupted
+                self._ai_is_speaking = False
+                self._tts_playback_started_this_turn = False
+                self._final_help_offer_active = False
+
+            # I5: Wait-signal safety net — if the user uses wait keywords,
+            # proactively extend the silence pause by 30s so the soft prompt
+            # doesn't fire while they search for their card/wallet/inbox.
+            if is_wait_signal:
+                logger.info(f"I5: Wait-signal detected in user utterance ('{content}') — extending silence pause +30s")
+                self.silence_monitor.pause_silence(30)
+
+            # HEURISTIC FILTER DURING FUNCTION CALLS:
+            # If a tool is executing, let meaningful corrections (> 3 words or signals) flow through.
+            if self._is_processing_function:
+                # Meaningful correction: record locally but skip all state
+                # changes — the LLM sees it via Deepgram's conversation context.
+                logger.info(f"📝 Meaningful correction during function call ({word_count}w) — LLM will handle post-result")
+                self.transcript.append({
+                    "role": "user",
+                    "text": content,
+                    "timestamp": time.strftime("%H:%M:%S")
+                })
+                return
+            
+            # ─────────────────────────────────────────────────────────────────
+            # SMART HANGUP LOGIC:
+            # If we are in the process of hanging up, check what the user said.
+            # - If they said "bye", "thanks", etc. -> IGNORE IT (let hangup proceed)
+            # - If they said "wait", "add X", etc. -> CANCEL HANGUP (resume chat)
+            # ─────────────────────────────────────────────────────────────────
+            if getattr(self, '_is_hanging_up', False):
+                # STRICT ABUSE PROTECTION: If hanging up due to abuse, IGNORE ALL INPUT
+                if getattr(self, 'call_outcome', '') == "abuse_timeout":
+                    logger.info(f"🚫 Abuse termination in progress - ignoring user speech: '{content}'")
+                    return
+
+                content_lower = content.lower().strip()
+                # Phrases that mean "I'm done too" - we should IGNORE these and let hangup finish
+                reciprocal_farewells = [
+                    "bye", "goodbye", "cya", "see ya", "see you", 
+                    "thanks", "thank you", "thanks bye", "okay bye", "ok bye",
+                    "have a good one", "cheers", "no thanks", "no that's all",
+                    "no that's it", "that's it", "nope", "nah", "you too"
+                ]
+                
+                # Check if it's a simple farewell (short & matches list)
+                is_farewell = False
+                if len(content_lower) < 20: 
+                    if any(phrase in content_lower for phrase in reciprocal_farewells):
+                        is_farewell = True
+                
+                if is_farewell:
+                    logger.info(f"👋 User said farewell ('{content}') - ignoring to allow graceful hangup")
+                    return # EXIT EARLY - do not process this text, do not reset hangup
+                else:
+                    logger.info(f"🛑 ABORT HANGUP: User said meaningful request ('{content}') - resuming conversation")
+                    self._is_hanging_up = False
+                    self._hangup_triggered = False
+                    # Don't inject "I'm still here" - just reply naturally to their text
+            
+            # Track exchange
+            self.exchange_count += 1
+            self.transcript.append({
+                "role": "user",
+                "text": content,
+                "timestamp": time.strftime("%H:%M:%S")
+            })
+            
+            # Mark timing for response latency
+            self.ai_response_start_time = time.time()
+            self._stt_complete_time = time.time()  # For TRUE TTFT measurement
+            self._first_ai_response_logged = False  # Reset for new utterance
+            self._filler_played_this_turn = False   # Reset so first tool call this turn gets a filler
+            self.latency.mark_stt_complete()
+            # Tag turn type from content for grouped latency stats
+            _words = content.split()
+            if self._is_explicit_terminal_goodbye(content) or self._is_soft_close_only(content):
+                self.latency.set_turn_type("goodbye")
+                if self._is_explicit_terminal_goodbye(content):
+                    self.silence_monitor.stop()
+                    logger.info("👋 Explicit goodbye detected - stopping silence monitor to prevent 'still there?' prompts")
+            elif len(_words) <= 7:
+                self.latency.set_turn_type("short_answer")
+            else:
+                self.latency.set_turn_type("long_answer")
+            
+            # Check for spam/abuse
+            spam_result = self.abuse_protection.check_spam_behavior(content)
+            if spam_result.get("is_spam"):
+                if spam_result.get("should_hangup"):
+                    self.call_outcome = "spam_terminated"
+                    await self._hangup_with_farewell(spam_result.get("message", "Take care!"))
+                    return
+                elif spam_result.get("warning"):
+                    await self._speak_system_message(spam_result["warning"], clip_key="abuse_warning")
+
+            # I5: Wait-signal safety net check moved to top of user block.
+
+
+
+        elif role == "assistant":
+            # GATING: If we are in the process of hanging up (e.g. end_call triggered),
+            # ignore any subsequent text generation from the LLM to prevent
+            # "silent hangup" where explanation overwrites farewell audio.
+            if getattr(self, '_is_hanging_up', False):
+                logger.info(f"🤐 Ignoring AI text during hangup: '{content[:30]}...'")
+                return
+
+            # Extract control signals and clean content for logging/transcript
+            clean_content, signals = prepare_for_tts(content)
+
+            if self._normalize_phrase(clean_content).strip(".!") in {"end call", "end_call"}:
+                logger.info("🤐 Suppressing literal tool phrase from assistant output")
+                return
+            if self._is_end_call_narration_message(clean_content):
+                logger.info("🤐 Suppressing end-call narration from assistant output")
+                return
+            
+            # STATE MACHINE: AI is now speaking
+            # This replaces AgentStartedSpeaking which Deepgram doesn't send
+            self._ai_is_speaking = True
+            self._tts_playback_started_this_turn = False
+            
+            # During escalation, preserve check ID so hard/abandon checks stay valid
+            in_escalation = getattr(self, '_in_silence_escalation', False)
+            self.silence_monitor.on_ai_started_speaking(preserve_check_id=in_escalation)
+            
+            # Don't reset escalation flag - let the escalation sequence continue
+            
+            # Log clean content with latency info
+            if self.ai_response_start_time:
+                latency_ms = int((time.time() - self.ai_response_start_time) * 1000)
+                
+                # TRUE TTFT: Log only for the first assistant sentence after user speech.
+                if hasattr(self, '_stt_complete_time') and not getattr(self, '_first_ai_response_logged', False):
+                    ttft_ms = int((time.time() - self._stt_complete_time) * 1000)
+                    self._first_ai_response_logged = True
+                    self.latency.mark_llm_first_token()
+                    logger.info(f"[Ovela]: {clean_content} (TTFT: {ttft_ms}ms)")
+                else:
+                    logger.info(f"[Ovela]: {clean_content} (inter-sentence: {latency_ms}ms)")
+                
+                # Reset for per-sentence measurement (prevents compounding)
+                self.ai_response_start_time = time.time()
+            else:
+                logger.info(f"[Ovela]: {clean_content}")
+            
+            # Save clean content to transcript (not raw with signals)
+            self.last_ai_message = clean_content
+            self._final_help_offer_active = self._is_final_help_offer_message(clean_content)
+            self.transcript.append({
+                "role": "ai",
+                "text": clean_content,
+                "timestamp": time.strftime("%H:%M:%S")
+            })
+            
+            # Handle control signals that were extracted
+            if "[[HANGUP]]" in signals:
+                logger.info("📞 AI initiated hangup (Signal detected)")
+                await self._hangup_call()
+            
+            # Semantic termination detection REMOVED
+            # We now rely exclusively on the explicit 'end_call' function to hang up.
+            # This prevents premature hangups on phrases like "Cheers" or "Have a good one".
+
+    
+    async def _handle_user_started_speaking(self):
+        """Handle VAD detection of user speech."""
+        # ─────────────────────────────────────────────────────────────────
+        # GO DEAF DURING FUNCTION CALLS: If a function is in progress we
+        # are injecting TTS ("One moment...").  VAD may still fire from
+        # residual audio in Deepgram's buffer.  Do NOT send the Twilio
+        # 'clear' event — it would wipe the injected TTS audio buffer
+        # and the caller would hear silence.
+        # ─────────────────────────────────────────────────────────────────
+        # CLEAR-EVENT GUARD: While a function is executing we suppress the Twilio
+        # 'clear' event so injected TTS audio (filler phrases) cannot be wiped.
+        # Audio still flows to Deepgram — see _handle_twilio_media.
+        # Meaningful corrections are filtered in _handle_conversation_text.
+        if getattr(self, '_is_processing_function', False):
+            logger.debug("🛡️ Suppressing Twilio clear during function call (TTS guard)")
+            return
+        
+        # ─────────────────────────────────────────────────────────────────
+        # TTS SYNC LAYER: Check if AI audio is actually still playing in the
+        # user's ear based on bytes sent vs elapsed time.
+        # If it's still playing, suppress immediate `clear` to prevent "mmhmm"
+        # from cutting off the AI prematurely.
+        # ─────────────────────────────────────────────────────────────────
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        is_flux = voice_settings.get("model", "flux-general-en").startswith("flux-")
+        
+        if not is_flux and getattr(self, '_ai_is_speaking', False) and hasattr(self, '_tts_playback_start'):
+            bytes_sent = getattr(self, '_twilio_audio_bytes_sent', 0)
+            elapsed_time = time.time() - self._tts_playback_start
+            expected_duration = bytes_sent / 8000.0  # 8000 bytes/sec for 8kHz mulaw
+            
+            if elapsed_time < expected_duration + 0.3:  # 300ms grace period
+                logger.debug(f"🛡️ Sync Layer: Suppressing clear. AI audio still playing ({elapsed_time:.2f}s / {expected_duration:.2f}s)")
+                # Don't clear Twilio audio buffer yet. `_handle_conversation_text` will
+                # clear it if the text proves to be a meaningful interruption.
+                
+                # Still track latency and VAD
+                self.user_speech_start_time = time.time()
+                self.latency.mark_user_vad()
+                self.has_user_spoken = True
+                return
+        
+        # ─────────────────────────────────────────────────────────────────
+        # SYSTEM AUDIO PROTECTION: If we injected system audio (ACKs, farewells),
+        # keep VAD suppressed until the calculated end-to-end playback duration
+        # (plus a short tail) has completed in the caller's ear.
+        # ─────────────────────────────────────────────────────────────────
+        if getattr(self, '_blocking_interruptions', False) or self._is_system_audio_playing:
+            time_left = getattr(self, '_system_audio_completion_at', 0) - time.time() + 1.0
+            logger.info(
+                f"🛡️ VAD suppressed: System audio active/playing (est {time_left:.1f}s remaining). "
+                f"Word-count gate in ConversationText will filter transcript."
+            )
+            # Still update VAD timing state so latency tracking stays accurate
+            self.user_speech_start_time = time.time()
+            self.latency.mark_user_vad()
+            self.has_user_spoken = True
+            return
+        
+        logger.info("🎤 User started speaking (VAD)")
+        
+        # Track timing
+        self.user_speech_start_time = time.time()
+        self.latency.mark_user_vad()
+        
+        # Mark that user has spoken (for smart greeting logic)
+        self.has_user_spoken = True
+        
+        # User spoke - exit any silence escalation cycle
+        self._in_silence_escalation = False
+        
+        # ─────────────────────────────────────────────────────────────────
+        # Note: We do NOT cancel hangup here anymore.
+        # We wait for _handle_conversation_text to see what they said.
+        # If they just said "bye", we want to let the hangup happen!
+        # ─────────────────────────────────────────────────────────────────
+        
+        # Notify silence monitor
+        self.silence_monitor.on_user_speech()
+        
+        # ─────────────────────────────────────────────────────────────────
+        # FLUX VAD INTERRUPTION (Immediate Clear)
+        # Deepgram Flux sends ConversationText at the END of the turn (EOT).
+        # We cannot wait for the transcript to verify if it's a meaningful interruption,
+        # otherwise the AI will keep talking over the user for seconds.
+        # We MUST clear the Twilio buffer immediately on VAD for Flux.
+        # ─────────────────────────────────────────────────────────────────
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        is_flux = voice_settings.get("model", "flux-general-en").startswith("flux-")
+
+        if is_flux and getattr(self, '_ai_is_speaking', False):
+            logger.info("🛑 Flux VAD Interruption: Firing Twilio clear event immediately to stop AI.")
+            clear_message = {
+                "event": "clear",
+                "streamSid": self.stream_sid
+            }
+            asyncio.create_task(self.twilio_ws.send_json(clear_message))
+            # We don't force _ai_is_speaking = False yet; we let the ConversationText 
+            # handler do the trimming and system tag injection later.
+        else:
+            # We NO LONGER clear the Twilio audio buffer here for Nova.
+            # It is deferred to `_handle_conversation_text` (Sync Layer) which verifies
+            # the text is a meaningful interruption before stopping the AI's speech.
+            pass
+        
+        # CRITICAL: Do NOT force AI speaking state to False yet!
+        # If it was a false interruption, the AI is actually still speaking.
+        # NOTE: do NOT call on_ai_finished_speaking() here — it sets silence_check_start_time
+        # to the moment user speaks, which races with the 300ms grace in _handle_agent_audio_done
+        # and causes abandon-silence to fire even when user has spoken.
+    
+    async def _handle_agent_started_speaking(self):
+        """
+        Handle agent starting to speak - invalidate pending silence checks.
+        
+        This is critical for proper silence detection:
+        - When AI starts responding, any pending silence checks from previous
+          utterances must be invalidated
+        - This prevents "silence while AI is speaking" false positives
+        """
+        logger.info("🔊 Agent started speaking")
+        
+        # Record exact TTS playback start time for interruption trimming.
+        # When the user speaks (VAD fires), elapsed = now - _tts_playback_start.
+        self._tts_playback_start = time.time()
+        
+        # Set AI speaking state
+        self._ai_is_speaking = True
+        
+        # Invalidate any pending silence checks by incrementing the check ID
+        self.silence_monitor.on_ai_started_speaking()
+        
+        # Cancel any silence escalation - AI is responding
+        self._in_silence_escalation = False
+        self._twilio_audio_bytes_sent = 0
+    
+    async def _handle_agent_audio_done(self):
+        """
+        Handle agent finished speaking - start silence monitoring.
+        
+        STATE MACHINE: AgentAudioDone means Deepgram finished sending audio.
+        We now switch to "awaiting user utterance" state.
+        """
+        logger.info("🔇 Agent audio done (transfer_pending=%s)", self._transfer_pending)
+        self.latency.mark_agent_done()
+        self.latency.log_turn()
+        
+        # Mark AI as not speaking - transition to awaiting user
+        self._ai_is_speaking = False
+        
+        # If we're waiting for transfer TTS to complete, signal it's done
+        if self._transfer_pending:
+            logger.info("✅ Transfer TTS playback completed – signalling _transfer_tts_done")
+            self._transfer_tts_done.set()
+            return  # Don't start silence monitoring during transfer
+        
+        # If we're in a silence escalation cycle, don't start a new cycle
+        if getattr(self, '_in_silence_escalation', False):
+            logger.debug("⏱️ Skipping new silence cycle - in escalation mode")
+            return
+
+        # I1: Release pending injection event (InjectAgentMessage ack finished playing)
+        # This allows _handle_function_call to send the function result to Deepgram.
+        if self._pending_injection_event is not None:
+            logger.info("💉 I1: AgentAudioDone — releasing injection event (ack finished playing)")
+            self._pending_injection_event.set()
+            self._pending_injection_event = None
+            return  # Don't start silence monitoring — function result is about to arrive
+        
+        # Short grace period to allow for streaming chunks
+        await asyncio.sleep(0.3)  # 300ms grace period
+        
+        # Check if AI started speaking again (new ConversationText came in)
+        if getattr(self, '_ai_is_speaking', False):
+            logger.debug("⏱️ Skipping silence check - AI speaking again")
+            return
+
+        # Guard: if user started speaking during the 300ms grace window, their speech
+        # will trigger AI response → AgentAudioDone → a fresh silence check after that.
+        # Skip now to avoid setting silence_check_start_time AFTER last_user_speech_time
+        # (which would make has_user_spoken_since return False and fire abandon incorrectly).
+        if self.user_speech_start_time and time.time() - self.user_speech_start_time < 0.5:
+            logger.debug("⏱️ Skipping silence check - user spoke during grace period")
+            return
+        
+        # Start silence monitoring - no TTS buffer, trust event timing
+        self.silence_monitor.on_ai_finished_speaking()
+        check_id = self.silence_monitor.get_check_id()
+        
+        # Schedule silence check
+        logger.info(f"⏱️ Scheduling silence check #{check_id} (soft={self.silence_monitor.get_soft_threshold()}s)")
+        asyncio.create_task(self._check_silence(check_id))
+    
+    async def _handle_function_call(self, event: dict):
+        """Handle function call request from Deepgram Agent."""
+        functions = event.get("functions", [])
+        
+        if not functions:
+            logger.error(f"❌ FunctionCallRequest has no functions. Event: {event}")
+            return
+        
+        # Get first function from array
+        func_data = functions[0]
+        function_name = func_data.get("name", "")
+        call_id = func_data.get("id", "")
+        arguments_str = func_data.get("arguments", "{}")
+        
+        # Parse arguments
+        try:
+            function_args = json.loads(arguments_str) if arguments_str else {}
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Failed to parse function arguments: {e}")
+            function_args = {}
+
+        # Attach last user utterance for deterministic date resolution in tools
+        # (e.g., "upcoming weekend", "after 5 days") without prompt bloat.
+        try:
+            if isinstance(function_args, dict) and "_user_utterance" not in function_args:
+                for entry in reversed(self.transcript):
+                    if entry.get("role") == "user":
+                        function_args["_user_utterance"] = entry.get("text", "")
+                        break
+        except Exception:
+            pass
+        
+        if not function_name or not call_id:
+            logger.error(f"❌ FunctionCallRequest missing name or id. Event: {event}")
+            return
+        
+        # DEDUP GUARD: Prevent cascading duplicate calls while one is in progress.
+        # When the receive loop was blocking, user retries ("Hello?") would pile up
+        # and each trigger another function call on replay.
+        if self._is_processing_function:
+            logger.warning(f"⏭️ Skipping duplicate {function_name} – another function already in progress")
+            await self._send_function_response(call_id, function_name, {
+                "skipped": True,
+                "message": "I'm already working on your request. One moment please."
+            })
+            return
+        
+        logger.info(f"🔧 Function call: {function_name}({function_args})")
+        self.latency.mark_func_request()
+        self.latency.set_turn_type("tool_call")
+        
+        # Mark as processing BEFORE any async work to block duplicates immediately
+        self._is_processing_function = True
+
+        # SMART MEMORY UPDATE
+        # Capture details from function args to persist in prompt
+        if "customer_name" in function_args and function_args["customer_name"]:
+            self.memory["name"] = function_args["customer_name"]
+            logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
+        elif "name" in function_args and function_args["name"]:
+            self.memory["name"] = function_args["name"]
+            logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
+        elif "guest_name" in function_args and function_args["guest_name"]:
+            self.memory["name"] = function_args["guest_name"]
+            logger.info(f"🧠 Memory Updated: Name = {self.memory['name']}")
+        
+        # COAL CREEK BOOKING MEMORY: Capture preferred dates, room type, guest
+        # count and notes from check_availability and create_booking_request so
+        # the AI never has to ask again mid-conversation.
+        if self.tenant_id == "coalcreek":
+            if function_args.get("check_in_date"):
+                self.memory["check_in"] = function_args["check_in_date"]
+                logger.info(f"🧠 Memory Updated: check_in = {self.memory['check_in']}")
+            if function_args.get("check_out_date"):
+                self.memory["check_out"] = function_args["check_out_date"]
+                logger.info(f"🧠 Memory Updated: check_out = {self.memory['check_out']}")
+            if function_args.get("room_type") and function_args["room_type"] != "any":
+                self.memory["room_type"] = function_args["room_type"]
+                logger.info(f"🧠 Memory Updated: room_type = {self.memory['room_type']}")
+            if function_args.get("num_guests"):
+                self.memory["num_guests"] = function_args["num_guests"]
+                logger.info(f"🧠 Memory Updated: num_guests = {self.memory['num_guests']}")
+            if function_args.get("notes"):
+                self.memory["notes"] = function_args["notes"]
+                logger.info(f"🧠 Memory Updated: notes = {self.memory['notes']}")
+                
+        # Background save of the hot path state so it survives reconnects
+        if getattr(self, "call_sid", None):
+            asyncio.create_task(db_service.save_hot_path_state(self.call_sid, self.memory))
+        
+        # ─────────────────────────────────────────────────────────────────
+        # FAST-START PATH: For check_availability we always need a filler
+        # and the LLM is instructed not to speak one.  Inject the deterministic
+        # preset phrase immediately (no grace-period wait) and start the
+        # function execution without delay — the user hears "One moment…"
+        # while the PMS call runs concurrently.
+        #
+        # OTHER SLOW TOOLS: keep a reduced 0.3s grace period so the LLM's
+        # own brief filler can flush before the system fallback fires.
+        # ─────────────────────────────────────────────────────────────────
+        # ─────────────────────────────────────────────────────────────────
+        # I1: INJECT-ACK ARCHITECTURE (replaces FAST_TOOLS/SLOW_TOOLS filler)
+        #
+        # Design:
+        #   1. Send InjectAgentMessage with context-aware ack text
+        #      (Deepgram is in function-wait state — valid injection window)
+        #   2. Execute the function concurrently (no user hears dead air)
+        #   3. Wait for BOTH: AgentAudioDone (ack finished) AND function done
+        #   4. Send function result → LLM speaks result naturally
+        #
+        # InjectionRefused fallback: if Deepgram refuses injection (LLM already
+        # mid-response), fall back to _speak_system_message (existing behaviour).
+        # _filler_played_this_turn guard prevents double-ack when LLM also fires.
+        # ─────────────────────────────────────────────────────────────────
+
+        # Context-aware ack map (I1 spec)
+        ACK_MAP = {
+            "check_availability":           "Got it, one moment.",
+            "create_booking_request":       "Sure, placing that hold now.",
+            "lookup_booking":               "Let me check that.",
+            "resend_payment_confirmation":  "On it.",
+            "wait_on_request":              "Of course.",
+            "perform_live_search":          "Let me look that up.",
+            "transfer_to_staff":            "Sure, one moment.",
+            "update_guest_info":            "Got it.",
+            "request_human_callback":       "Sure, I'll arrange that.",
+            "report_missing_booking":       "On it, I'll flag that now.",
+        }
+        ack_text = ACK_MAP.get(function_name, "One moment.")
+
+        # Block interruptions for the entire ack+function window
+        self._blocking_interruptions = True
+
+        # Only inject if LLM hasn't already played an ack this turn, and function is not hang_up_call
+        injection_event = None
+        if function_name != "hang_up_call" and not getattr(self, '_filler_played_this_turn', False) and self.deepgram_ws:
+            try:
+                injection_event = asyncio.Event()
+                self._pending_injection_event = injection_event
+                self._injection_refused = False
+
+                inject_msg = {
+                    "type": "InjectAgentMessage",
+                    "behavior": "default",
+                    "message": ack_text,
+                }
+                await self.deepgram_ws.send(json.dumps(inject_msg))
+                logger.info("💉 I1: InjectAgentMessage sent | fn=%s | ack='%s'", function_name, ack_text)
+                self._filler_played_this_turn = True
+            except Exception as inj_err:
+                logger.warning("💉 I1: InjectAgentMessage send failed (%s) — fallback to clip", inj_err)
+                injection_event = None
+                self._pending_injection_event = None
+
+        long_wait_task = None
+        fn_done_event = None
+
+        try:
+            # ── Execute via dispatcher ──────────────────────────────────────
+            ctx = {
+                "pending_order": getattr(self, "pending_order", None),
+                "availability_cache": self._availability_cache,
+            }
+            try:
+                result = await self.function_dispatcher.execute(
+                    function_name, function_args, context=ctx
+                )
+                self.latency.mark_func_exec_done()
+
+            except Exception as dispatch_err:
+                # ── Graceful Degradation: Schema Hallucination Guard ──────────
+                # Catch pydantic ValidationError (LLM sent malformed JSON schema,
+                # wrong date format, bad type) or any other tool crash.
+                # Never let this surface as dead air — always return a safe
+                # user-facing fallback that prompts clarification.
+                err_type = type(dispatch_err).__name__
+                err_msg = str(dispatch_err)
+
+                if "ValidationError" in err_type or "validation" in err_msg.lower():
+                    # Schema hallucination: the LLM sent malformed arguments.
+                    # Ask the user to rephrase rather than dropping the call.
+                    logger.warning(
+                        "⚠️ ADK schema hallucination detected in %s — "
+                        "ValidationError: %s. Returning safe clarification prompt.",
+                        function_name,
+                        err_msg[:200],
+                    )
+                    result = {
+                        "success": False,
+                        "message": (
+                            "I didn't quite catch all the details I need. "
+                            "Could you repeat the date or spelling for me?"
+                        ),
+                        "_degradation_reason": f"schema_hallucination:{err_type}",
+                    }
+                else:
+                    # Generic tool failure: DB timeout, network error, etc.
+                    logger.error(
+                        "❌ Tool execution failed for %s — %s: %s",
+                        function_name,
+                        err_type,
+                        err_msg[:300],
+                    )
+                    result = {
+                        "success": False,
+                        "message": (
+                            "I'm having a little trouble with that right now. "
+                            "Let me try something else, or I can take a note and "
+                            "have someone follow up with you."
+                        ),
+                        "_degradation_reason": f"tool_failure:{err_type}",
+                    }
+
+            finally:
+                # Always cancel the long-wait filler — even on error paths.
+                if fn_done_event:
+                    fn_done_event.set()
+                if long_wait_task and not long_wait_task.done():
+                    long_wait_task.cancel()
+
+            # Capture system errors/outcome overrides
+            if result.get("outcome_override"):
+                self.call_outcome = result["outcome_override"]
+
+                # Log error to transcript (visible in CRM)
+                if result.get("error_details"):
+                    self.transcript.append({
+                        "role": "assistant",
+                        "content": f"⚠️ [SYSTEM ERROR] {result['error_details']}",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    logger.error(f"🚨 System Error logged to transcript: {result['error_details']}")
+
+                    # Create visible System Alert (Notification Center)
+                    if result["outcome_override"] == "system_failure":
+                        asyncio.create_task(self._handle_system_failure(result['error_details']))
+
+                        await db_service.create_system_alert(
+                            title=f"Voice Agent Error: {function_name}",
+                            message=result['error_details'],
+                            severity="error",
+                            component="voice_agent",
+                            tenant_id=self.tenant_id,
+                            metadata={
+                                "call_sid": self.call_sid or "unknown",
+                                "phone": self.user_phone,
+                                "function": function_name
+                            }
+                        )
+
+        except Exception as func_err:
+            logger.error(f"❌ Unexpected error in function call handling: {func_err}")
+            result = {"success": False, "message": "I encountered a technical issue."}
+        
+        # ─────────────────────────────────────────────────────────────────
+        # POST-FUNCTION LOGIC: Still under Go Deaf (_is_processing_function = True)
+        # so injected speech cannot be wiped by Twilio 'clear' events.
+        # Go Deaf is released in the finally block below.
+        # ─────────────────────────────────────────────────────────────────
+        
+        try:
+            # Availability fallback: if live calendar is unavailable, do not force
+            # auto-transfer here. Let the AI transparently explain what happened
+            # and ask permission before transfer.
+            if function_name == "check_availability" and result.get("available") == "unknown":
+                logger.info("ℹ️ Availability unknown - returning transparent fallback to AI (no forced transfer)")
+
+            # Check for transfer signal
+            if result.get("action") == "transfer":
+                logger.warning("⚠️ No specific staff phone for tenant %s, using default.", self.tenant_id)
+                transfer_to = settings.STAFF_PHONE_NUMBER
+                if not transfer_to and self.tenant_config.get("business_phone"):
+                     transfer_to = self.tenant_config["business_phone"]
+                logger.info(f"📞 Transfer requested to {str(transfer_to)[:2]}***{str(transfer_to)[-2:]}")
+                message = result.get("message") or get_preset_phrase(self.tenant_id, "transfering")
+                await self._speak_system_message(message, clip_key="transfer", wait_for_playback=True)
+                await self._execute_twilio_transfer(transfer_to, play_transfer_message=False)
+                return
+
+            # Check for hangup signal (LLM explicitly requested call termination)
+            if result.get("action") == "hangup":
+                confidence = 100
+                logger.info(f"👋 hang_up_call function called - injecting farewell + instant hangup")
+                self._is_hanging_up = True
+                self.silence_monitor.stop()
+                message = result.get("message")
+                if not message:
+                    message = get_random_farewell(self.tenant_id)
+                    logger.info(f"🗣️ Using pre-configured farewell: '{message}'")
+                # Use the pre-recorded farewell clip if available to eliminate Cartesia TTS network latency
+                # (falls back gracefully to live Cartesia TTS if missing).
+                # Play farewell and wait for playback to finish, then hang up instantly.
+                await self._speak_system_message(message, clip_key="farewell", wait_for_playback=True)
+                
+                # Check if hangup was aborted by user interruption
+                if not getattr(self, '_is_hanging_up', True):
+                    logger.info("🛑 ABORT HANGUP: User spoke during farewell. Resuming call.")
+                    await self._send_function_response(call_id, function_name, {
+                        "success": False, 
+                        "message": "The user interrupted before the call ended. Ask them what else they need."
+                    })
+                    return
+
+                logger.info("👋 Farewell finished playing — hanging up call instantly.")
+                await self._hangup_call()
+                return
+
+            # Check for wait_on_request signal
+            if result.get("action") == "wait_on_request":
+                wait_seconds = result.get("duration_seconds", 90)
+                reason = result.get("reason", "")
+                logger.info(f"⏳ wait_on_request function called. Pausing silence detection for {wait_seconds}s. Reason: {reason}")
+                
+                self.silence_monitor.pause_silence(wait_seconds)
+
+
+
+            # Check for hangup signal from flag_off_topic
+            if result.get("should_hangup"):
+                logger.info(f"🚫 Flag off-topic limit reached - hanging up")
+                self.call_outcome = "abuse_timeout"
+                asyncio.create_task(self._hangup_with_farewell(
+                    result.get("farewell", "Thanks for calling! Take care!")
+                ))
+
+            # Check if booking was completed
+            if function_name == "create_booking" and result.get("success"):
+                self.booking_completed = True
+
+            # Check for order completion
+            # Check for booking completion (Motel)
+            if function_name == "create_booking_request" and result.get("success"):
+                self.call_reference = result.get("booking_reference")
+                logger.info(f"🏨 Booking captured: {self.call_reference}")
+
+            # I1: Wait for injection ack audio to finish before sending result
+            # This creates the natural "Got it. [pause] Here's what I found..." gap.
+            # 3s timeout ensures we never block indefinitely if AgentAudioDone is delayed.
+            if injection_event is not None and not self._injection_refused:
+                try:
+                    await asyncio.wait_for(injection_event.wait(), timeout=3.0)
+                    logger.info("💉 I1: Injection ack confirmed done — sending function result")
+                except asyncio.TimeoutError:
+                    logger.warning("💉 I1: Injection event timed out (3s) — sending result anyway")
+                    # Clear the pending event so AgentAudioDone handler doesn't double-fire
+                    self._pending_injection_event = None
+
+            # Send response back to Deepgram
+            await self._send_function_response(call_id, function_name, result)
+
+        
+        finally:
+            # Release Go Deaf AFTER all post-function speech & transfers are done
+            self._is_processing_function = False
+            self._filler_played_this_turn = False  # BS3: reset on error path so next turn is not locked
+            self._blocking_interruptions = False
+    
+    async def _send_function_response(self, call_id: str, function_name: str, result: dict):
+        """Send function result back to Deepgram (V1 API format).
+        
+        Sanitizes 'ai_should_say' and 'message' fields through clean_tts_output()
+        before transmitting, so no unicode smart quotes, newlines, or markdown
+        characters ever reach the Cartesia TTS synthesis pipeline.
+        """
+        if not self.deepgram_ws:
+            return
+
+        try:
+            # ── TTS Sanitization: strip unicode + markdown from human-facing fields ──
+            # These fields are used by Deepgram's LLM to construct the agent's spoken
+            # response. Any curly quotes, em-dashes, or \n will be synthesized verbatim.
+            sanitized = dict(result)
+            for field in ("ai_should_say", "message", "error_message", "description"):
+                if isinstance(sanitized.get(field), str):
+                    sanitized[field] = clean_tts_output(sanitized[field])
+
+            # ── _skip_ack guard (double-ack prevention) ──────────────────────
+            # When a tool sets _skip_ack=True it means I1 already played an ack
+            # phrase ("Got it, one moment.") before the tool ran. Strip the flag
+            # and prepend a system directive so the LLM skips its own ack word.
+            if sanitized.pop("_skip_ack", False):
+                for field in ("ai_should_say", "message"):
+                    if isinstance(sanitized.get(field), str) and sanitized[field].strip():
+                        sanitized[field] = (
+                            "[System: ack already played — begin response directly without any ack word] "
+                            + sanitized[field]
+                        )
+                        logger.debug("💉 _skip_ack: prepended no-ack directive to %s field", field)
+                        break
+
+            response = {
+                "type": "FunctionCallResponse",
+                "id": call_id,
+                "name": function_name,
+                "content": json.dumps(sanitized)
+            }
+            await self.deepgram_ws.send(json.dumps(response))
+            self.latency.mark_func_response()
+            logger.info(f"📤 Sent function response for {function_name}")
+        except Exception as e:
+            logger.error(f"Failed to send function response: {e}")
+
+    
+    # =========================================================================
+    # SILENCE DETECTION
+    # =========================================================================
+    
+    async def _check_silence(self, check_id: int):
+        """Check for soft silence threshold."""
+        # STRICT GUARD: Never run silence check while AI is speaking or hanging up
+        if getattr(self, '_ai_is_speaking', False):
+            logger.info(f"⏹️ Silence check #{check_id} cancelled - AI is speaking")
+            return
+        if getattr(self, '_is_hanging_up', False):
+            logger.info(f"⏹️ Silence check #{check_id} cancelled - call hanging up")
+            return
+        
+        threshold = self.silence_monitor.get_soft_threshold()
+        logger.info(f"⏱️ Silence check #{check_id} waiting {threshold}s")
+        await asyncio.sleep(threshold)
+        
+        if not self.is_running:
+            logger.debug(f"⏱️ Silence check #{check_id} cancelled: call ended")
+            return
+        
+        # Check again if AI started speaking during wait
+        if getattr(self, '_ai_is_speaking', False):
+            logger.info(f"⏹️ Silence check #{check_id} cancelled - AI started speaking")
+            return
+        
+        result = self.silence_monitor.check_silence(check_id)
+        action = result.get("action")
+        reason = result.get("reason", "")
+        
+        logger.info(f"⏱️ Silence check #{check_id} result: action={action}, reason={reason}")
+        
+        if action == "none" and reason == "paused_on_request":
+            # Reschedule this check for 10 seconds later while we are waiting
+            logger.debug(f"⏱️ Silence check #{check_id} paused. Re-checking...")
+            asyncio.create_task(self._check_silence(check_id))
+            return
+            
+        if action == "soft_prompt":
+            logger.info(f"⏱️ Soft silence - gentle check-in")
+            self._in_silence_escalation = True  # Prevent new silence cycles during escalation
+            await self._speak_system_message(
+                result.get("prompt", get_random_silence_prompt()),
+                clip_key="silence_soft",
+            )
+            # During escalation we keep the original silence timer/check id,
+            # otherwise the hard stage compares against a fresh clock and never fires.
+            asyncio.create_task(self._check_hard_silence(self.silence_monitor.get_check_id()))
+            
+        elif action == "abandon":
+            self.call_outcome = "timeout_silence"
+            await self._hangup_with_farewell(result.get("farewell", get_random_silence_farewell()))
+    
+    async def _check_hard_silence(self, check_id: int):
+        """Check for hard silence threshold (second follow-up)."""
+        # Guard: Exit if AI started speaking or call already ending
+        if getattr(self, '_ai_is_speaking', False) or getattr(self, '_is_hanging_up', False):
+            self._in_silence_escalation = False
+            return
+
+        # Wait delta between soft and hard threshold
+        hard_wait = self.silence_monitor.get_hard_threshold() - self.silence_monitor.get_soft_threshold()
+        logger.info(f"⏱️ Hard silence check waiting {hard_wait}s")
+        await asyncio.sleep(hard_wait)
+
+        if not self.is_running or getattr(self, '_ai_is_speaking', False) or getattr(self, '_is_hanging_up', False):
+            self._in_silence_escalation = False
+            return
+
+        result = self.silence_monitor.check_silence(check_id)
+        action = result.get("action")
+
+        if action == "hard_prompt":
+            logger.info(f"⏱️ Hard silence - urgent check-in")
+            await self._speak_system_message(
+                result.get("prompt", "Hello? Still there?"),
+                clip_key="silence_hard",
+            )
+            # Same escalation chain: keep using the active check id/window.
+            asyncio.create_task(self._check_abandon_silence(self.silence_monitor.get_check_id()))
+
+        elif action == "abandon":
+            self._in_silence_escalation = False
+            self.call_outcome = "timeout_silence"
+            await self._hangup_with_farewell(result.get("farewell", get_random_silence_farewell()))
+        else:
+            # User spoke or check invalidated - exit escalation
+            self._in_silence_escalation = False
+    
+    async def _check_abandon_silence(self, check_id: int):
+        """Check for abandon threshold - end call if still silent."""
+        # Guard: Exit if AI started speaking or call already ending
+        if getattr(self, '_ai_is_speaking', False) or getattr(self, '_is_hanging_up', False):
+            self._in_silence_escalation = False
+            return
+
+        abandon_wait = self.silence_monitor.get_abandon_threshold() - self.silence_monitor.get_hard_threshold()
+        logger.info(f"⏱️ Abandon silence check waiting {abandon_wait}s")
+        await asyncio.sleep(abandon_wait)
+
+        if not self.is_running or getattr(self, '_ai_is_speaking', False) or getattr(self, '_is_hanging_up', False):
+            self._in_silence_escalation = False
+            return
+        
+        result = self.silence_monitor.check_silence(check_id)
+        
+        if result.get("action") == "abandon":
+            logger.info(f"⏱️ Extended silence ({int(result.get('duration', 0))}s) - ending call")
+            self._in_silence_escalation = False
+            self.call_outcome = "timeout_silence"
+            await self._hangup_with_farewell(result.get("farewell", get_random_silence_farewell()))
+        else:
+            # User spoke or check invalidated
+            self._in_silence_escalation = False
+    
+    # =========================================================================
+    # DURATION MONITORING
+    # =========================================================================
+    
+    async def _monitor_call_duration(self):
+        """
+        Background task that monitors call duration and enforces time caps.
+        
+        Uses thresholds from ABUSE_CONFIG:
+        - soft_warning_minutes: Inject gentle "wrapping up" prompt
+        - hard_cap_minutes: Force end call or transfer to staff
+        
+        Behavior differs based on call type:
+        - Demo calls: Polite hangup when cap reached
+        - Production calls: Transfer to staff when cap reached
+        """
+        call_type = "DEMO" if self.is_demo_call else "PRODUCTION"
+        logger.info(
+            f"⏱️ Duration monitor started [{call_type}]: "
+            f"soft={ABUSE_CONFIG['soft_warning_minutes']}min, hard={ABUSE_CONFIG['hard_cap_minutes']}min"
+        )
+        
+        while self.is_running:
+            await asyncio.sleep(10)
+            
+            if not self.is_running or not self.call_start_time:
+                break
+            
+            # Check duration using abuse protection
+            duration_result = self.abuse_protection.check_duration()
+            action = duration_result.get("action")
+            
+            if action == "soft_warning":
+                # Don't inject warning if we're already hanging up or call is completed
+                if getattr(self, '_is_hanging_up', False) or self.call_outcome != "completed":
+                    logger.debug("⏱️ Soft time warning skipped - call ending")
+                    continue
+                    
+                logger.info(f"⏱️ Soft time warning [{call_type}]")
+                await self._speak_system_message(
+                    duration_result.get("message", "We've been chatting for a while..."),
+                    clip_key="duration_soft",
+                )
+                
+            elif action == "hard_cap":
+                # Smart Wait: Let AI finish speaking or working
+                wait_count = 0
+                while (getattr(self, '_ai_is_speaking', False) or self._is_processing_function) and wait_count < 15:
+                    if wait_count % 3 == 0:
+                        logger.info(f"⏱️ Hard cap reached, waiting for AI to finish (busy={self._is_processing_function}, speaking={getattr(self, '_ai_is_speaking', False)})")
+                    await asyncio.sleep(1)
+                    wait_count += 1
+                
+                self.call_outcome = duration_result.get("outcome", "timeout_duration")
+                
+                # Check if we should transfer instead of hanging up
+                should_transfer = ABUSE_CONFIG.get("transfer_on_cap", False) and not self.is_demo_call
+                if should_transfer:
+                    logger.info(f"🚨 Duration cap reached - transferring to staff [{call_type}]")
+                    
+                    # GO DEAF MECHANISM: Stop listening immediately to prevent interruptions
+                    logger.info("🙉 'Go Deaf' activated: Ignoring input during transfer explanation")
+                    self._is_hanging_up = True
+                    
+                    # 1. Honest Message
+                    msg = "This is getting a bit complex. I'll put you through to the team now."
+                    await self._say_and_wait(msg)
+                    
+                    # 2. PROACTIVE SUMMARY SMS (Blocking/Sync)
+                    try:
+                        logger.info("Generating summary for Hard Cap SMS...")
+                        # Ensure we have a summary BEFORE sending
+                        try:
+                            await self._generate_call_summary()
+                        except Exception as e:
+                            logger.error(f"Summary generation failed (proceeding to transfer): {e}")
+                        
+                        logger.info("📨 Sending Hard Cap Summary SMS (Blocking)...")
+                        
+                        # Build context
+                        intent = "Customer Inquiry"
+                        sms_context = ""
+                        if self.tenant_id == "coalcreek":
+                            booking_details = []
+                            if self.memory.get("check_in"):
+                                booking_details.append(f"In: {self.memory['check_in']}")
+                            if self.memory.get("room_type"):
+                                booking_details.append(f"Room: {self.memory['room_type']}")
+                            if booking_details:
+                                intent = "Motel Booking Request"
+                                sms_context = f" | Details: {', '.join(booking_details)}"
+                        summary_msg = f"⏱️ HARD CAP TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
+                        
+                        # Use immediate dispatch & AWAIT it
+                        from services.sms import sms_service
+                        from core.config import settings
+                        
+                        await sms_service.send_sms(
+                             to_number=settings.STAFF_PHONE_NUMBER,
+                             message=summary_msg
+                        )
+                        logger.info("✅ Hard Cap Summary SMS Sent.")
+                    except Exception as e:
+                        logger.error(f"Failed to send hard cap summary: {e}")
+
+                    # 3. Wait for TTS to play (Extended Delay)
+                    # 4. Transfer (Skip internal SMS since we just sent it)
+                    await self._execute_twilio_transfer(settings.STAFF_PHONE_NUMBER, skip_summary_sms=True, play_transfer_message=False)
+                else:
+                    logger.info(f"🚫 Hard time cap reached - ending call [{call_type}]")
+                    # GO DEAF: Stop processing user audio to prevent InjectionRefused
+                    self._is_hanging_up = True
+                    farewell = duration_result.get("farewell", "Thanks for calling!")
+                    # No clip_key: Cartesia synthesises the *actual* per-call transparent
+                    # message rather than the generic pre-recorded farewell clip.
+                    await self._speak_system_message(farewell, wait_for_playback=True)
+                    await self._hangup_call()
+                
+                break
+    
+    # =========================================================================
+    # MESSAGING & CALL CONTROL
+    # =========================================================================
+    
+    async def _long_wait_filler(self, fn_done: asyncio.Event, function_name: str = ""):
+        """Inject long-wait helper audio while a function call is still running."""
+        try:
+            if function_name == "check_availability":
+                await asyncio.sleep(10.0)
+                if not fn_done.is_set():
+                    self._blocking_interruptions = True
+                    # clip_key=None forces direct Cartesia synthesis for a fixed progress message.
+                    await self._speak_system_message(
+                        "Still checking live availability now. Thanks for waiting.",
+                        clip_key=None,
+                    )
+                return
+
+            await asyncio.sleep(8.0)
+            if not fn_done.is_set():
+                fillers = [
+                    "Thanks for your patience, just a sec.",
+                    "Still checking, won't be long.",
+                    "Almost there, one more moment.",
+                ]
+                self._blocking_interruptions = True
+                await self._speak_system_message(random.choice(fillers), clip_key="filler_long")
+        except asyncio.CancelledError:
+            pass
+    
+
+    
+    def _get_cartesia_voice_id(self) -> str:
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        voice_id = voice_settings.get("voice_id", "default")
+        if voice_id in ("default"):
+            return CARTESIA_VOICE_ID
+        if len(voice_id) < 30:
+            return CARTESIA_VOICE_ID
+        return voice_id
+
+    def _get_clip_path(self, clip_key: str | None) -> Path | None:
+        if not clip_key:
+            return None
+        voice_id = self._get_cartesia_voice_id()
+        preferred = SYSTEM_AUDIO_DIR / voice_id / f"{clip_key}.mulaw.raw"
+        fallback = SYSTEM_AUDIO_DIR / "default" / f"{clip_key}.mulaw.raw"
+        if preferred.exists():
+            return preferred
+        if fallback.exists():
+            return fallback
+        return None
+
+    def _log_system_audio_clip_health(self):
+        """Log missing/available system clip keys for the active voice at startup."""
+        voice_id = self._get_cartesia_voice_id()
+        voice_dir = SYSTEM_AUDIO_DIR / voice_id
+        default_dir = SYSTEM_AUDIO_DIR / "default"
+
+        missing_keys = []
+        voice_keys = []
+        default_keys = []
+
+        for clip_key in REQUIRED_SYSTEM_CLIP_KEYS:
+            voice_file = voice_dir / f"{clip_key}.mulaw.raw"
+            default_file = default_dir / f"{clip_key}.mulaw.raw"
+            if voice_file.exists():
+                voice_keys.append(clip_key)
+            elif default_file.exists():
+                default_keys.append(clip_key)
+            else:
+                missing_keys.append(clip_key)
+
+        logger.info(
+            "🎵 System-audio clip health | voice_id=%s | voice=%d | default=%d | missing=%d",
+            voice_id,
+            len(voice_keys),
+            len(default_keys),
+            len(missing_keys),
+        )
+
+        if missing_keys:
+            logger.warning(
+                "🎵 Missing system clip keys (will fallback to live Cartesia): %s",
+                ", ".join(missing_keys),
+            )
+        else:
+            logger.info("🎵 All required system clip keys available — zero-latency mode active")
+
+    def _load_cached_clip(self, clip_key: str | None) -> bytes | None:
+        clip_path = self._get_clip_path(clip_key)
+        if not clip_path:
+            return None
+        cache_key = str(clip_path)
+        if cache_key in self._system_audio_cache:
+            return self._system_audio_cache[cache_key]
+        try:
+            clip_bytes = clip_path.read_bytes()
+            if clip_bytes:
+                self._system_audio_cache[cache_key] = clip_bytes
+                return clip_bytes
+        except Exception as e:
+            logger.warning(f"🎵 Failed to load system clip {clip_path.name}: {e}")
+        return None
+
+    async def _synthesize_cartesia_mulaw(self, text: str, timeout: float = 1.6) -> bytes | None:
+        if not settings.CARTESIA_API_KEY or not text:
+            self._last_system_tts_error = "CARTESIA_API_KEY missing or empty text"
+            return None
+        voice_id = self._get_cartesia_voice_id()
+        voice_settings = self.tenant_config.get("voice_settings", {})
+        
+        # Convert config speed (numeric or preset string) to Cartesia ratio (0.6 - 1.5)
+        db_speed = voice_settings.get("speed", "fast")
+        db_volume = voice_settings.get("volume", 0.8)
+        
+        speed_map = {
+            "slowest": 0.7,
+            "slow": 0.85,
+            "normal": 1.0,
+            "fast": 1.25,
+            "fastest": 1.5
+        }
+        try:
+            speed = float(db_speed)
+        except (ValueError, TypeError):
+            speed = speed_map.get(str(db_speed).lower(), 1.25)
+            
+        try:
+            volume = float(db_volume)
+        except (ValueError, TypeError):
+            volume = 0.8
+
+        tts_model = voice_settings.get("tts_model", "sonic-3")
+        payload = {
+            "model_id": tts_model,
+            "transcript": text,
+            "voice": {"mode": "id", "id": voice_id},
+            "output_format": {
+                "container": "raw",
+                "encoding": "pcm_mulaw",
+                "sample_rate": 8000,
+            },
+            "generation_config": {
+                "speed": speed,
+                "volume": volume,
+            }
+        }
+        headers = {
+            "X-API-Key": settings.CARTESIA_API_KEY,
+            "Cartesia-Version": "2025-04-16",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post("https://api.cartesia.ai/tts/bytes", headers=headers, json=payload)
+                response.raise_for_status()
+                self._last_system_tts_error = None
+                return response.content
+        except Exception as e:
+            self._last_system_tts_error = str(e)
+            logger.warning(f"🎵 Cartesia system TTS failed: {e}")
+            return None
+
+    async def _send_system_audio(self, audio_bytes: bytes, reason: str = "system") -> float:
+        if not audio_bytes or not self.stream_sid:
+            return 0.0
+        payload = base64.b64encode(audio_bytes).decode("utf-8")
+        media_message = {
+            "event": "media",
+            "streamSid": self.stream_sid,
+            "media": {"payload": payload},
+        }
+        await self.twilio_ws.send_json(media_message)
+        self._twilio_audio_frames_sent += 1
+        duration = len(audio_bytes) / 8000.0
+        logger.info(f"🔊 System audio played ({reason}) bytes={len(audio_bytes)} dur={duration:.2f}s")
+        return duration
+
+    @property
+    def _is_system_audio_playing(self) -> bool:
+        """Returns True if injected system audio is actively playing in the user's ear (includes tail buffer)."""
+        # Add 1.0s tail buffer to absorb immediate affirmations ("yep", "okay") right after playback
+        return time.time() < getattr(self, '_system_audio_completion_at', 0)  # BS2: removed stacked +1.0 (network_buffer already in _system_audio_completion_at)
+
+    async def _speak_system_message(
+        self,
+        message: str,
+        clip_key: str | None = None,
+        wait_for_playback: bool = False,
+    ) -> bool:
+        if not message:
+            return False
+
+        audio_bytes = self._load_cached_clip(clip_key)
+        source = f"clip:{clip_key}" if audio_bytes else "cartesia"
+        if not audio_bytes:
+            audio_bytes = await self._synthesize_cartesia_mulaw(message)
+            if not audio_bytes:
+                logger.error(
+                    "🔇 System audio failed | key=%s | reason=no_clip_and_tts_failed | cartesia_error=%s",
+                    clip_key or "dynamic",
+                    self._last_system_tts_error or "unknown",
+                )
+                return False
+
+        try:
+            self._blocking_interruptions = True
+            self.silence_monitor.on_ai_started_speaking(preserve_check_id=True)
+            duration = await self._send_system_audio(audio_bytes, reason=source)
+            
+            # Record exactly when this audio will stop playing in the user's ear (duration + network buffer)
+            network_buffer = 0.5
+            self._system_audio_completion_at = time.time() + duration + network_buffer
+            
+            if wait_for_playback and duration > 0:
+                await asyncio.sleep(duration + network_buffer)
+            return True
+        except Exception as e:
+            logger.error(f"🔇 System audio send failed: {e}")
+            return False
+        finally:
+            self._blocking_interruptions = False
+            self.silence_monitor.on_ai_finished_speaking(
+                preserve_escalation=getattr(self, '_in_silence_escalation', False)
+            )
+
+    async def _prompt_agent_to_speak(self, message: str):
+        """Compatibility wrapper: system-triggered messages use deterministic system audio lane."""
+        await self._speak_system_message(message)
+
+    async def _say_and_wait(self, message: str):
+        """Play system message and block until playback window has passed."""
+        await self._speak_system_message(message, wait_for_playback=True)
+    
+
+    async def _hangup_call(self):
+        """Terminate the Twilio call gracefully."""
+        # Prevent duplicate hangups
+        if getattr(self, '_hangup_triggered', False):
+            return
+        self._hangup_triggered = True
+
+        if not self.call_sid:
+            logger.warning("Cannot hangup: No Call SID")
+            return
+        
+        logger.info(f"📵 Hanging up call: {self.call_sid}")
+        
+        try:
+            # ASYNC TWILIO CALL via httpx
+            auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Calls/{self.call_sid}.json"
+            data = {"Status": "completed"}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=data, auth=auth)
+                response.raise_for_status()
+            
+            logger.info("✅ Call terminated successfully")
+            
+            # Clean up ephemeral hot path cache
+            asyncio.create_task(db_service.delete_hot_path_state(self.call_sid))
+            
+            self.is_running = False
+        except Exception as e:
+            logger.error(f"Failed to hangup call: {e}")
+    
+    async def _scheduled_hangup(self, delay: float):
+        """Wait for delay then hangup."""
+        logger.info(f"⏳ Scheduled hangup in {delay}s")
+        # Set flag immediately so we don't process more speech as interruption
+        # unless it's a clear "No wait!" (handled by _handle_user_started_speaking)
+        self._is_hanging_up = True
+        
+        await asyncio.sleep(delay)
+        
+        # Check if aborted
+        if not getattr(self, '_is_hanging_up', True):
+            logger.info("🛑 ABORT HANGUP: User spoke during scheduled hangup")
+            return
+
+        await self._hangup_call()
+
+    async def _hangup_with_farewell(self, farewell_message: str):
+        """Speak a system farewell then hang up."""
+        self._is_hanging_up = True
+
+        start = time.monotonic()
+        try:
+            await self._speak_system_message(
+                farewell_message,
+                wait_for_playback=True,
+            )
+            elapsed = time.monotonic() - start
+            logger.info(f"✅ _hangup_with_farewell: done in {elapsed:.1f}s")
+        except Exception as e:
+            elapsed = time.monotonic() - start
+            logger.error(f"❌ _hangup_with_farewell: FAILED after {elapsed:.1f}s — {e}")
+        
+        # ABORT CHECK: if user spoke during farewell, don't hang up
+        if not getattr(self, '_is_hanging_up', True):
+            logger.info("🛑 ABORT HANGUP: User spoke during farewell - resuming")
+            return
+        
+        await self._hangup_call()
+    
+    async def _handle_system_failure(self, error_msg: str):
+        """
+        Handle critical system failures (e.g., tool crash, API down).
+        Apologize to user and transfer to human.
+        """
+        logger.error(f"🚨 Handling System Failure: {error_msg}")
+        
+        # 1. Apologize
+        apology = "Sorry, I'm having a technical issue. I'll put you through to a human now."
+        await self._say_and_wait(apology)
+        
+        # 2. Prevent further AI processing
+        self._is_hanging_up = True # Block new text
+        self._is_processing_function = True # Block new functions
+        
+        # 4. Transfer
+        staff_number = settings.STAFF_PHONE_NUMBER
+        await self._execute_twilio_transfer(
+            staff_number,
+            play_transfer_message=False,
+            backup_tts_message="Transferring you now. One moment.",
+        )
+        
+        # 5. Log outcome
+        self.call_outcome = "system_failure_transfer"
+
+    async def _execute_twilio_transfer(
+        self,
+        transfer_to: str,
+        skip_summary_sms: bool = False,
+        play_transfer_message: bool = True,
+        backup_tts_message: str | None = None,
+    ):
+        """
+        Execute Twilio call transfer using TwiML update.
+        
+        Uses <Say> then <Dial> to ensure transfer message is heard.
+        Falls back to AI if no answer within TRANSFER_TIMEOUT.
+        
+        Args:
+            backup_tts_message: Optional safety-net message played via Twilio
+                TTS if Deepgram/Cartesia TTS may not have been audible.
+        """
+        if not self.call_sid:
+            logger.warning("Cannot transfer: No Call SID")
+            await self._speak_system_message(
+                "I'm sorry, I couldn't complete the transfer. Let me take a message instead.",
+                clip_key="transfer_failed",
+                wait_for_playback=True,
+            )
+            return
+        
+        logger.info(f"📞 Executing transfer to {'*' * (len(transfer_to) - 2)}{transfer_to[-2:]}")
+
+        # [NEW] SEND TRANSFER SUMMARY SMS (Non-blocking)
+        if not skip_summary_sms:
+            try:
+                # Check for pending order/booking to include context
+                sms_context = ""
+                intent = "Customer Inquiry"
+                if self.tenant_id == "coalcreek":
+                    booking_details = []
+                    if self.memory.get("check_in"):
+                        booking_details.append(f"In: {self.memory['check_in']}")
+                    if self.memory.get("room_type"):
+                        booking_details.append(f"Room: {self.memory['room_type']}")
+                    if booking_details:
+                        intent = "Motel Booking Request"
+                        sms_context = f" | Details: {', '.join(booking_details)}"
+                
+                from services.sms import sms_service
+                summary_msg = f"📞 INCALL TRANSFER: {self.user_phone} ({self.user_name or 'Unknown'}). Context: {intent}{sms_context}"
+                
+                # Fire and forget (don't delay transfer significantly)
+                # But use 'create_task' to ensure it runs
+                asyncio.create_task(sms_service.send_sms(
+                    to_number=settings.STAFF_PHONE_NUMBER, # Always alert main staff number
+                    message=summary_msg
+                ))
+                logger.info("📨 Transfer summary SMS queued")
+            except Exception as e:
+                logger.warning(f"Failed to queue transfer SMS: {e}")
+
+        try:
+            from twilio.twiml.voice_response import VoiceResponse, Dial
+            
+            # Build TwiML for transfer
+            twiml = VoiceResponse()
+            
+            # Optional transfer message via Twilio's TTS
+            if play_transfer_message:
+                twiml.say(
+                    "Sure, I'll transfer you to our team now. Please hold.",
+                    voice="Polly.Joanna"  # AWS Polly voice for natural sound
+                )
+            elif backup_tts_message:
+                # Safety-net: if AI TTS might not have been audible, play a
+                # short Twilio TTS so the caller isn't transferred in silence.
+                twiml.say(backup_tts_message, voice="Polly.Joanna")
+            
+            # Dial staff with timeout
+            dial = Dial(
+                timeout=settings.TRANSFER_TIMEOUT,
+                caller_id=settings.TWILIO_PHONE_NUMBER,
+                action=f"{settings.BACKEND_URL}/twilio/transfer-status"
+            )
+            dial.number(transfer_to)
+            twiml.append(dial)
+            
+            # Fallback message if no answer (action callback handles this)
+            twiml.say("Our staff are currently unavailable. Let me see how else I can help you.")
+            twiml.redirect(f"{settings.BACKEND_URL}/twilio/voice")  # Return to AI
+            
+            # Update the live call with new TwiML via ASYNC httpx
+            auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Calls/{self.call_sid}.json"
+            data = {"Twiml": str(twiml)}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, data=data, auth=auth)
+                response.raise_for_status()
+            
+            masked_to = f"{'*' * (len(transfer_to) - 4)}{transfer_to[-4:]}" if len(transfer_to) > 4 else transfer_to
+            logger.info(f"✅ Call transfer initiated to {masked_to}")
+            self.call_outcome = "transferred"
+            self.is_running = False  # Stop AI processing during transfer
+            
+        except Exception as e:
+            logger.error(f"Transfer failed: {e}")
+            await self._speak_system_message(
+                "I'm sorry, I couldn't complete the transfer. Let me take a message instead.",
+                clip_key="transfer_failed",
+                wait_for_playback=True,
+            )
+
+    
+    # =========================================================================
+    # DATABASE & CLEANUP
+    # =========================================================================
+    
+    async def _save_motel_reservation(self, data: dict) -> dict:
+        """Save reservation to motel_reservations collection using async httpx.
+
+        Returns a standard wrapper dict so callers can reliably check success:
+            {"success": True, "document": <appwrite_doc>}   on success
+            {"success": False, "error": "<message>"}        on failure
+        Never raises — callers must handle the None/False cases.
+        """
+        try:
+            doc_id = ID.unique()
+            headers = {
+                "Content-Type": "application/json",
+                "X-Appwrite-Project": settings.APPWRITE_PROJECT_ID,
+                "X-Appwrite-Key": settings.APPWRITE_API_KEY
+            }
+            data["tenant_id"] = self.tenant_id
+            url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
+            payload = {"documentId": doc_id, "data": data}
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                doc = response.json()
+                logger.info(
+                    "✅ Reservation saved | doc_id=%s | booking_ref=%s",
+                    doc.get("$id", doc_id),
+                    data.get("booking_reference", "?"),
+                )
+                return {"success": True, "document": doc}
+
+        except Exception as e:
+            logger.error(f"Error saving reservation: {e}")
+            return {"success": False, "error": str(e)}
+
+
+    async def _cleanup(self):
+        """Clean up connections and save transcript."""
+        logger.info("🧹 Cleaning up VoiceAgentHandler")
+        self.is_running = False
+        self.latency.log_call_summary()
+        
+
+        # Close Deepgram connection
+        if self.deepgram_ws:
+            try:
+                await self.deepgram_ws.close()
+            except Exception as e:
+                logger.warning(f"Error closing Deepgram: {e}")
+        
+        # Save transcript
+        try:
+            duration = int(time.time() - self.call_start_time) if self.call_start_time else 0
+            
+            if self.transcript:
+                # ISOLATION: Check if this is a demo or a real tenant
+                if self.tenant_id == "ovela_demo":
+                     await db_service.create_demo_transcript(
+                        phone=self.user_phone,
+                        transcript=self.transcript,
+                        exchange_count=self.exchange_count,
+                        duration_seconds=duration,
+                        outcome=self.call_outcome,
+                        tenant_id=self.tenant_id,
+                        call_sid=self.call_sid
+                    )
+                else:
+                    # Tenant-Specific Storage
+                    await db_service.save_call_transcript(
+                        tenant_id=self.tenant_id,
+                        call_sid=self.call_sid,
+                        caller_phone=self.user_phone,
+                        transcript=json.dumps(self.transcript), # save_call_transcript expects string
+                        duration=duration,
+                        booking_ref=self.call_reference,
+                        status=self.call_outcome,
+                        call_summary=await self._generate_call_summary(),
+                        customer_name=self.memory.get("name") or (self.memory.get("active_booking", {}).get("guest_name")),
+                        metadata={
+                            "exchange_count": self.exchange_count,
+                            "outcome": self.call_outcome
+                        }
+                    )
+                    logger.info(f"📝 Saved transcript: {len(self.transcript)} entries, {duration}s")
+        except Exception as e:
+            logger.error(f"Error saving transcript: {e}")
+        
+        # Close Twilio WebSocket
+        try:
+            await self.twilio_ws.close()
+        except Exception as e:
+            logger.warning(f"Error closing Twilio WS: {e}")
+
+
+    async def _generate_call_summary(self) -> str:
+        """
+        Generates a concise 1-sentence summary of the call transcript 
+        using Google Gemini 2.5 Flash via Vertex AI after the call ends.
+        """
+        # Return cached summary if available (avoids re-generation on cleanup)
+        if getattr(self, 'cached_summary', None):
+            return self.cached_summary
+
+        if not self.transcript or len(self.transcript) < 2:
+            return ""
+
+        try:
+            from google import genai
+            import asyncio
+            
+            client = genai.Client(
+                vertexai=True,
+                project=os.getenv("GOOGLE_CLOUD_PROJECT", "project-bd29d7f8-c65f-4597-b7b"),
+                location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+            )
+            
+            # Format transcript for the summarizer
+            transcript_text = "\n".join([f"{m['role'].upper()}: {m['text']}" for m in self.transcript])
+            
+            system_instruction = (
+                "You are a helpful assistant that summarizes customer service calls. "
+                "Provide an ultra-concise, 1-sentence summary of what happened in the call "
+                "(e.g., 'Customer booked a Queen room for 2 nights and received payment link'). Focus on the intent and result."
+            )
+            
+            # Run in a threadpool to prevent blocking the async event loop
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model="gemini-2.5-flash-lite",
+                contents=f"Summarize this call transcript:\n\n{transcript_text}",
+                config=genai.types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    temperature=0.3,
+                    max_output_tokens=60
+                )
+            )
+            
+            summary = response.text.strip()
+            logger.info(f"📝 Generated call summary: {summary}")
+            self.cached_summary = summary
+            return summary
+            
+        except Exception as e:
+            logger.error(f"Failed to generate call summary: {e}")
+            return ""
+
+# Backwards compatibility alias
+DeepgramAgentHandler = VoiceAgentHandler

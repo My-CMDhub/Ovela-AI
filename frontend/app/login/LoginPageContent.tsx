@@ -20,8 +20,19 @@ export default function LoginPageContent() {
         setLoading(true);
 
         try {
-            await login(email, password);
-            router.push("/dashboard");
+            const user = await login(email, password);
+
+            // Multi-Tenant Routing Logic
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const tenantId = (user.prefs as any)?.tenant_id;
+
+            if (tenantId) {
+                // Client: Strict redirect to their dashboard
+                router.push(`/dashboard?tenant=${tenantId}`);
+            } else {
+                // Admin/Owner: Redirect to Command Center
+                router.push("/admin");
+            }
         } catch {
             setError("Invalid email or password");
         } finally {

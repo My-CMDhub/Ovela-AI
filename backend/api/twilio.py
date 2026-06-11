@@ -1,20 +1,177 @@
 """
-Twilio Webhooks for Missed Call → WhatsApp Flow
+Twilio Webhooks for Voice Calls
 """
-from fastapi import APIRouter, Request, Form
+from fastapi import APIRouter, Request, Form, BackgroundTasks
 from fastapi.responses import Response
 from core.config import settings
-from services.meta import meta_service
 from services.appwrite import db_service
 from services.email import email_service
 from datetime import datetime
 import logging
+import asyncio
+from twilio.rest import Client
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+
+
 # Default business ID for now (single tenant)
 DEFAULT_BUSINESS_ID = "default_business"
+
+def mask_phone(phone: str) -> str:
+    """Mask phone number for logging (e.g. +614...123)."""
+    if not phone or len(phone) < 8:
+        return "..."
+    return f"{phone[:4]}...{phone[-3:]}"
+
+
+@router.post("/voice")
+async def handle_voice_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    CallSid: str = Form(...),
+    From: str = Form(...),
+    To: str = Form(default=None),
+    tenant_id: str = None  # Allow passing via Query Param (e.g. /voice?tenant_id=coalcreek)
+):
+    """
+    Main voice webhook - connects caller to AI agent.
+    
+    Multi-Tenant Strategy:
+    1. Query Param: Configure Twilio Webhook as https://api.../voice?tenant_id=coalcreek
+    2. 'To' Number Lookup: Fallback to mapping known numbers
+    3. Default: Env var or 'coalcreek'
+    """
+    logger.info(f"📞 Voice webhook from {mask_phone(From)} to {mask_phone(To)} (tenant_id={tenant_id}), CallSid: {CallSid}")
+
+    
+    # Start recording as early as possible for every live call.
+    background_tasks.add_task(_enable_recording, CallSid)
+
+    # Resolve tenant_id
+    # 1. Check Query Param explicitly from request (override)
+    tenant_id = request.query_params.get("tenant_id")
+    transfer_failed = request.query_params.get("transfer_failed", "false")
+    
+    if not tenant_id:
+        # 2. Check Phone Mapping (Ingress Number)
+        cleaned_to = To.replace(" ", "").strip() if To else ""
+        if cleaned_to in settings.PHONE_TO_TENANT_MAP:
+            tenant_id = settings.PHONE_TO_TENANT_MAP[cleaned_to]
+            logger.info(f"📍 Mapped Ingress Number {cleaned_to} -> {tenant_id}")
+        else:
+            # 3. Default Fallback
+            tenant_id = settings.TENANT_ID or "coalcreek"
+            logger.info(f"⚠️ Unknown Ingress Number {cleaned_to} -> Fallback to {tenant_id}")
+
+    # Enforce Abuse Prevention & Rate Limiting
+    is_allowed, limit_reason = await db_service.check_voice_rate_limit(From, tenant_id)
+    if not is_allowed:
+        logger.warning(f"🚫 Call from {mask_phone(From)} blocked by rate limiting: {limit_reason}")
+        # Log blocked attempt as a transcript record with status='blocked'
+        await db_service.save_call_transcript(
+            tenant_id=tenant_id,
+            call_sid=CallSid,
+            caller_phone=From,
+            transcript=f"[SYSTEM ALERT: Call from {From} blocked by rate limit check. Reason: {limit_reason}]",
+            duration=0,
+            status="blocked",
+            metadata={"reason": limit_reason}
+        )
+        
+        twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="Polly.Nicole">Thank you for calling. We are currently experiencing high call volumes, or you have reached our call limit. Please try calling back later or visit our website to complete your reservation. Goodbye!</Say>
+    <Hangup/>
+</Response>"""
+        return Response(content=twiml, media_type="application/xml")
+        
+    # Return TwiML that connects to the AI stream
+    # Pass tenant_id to the WebSocket via Parameter
+    stream_url = f"wss://{settings.BACKEND_URL.replace('https://', '')}/api/voice/stream"
+
+    
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Connect>
+        <Stream url="{stream_url}">
+            <Parameter name="user_phone" value="{From}" />
+            <Parameter name="tenant_id" value="{tenant_id}" />
+            <Parameter name="user_to" value="{To}" />
+            <Parameter name="transfer_failed" value="{transfer_failed}" />
+        </Stream>
+    </Connect>
+    <Say voice="Polly.Nicole">I'm sorry, we seem to have lost connection. Please call back. Goodbye!</Say>
+</Response>"""
+    
+    return Response(content=twiml, media_type="application/xml")
+
+
+async def _enable_recording(call_sid: str):
+    """Enable recording for active Twilio call.
+    
+    Single attempt after a brief delay to let the call connect,
+    with one fallback path. Runs as a background task so it never
+    blocks the TwiML response or event loop.
+    """
+    recording_status_callback = f"{settings.BACKEND_URL}/twilio/recording-status"
+
+    # Brief delay — gives Twilio time to fully connect the call
+    # before we issue the recording API request.
+    await asyncio.sleep(0.8)
+
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: twilio_client.calls(call_sid).recordings.create(
+                recording_channels="dual",
+                recording_status_callback=recording_status_callback,
+                recording_status_callback_method="POST",
+            )
+        )
+        logger.info(f"⏺️ Recording started for call {call_sid}")
+        return
+    except Exception as e:
+        logger.debug(f"Recording create attempt failed for {call_sid}: {e}")
+
+    # Fallback path for accounts/edges that reject recordings.create.
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(
+            None,
+            lambda: twilio_client.calls(call_sid).update(
+                record=True,
+                recording_channels="dual",
+                recording_status_callback=recording_status_callback,
+                recording_status_callback_method="POST",
+            ),
+        )
+        logger.info(f"⏺️ Recording enabled via fallback for call {call_sid}")
+    except Exception as fallback_error:
+        logger.warning(f"Failed to start recording for {call_sid}: {fallback_error}")
+
+
+@router.post("/recording-status")
+async def handle_recording_status(
+    RecordingSid: str = Form(...),
+    CallSid: str = Form(...),
+    RecordingStatus: str = Form(default="unknown"),
+    RecordingUrl: str = Form(default=""),
+    RecordingDuration: str = Form(default="0"),
+):
+    """Twilio recording lifecycle callback for verification/debug."""
+    logger.info(
+        "🎙️ Recording callback: call=%s recording=%s status=%s duration=%ss url=%s",
+        CallSid,
+        RecordingSid,
+        RecordingStatus,
+        RecordingDuration,
+        RecordingUrl,
+    )
+    return {"status": "ok"}
 
 
 @router.post("/incoming-call")
@@ -27,21 +184,23 @@ async def handle_incoming_call(
     """
     Handle incoming voice calls from Twilio.
     Forwards the call to the business owner's phone.
-    If missed/busy/no-answer, the status callback will trigger WhatsApp automation.
     """
-    logger.info(f"📞 Incoming call from {From} to {To}, CallSid: {CallSid}")
+    logger.info(f"📞 Incoming call from {mask_phone(From)} to {mask_phone(To)}, CallSid: {CallSid}")
     
     try:
-        # Get business phone from Appwrite settings
-        business_settings = db_service.get_all_settings()
+        # Resolve tenant from To number
+        tenant_id = settings.PHONE_TO_TENANT_MAP.get(To.replace(" ", "").strip()) or settings.TENANT_ID or "coalcreek"
+        
+        # Get business phone from Tenant settings
+        business_settings = db_service.get_tenant_settings(tenant_id)
         business_phone = business_settings.get("business_phone") if business_settings else None
         
         if not business_phone:
-            logger.error("❌ Business phone not configured in Appwrite settings")
-            # Fallback: Play error message and trigger WhatsApp via status callback
+            logger.error(f"❌ Business phone not configured for tenant {tenant_id}")
+            # Fallback: Play error message
             twiml = """<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Say voice="alice">Sorry, the business phone is not configured. You'll receive a WhatsApp message shortly.</Say>
+    <Say voice="alice">Sorry, the business phone is not configured.</Say>
     <Hangup/>
 </Response>"""
             return Response(content=twiml, media_type="application/xml")
@@ -50,7 +209,7 @@ async def handle_incoming_call(
         if not business_phone.startswith("+"):
             business_phone = f"+{business_phone}"
         
-        logger.info(f"🔄 Forwarding call to business phone: {business_phone}")
+        logger.info(f"🔄 Forwarding call to business phone: {mask_phone(business_phone)}")
         
         # Return TwiML that forwards the call to business phone
         # timeout: Ring for 30 seconds before giving up
@@ -59,10 +218,10 @@ async def handle_incoming_call(
         
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Dial timeout="30" action="{callback_url}" method="POST">
+    <Dial timeout="10" action="{callback_url}" method="POST">
         <Number>{business_phone}</Number>
     </Dial>
-    <Say voice="alice">Sorry, we couldn't connect your call. You'll receive a WhatsApp message shortly to help you book an appointment.</Say>
+    <Say voice="alice">Sorry, we couldn't connect your call. Please try again later.</Say>
 </Response>"""
         
         return Response(content=twiml, media_type="application/xml")
@@ -92,93 +251,64 @@ async def handle_call_status(
     """
     Handle call status callbacks from Twilio.
     Triggered after the <Dial> attempt completes.
-    Only sends WhatsApp if the call was truly missed (not answered).
+    Using for logging purposes.
     """
-    logger.info(f"📞 Call status callback: {CallSid} from {From}")
+    logger.info(f"📞 Call status callback: {CallSid} from {mask_phone(From)}")
     logger.info(f"   CallStatus: {CallStatus}, CallDuration: {CallDuration}s")
     logger.info(f"   DialCallStatus: {DialCallStatus}, DialCallDuration: {DialCallDuration}s")
     
-    # Normalize phone number (remove + prefix for WhatsApp)
-    caller_phone = From.replace("+", "")
-    
-    # Determine if we should send WhatsApp message
-    should_send_whatsapp = False
-    
-    if DialCallStatus:
-        # When using <Dial>, check the DialCallStatus to determine if call was answered
-        if DialCallStatus in ["no-answer", "busy", "failed"]:
-            # Call was not answered
-            should_send_whatsapp = True
-            logger.info(f"📱 Call was missed (DialCallStatus: {DialCallStatus}) - will send WhatsApp")
-        elif DialCallStatus == "completed":
-            # Call was connected, but check duration
-            dial_duration = int(DialCallDuration) if DialCallDuration else 0
-            if dial_duration < 5:
-                # Call connected but hung up immediately (likely accidental answer or voicemail)
-                should_send_whatsapp = True
-                logger.info(f"📱 Call answered but hung up quickly ({dial_duration}s) - will send WhatsApp")
-            else:
-                # Call was answered and had a real conversation
-                should_send_whatsapp = False
-                logger.info(f"✅ Call was answered and lasted {dial_duration}s - no WhatsApp needed")
-        else:
-            # Unknown status, log and skip
-            logger.warning(f"⚠️ Unknown DialCallStatus: {DialCallStatus}")
-    else:
-        # Fallback: No DialCallStatus (shouldn't happen with <Dial>, but handle gracefully)
-        # This might occur if business phone wasn't configured and we played error message
-        if CallStatus in ["completed", "no-answer", "busy", "failed"]:
-            should_send_whatsapp = True
-            logger.info(f"📱 Fallback mode - CallStatus: {CallStatus} - will send WhatsApp")
-    
-    # Send WhatsApp message if call was missed
-    if should_send_whatsapp:
-        try:
-            # Get business settings for custom message
-            business_settings = db_service.get_all_settings()
-            business_name = business_settings.get("business_name", "ibrow threading") if business_settings else "ibrow threading"
-            business_phone = business_settings.get("business_phone", "0475 921 152") if business_settings else "0475 921 152"
-            
-            # Check if this customer has a recently rejected request
-            existing_requests = db_service.get_booking_requests_by_phone(caller_phone)
-            has_recent_rejection = False
-            
-            if existing_requests:
-                for req in existing_requests:
-                    if req.get("status") == "rejected":
-                        has_recent_rejection = True
-                        break
-            
-            if has_recent_rejection:
-                # Customer calling again after rejection - give contextual message
-                message = f"""Hi there! 👋
-
-We noticed you tried calling again. We're sorry we couldn't pick up — {business_name} is quite busy at the moment.
-
-Don't worry! The team has your details and will reach out to you as soon as possible.
-
-If it's urgent, you can try again later at {business_phone}. Thanks for your patience! 💜"""
-            else:
-                # First-time or regular caller - normal intro
-                message = f"""Hi! 👋
-
-Sorry we missed your call at {business_name}.
-
-I'm the virtual assistant here to help you book an appointment. Just let me know:
-• Your name
-• What service you need
-• Your preferred date and time
-
-I'll forward your request to the team and they'll confirm your booking! 💅"""
-
-            await meta_service.send_text_message(caller_phone, message)
-            logger.info(f"✅ Sent WhatsApp intro to {caller_phone} (rejection_context: {has_recent_rejection})")
-            
-        except Exception as e:
-            import traceback
-            logger.error(f"❌ Error sending WhatsApp to {caller_phone}: {e}")
-            logger.error(f"Traceback: {traceback.format_exc()}")
-    else:
-        logger.info(f"ℹ️ Call was answered - no WhatsApp message sent")
-    
     return {"status": "ok"}
+
+
+@router.post("/sms")
+async def handle_incoming_sms(
+    request: Request,
+    From: str = Form(...),
+    Body: str = Form(...),
+    To: str = Form(...),
+    tenant_id: str = None
+):
+    """
+    Handle incoming SMS messages.
+    """
+    # Resolve tenant_id from query params
+    tenant_id = request.query_params.get("tenant_id")
+    
+    logger.info(f"📩 Incoming SMS from {mask_phone(From)} to {mask_phone(To)} (tenant_id={tenant_id}): '{Body}'")
+    
+    return Response(content="", media_type="text/plain")
+
+
+@router.post("/transfer-status")
+async def handle_transfer_status(
+    CallSid: str = Form(...),
+    From: str = Form(...),
+    DialCallStatus: str = Form(default=None),
+    DialCallDuration: str = Form(default="0")
+):
+    """
+    Handle transfer result callback.
+    
+    DialCallStatus values:
+    - "completed": Staff answered and conversation ended
+    - "no-answer": Staff didn't answer within timeout
+    - "busy": Staff line was busy
+    - "failed": Call failed to connect
+    """
+    logger.info(f"📞 Transfer status: {CallSid} - DialCallStatus: {DialCallStatus}")
+    
+    if DialCallStatus == "completed":
+        # Transfer succeeded, call ended normally
+        logger.info(f"✅ Transfer completed successfully for {mask_phone(From)}")
+        return Response(content="<Response><Hangup/></Response>", media_type="application/xml")
+    
+    # Transfer failed - return caller to AI
+    logger.info(f"⚠️ Transfer failed ({DialCallStatus}) - returning to AI for {mask_phone(From)}")
+    
+    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Redirect method="POST">/twilio/voice?transfer_failed=true</Redirect>
+</Response>"""
+    
+    return Response(content=twiml, media_type="application/xml")
+

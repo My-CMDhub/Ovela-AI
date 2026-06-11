@@ -50,3 +50,10 @@ venv/
 .venv
 __pycache__/
 .next/
+
+# Local scripts (keep health_check.py only)
+scripts/*.py
+!scripts/health_check.py
+
+# Local documentation
+redeploy-guide.md

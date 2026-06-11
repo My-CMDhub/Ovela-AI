@@ -3,24 +3,25 @@
 import type React from "react"
 import { motion, useMotionValue, useSpring, AnimatePresence } from "framer-motion"
 import { useState, useEffect } from "react"
+import { EcosystemLoop } from "@/components/ecosystem-loop"
 import { VoiceDemoForm } from "@/components/VoiceDemoForm"
-import { ArrowRight, X } from "lucide-react"
+import { ArrowRight, X, Check, ShieldCheck, Activity } from "lucide-react"
 import Link from "next/link"
 import Image from "next/image"
 
-// Recent calls handled by AI (industry-agnostic)
-const recentCalls = [
-  { id: 1, caller: "David M.", type: "Booking Request", time: "10:02 AM", status: "synced", avatar: "D" },
-  { id: 2, caller: "Sarah K.", type: "Availability Check", time: "10:15 AM", status: "responded", avatar: "S" },
-  { id: 3, caller: "James L.", type: "Quote Request", time: "10:28 AM", status: "forwarded", avatar: "J" },
-  { id: 4, caller: "Emma R.", type: "Appointment", time: "10:45 AM", status: "synced", avatar: "E" },
-  { id: 5, caller: "Michael T.", type: "Callback Request", time: "11:02 AM", status: "pending", avatar: "M" },
+// Action Logs for the AI Receptionist mockup
+const actionLogs = [
+  { id: 1, action: "Booking Created", time: "10:02 AM", summary: "Booked Initial Consult for David M.", duration: "2m 15s" },
+  { id: 2, action: "FAQ Answered", time: "10:15 AM", summary: "Answered parking policy question.", duration: "45s" },
+  { id: 3, action: "Call Transferred", time: "10:28 AM", summary: "Escalated urgent issue to Manager.", duration: "1m 30s" },
+  { id: 4, action: "Workflow Executed", time: "10:45 AM", summary: "Rescheduled Sarah's 2PM to 4PM.", duration: "1m 10s" },
+  { id: 5, action: "Availability Check", time: "11:02 AM", summary: "Checked Dec 12th availability.", duration: "3m 45s" },
 ]
 
 const stats = [
   { label: "Calls Handled", value: "47", change: "+12" },
-  { label: "Bookings Made", value: "23", change: "+8" },
-  { label: "Hours Saved", value: "6.5h", change: "+2h" },
+  { label: "Successful Outcomes", value: "41", change: "+8" },
+  { label: "Time Saved", value: "6.5h", change: "+2h" },
 ]
 
 function FloatingParticles() {
@@ -310,7 +311,6 @@ export function Hero() {
   const [currentTime, setCurrentTime] = useState(new Date())
   const [activeBooking, setActiveBooking] = useState(0)
   const [isDemoOpen, setIsDemoOpen] = useState(false) // State for modal
-
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
     return () => clearInterval(timer)
@@ -318,7 +318,7 @@ export function Hero() {
 
   useEffect(() => {
     const callTimer = setInterval(() => {
-      setActiveBooking((prev) => (prev + 1) % recentCalls.length)
+      setActiveBooking((prev) => (prev + 1) % actionLogs.length)
     }, 2500)
     return () => clearInterval(callTimer)
   }, [])
@@ -332,9 +332,27 @@ export function Hero() {
     return () => window.removeEventListener("keydown", handleEscape)
   }, [])
 
+  // Open modal when navigating to #demo (from pricing "Try AI Demo" button)
+  useEffect(() => {
+    const handleOpenDemo = () => {
+      setIsDemoOpen(true)
+    }
+
+    // Listen for custom event from other components
+    window.addEventListener("openDemoModal", handleOpenDemo)
+
+    // Also check for hash on mount (fallback)
+    if (window.location.hash === "#demo") {
+      setIsDemoOpen(true)
+      window.history.replaceState(null, "", window.location.pathname)
+    }
+
+    return () => window.removeEventListener("openDemoModal", handleOpenDemo)
+  }, [])
+
 
   return (
-    <section className="relative min-h-screen flex items-center justify-center pt-20 pb-12 overflow-hidden">
+    <section className="relative min-h-screen flex flex-col pt-20 overflow-hidden">
       <FloatingParticles />
 
       <div className="relative z-10 max-w-6xl mx-auto px-6">
@@ -358,10 +376,10 @@ export function Hero() {
             initial={{ opacity: 0, scale: 0.9, filter: "blur(4px)" }}
             animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
             transition={{ duration: 0.5, ease: "easeOut" }}
-            className="mb-6 inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-sm text-primary backdrop-blur-sm"
+            className="mb-6 inline-flex flex-row items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs sm:text-sm text-primary backdrop-blur-sm max-w-full text-left"
           >
-            <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse"> </span>
-            Voice-First AI • Works While You Work
+            <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse shrink-0"> </span>
+            <span className="whitespace-nowrap overflow-hidden text-ellipsis">Founding cohort open • AUD $300 setup • 21-day free trial</span>
           </motion.div>
 
           {/* Main Heading */}
@@ -374,10 +392,11 @@ export function Hero() {
             }
             initial="hidden"
             animate="visible"
-            className="mx-auto max-w-4xl font-serif text-5xl font-medium tracking-tight text-foreground sm:text-7xl"
+            className="mx-auto max-w-4xl font-serif text-4xl font-medium tracking-tight text-foreground sm:text-7xl"
           >
-            The Receptionist That <br />
-            <span className="italic text-muted-foreground"> Never Sleeps.</span>
+            Your phone answers itself.
+            <br />
+            <span className="italic text-muted-foreground">Your calendar fills.</span>
           </motion.h1>
 
           {/* Subtitle */}
@@ -392,7 +411,13 @@ export function Hero() {
             animate="visible"
             className="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground sm:text-xl"
           >
-            Every missed call is lost revenue. <strong className="text-foreground font-medium">Our AI answers, books, and syncs</strong>—so you can focus on what you do best.
+            Ovela is an AI voice receptionist that handles{" "}
+            <span className="font-semibold text-foreground">every inbound call</span>
+            , books directly into{" "}
+            <span className="font-semibold text-foreground">your existing software</span>
+            , and removes the{" "}
+            <span className="font-semibold text-foreground">call-capacity ceiling</span>
+            {" "}on your business.
           </motion.p>
 
           {/* CTA Buttons */}
@@ -416,301 +441,230 @@ export function Hero() {
             </Link>
 
 
-            {/* Insanely Attention-Grabbing Demo Button */}
-            <div className="relative">
-              {/* Animated pulsing rings - multiple layers for intensity */}
-              <motion.div
-                className="absolute inset-0 rounded-full"
-                animate={{
-                  boxShadow: [
-                    "0 0 0 0 rgba(236, 72, 153, 0.7)",
-                    "0 0 0 20px rgba(236, 72, 153, 0)",
-                  ],
-                }}
-                transition={{
-                  duration: 1.5,
-                  repeat: Infinity,
-                  ease: "easeOut",
-                }}
-              />
-              <motion.div
-                className="absolute inset-0 rounded-full"
-                animate={{
-                  boxShadow: [
-                    "0 0 0 0 rgba(236, 72, 153, 0.5)",
-                    "0 0 0 30px rgba(236, 72, 153, 0)",
-                  ],
-                }}
-                transition={{
-                  duration: 1.5,
-                  repeat: Infinity,
-                  ease: "easeOut",
-                  delay: 0.3,
-                }}
-              />
-              <motion.div
-                className="absolute inset-0 rounded-full"
-                animate={{
-                  boxShadow: [
-                    "0 0 0 0 rgba(236, 72, 153, 0.3)",
-                    "0 0 0 40px rgba(236, 72, 153, 0)",
-                  ],
-                }}
-                transition={{
-                  duration: 1.5,
-                  repeat: Infinity,
-                  ease: "easeOut",
-                  delay: 0.6,
-                }}
-              />
+            {/* Premium 'View Demo' Button with High-Class Motion Border */}
+            <motion.button
+              onClick={() => setIsDemoOpen(true)}
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.98 }}
+              className="relative inline-flex h-12 overflow-hidden rounded-full p-[1px] focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-background"
+            >
+              {/* Spinning Gradient Border - Brighter and smoother */}
+              <span className="absolute inset-[-1000%] animate-[spin_3s_linear_infinite] bg-[conic-gradient(from_90deg_at_50%_50%,#0000_0%,#7c3aed_50%,#0000_100%)] opacity-100 transition-opacity duration-500 group-hover:opacity-100" />
 
-              {/* Main button with enhanced effects */}
-              <motion.button
-                onClick={() => setIsDemoOpen(true)}
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                className="relative inline-flex h-12 items-center justify-center rounded-full border border-input bg-background px-8 text-base font-medium shadow-lg transition-all duration-300 hover:bg-accent hover:text-accent-foreground hover:border-pink-500/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-500 disabled:pointer-events-none disabled:opacity-50 overflow-hidden group"
-              >
-                {/* Animated gradient background on hover */}
-                <motion.div
-                  className="absolute inset-0 bg-gradient-to-r from-pink-500/10 via-purple-500/10 to-pink-500/10 opacity-0 group-hover:opacity-100"
-                  animate={{
-                    backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"],
-                  }}
-                  transition={{
-                    duration: 3,
-                    repeat: Infinity,
-                    ease: "linear",
-                  }}
-                  style={{
-                    backgroundSize: "200% 100%",
-                  }}
-                />
-
-                {/* Shimmer effect */}
-                <div className="absolute inset-0 overflow-hidden rounded-full">
-                  <motion.div
-                    className="absolute inset-0 bg-gradient-to-r from-transparent via-pink-500/20 to-transparent -translate-x-full"
-                    animate={{
-                      translateX: ["-100%", "100%"],
-                    }}
-                    transition={{
-                      duration: 2,
-                      repeat: Infinity,
-                      ease: "linear",
-                      repeatDelay: 1,
-                    }}
-                  />
-                </div>
-
-                {/* Animated text with character reveal */}
-                <span className="relative z-10 inline-flex overflow-hidden">
-                  {"View Demo".split("").map((char, index) => (
-                    <motion.span
-                      key={index}
-                      initial={{ y: 20, opacity: 0 }}
-                      animate={{ y: 0, opacity: 1 }}
-                      transition={{
-                        duration: 0.5,
-                        delay: 0.6 + index * 0.05,
-                        ease: "easeOut",
-                        repeat: Infinity,
-                        repeatDelay: 3,
-                      }}
-                      className="inline-block"
-                    >
-                      {char === " " ? "\u00A0" : char}
-                    </motion.span>
-                  ))}
+              {/* Inner Background */}
+              <span className="inline-flex h-full w-full items-center justify-center rounded-full bg-background/95 px-8 backdrop-blur-3xl transition-colors hover:bg-background/90">
+                <span className="relative flex items-center gap-2 text-foreground font-medium">
+                  {/* Text Reveal Animation */}
+                  <span className="relative z-10 inline-flex overflow-hidden">
+                    {"View Demo".split("").map((char, index) => (
+                      <motion.span
+                        key={index}
+                        initial={{ y: 20, opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        transition={{
+                          duration: 0.5,
+                          delay: 0.6 + index * 0.05,
+                          ease: "easeOut",
+                          repeat: Infinity,
+                          repeatDelay: 3,
+                        }}
+                        className="inline-block"
+                      >
+                        {char === " " ? "\u00A0" : char}
+                      </motion.span>
+                    ))}
+                  </span>
                 </span>
-              </motion.button>
-            </div>
+              </span>
+            </motion.button>
 
           </motion.div>
         </motion.div>
 
-        <motion.div
-          initial={{ opacity: 0, y: 80, rotateX: 8 }}
-          animate={{ opacity: 1, y: 0, rotateX: 0 }}
-          transition={{ duration: 1.2, ease: "easeOut", delay: 0.5 }}
+        <div
           className="relative mx-auto max-w-4xl"
           style={{ perspective: "1500px" }}
         >
-          <MacBookMockup>
-            {/* Browser chrome */}
-            <div className="bg-muted/50 px-4 py-2 flex items-center gap-3 border-b border-border/30">
-              <div className="flex items-center gap-1.5">
-                <div className="w-3 h-3 rounded-full bg-[#ff5f57] hover:bg-[#ff5f57]/80 transition-colors" />
-                <div className="w-3 h-3 rounded-full bg-[#ffbd2e] hover:bg-[#ffbd2e]/80 transition-colors" />
-                <div className="w-3 h-3 rounded-full bg-[#28ca41] hover:bg-[#28ca41]/80 transition-colors" />
-              </div>
-              <div className="flex-1 max-w-md mx-auto">
-                <div className="bg-background/80 backdrop-blur rounded-md px-4 py-1.5 text-xs text-muted-foreground flex items-center gap-2 border border-border/30">
-                  <svg
-                    className="w-3 h-3 text-green-600"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
-                    />
-                  </svg>
-                  app.Ovela.dev / dashboard
+          <motion.div
+            initial={{ opacity: 0, y: 80, rotateX: 8 }}
+            animate={{ opacity: 1, y: 0, rotateX: 0 }}
+            transition={{ duration: 1.2, ease: "easeOut", delay: 0.5 }}
+            className="relative"
+          >
+            <MacBookMockup>
+              {/* Browser chrome */}
+              <div className="bg-muted/50 px-4 py-2 flex items-center gap-3 border-b border-border/30">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-full bg-[#ff5f57] hover:bg-[#ff5f57]/80 transition-colors" />
+                  <div className="w-3 h-3 rounded-full bg-[#ffbd2e] hover:bg-[#ffbd2e]/80 transition-colors" />
+                  <div className="w-3 h-3 rounded-full bg-[#28ca41] hover:bg-[#28ca41]/80 transition-colors" />
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-6 h-6 rounded bg-muted/50 flex items-center justify-center">
-                  <svg
-                    className="w-3 h-3 text-muted-foreground"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M15 18l-6-6 6-6" />
-                  </svg>
-                </div>
-                <div className="w-6 h-6 rounded bg-muted/50 flex items-center justify-center">
-                  <svg
-                    className="w-3 h-3 text-muted-foreground"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M9 18l6-6-6-6" />
-                  </svg>
-                </div>
-              </div>
-            </div>
-
-            {/* Dashboard Content */}
-            <div className="flex min-h-[380px]">
-              {/* Sidebar */}
-              <div className="w-52 bg-muted/30 border-r border-border/30 p-4 hidden md:block">
-                <div className="flex items-center gap-3 mb-8">
-                  <div className="w-9 h-9 rounded-xl bg-accent/20 flex items-center justify-center shadow-sm">
-                    <span className="font-serif text-lg font-semibold">O</span>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-sm">Your Business</p>
-                    <p className="text-xs text-muted-foreground">Connected to Ovela</p>
+                <div className="flex-1 max-w-md mx-auto">
+                  <div className="bg-background/80 backdrop-blur rounded-md px-4 py-1.5 text-xs text-muted-foreground flex items-center gap-2 border border-border/30">
+                    <svg
+                      className="w-3 h-3 text-green-600"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                      />
+                    </svg>
+                    ovela.dev/dashboard
                   </div>
                 </div>
-
-                <nav className="space-y-1">
-                  {
-                    [
-                      {
-                        icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6",
-                        label: "Dashboard",
-                        active: true,
-                      },
-                      {
-                        icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z",
-                        label: "Bookings",
-                        active: false,
-                      },
-                      {
-                        icon: "M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z",
-                        label: "Clients",
-                        active: false,
-                      },
-                      {
-                        icon: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
-                        label: "Messages",
-                        active: false,
-                      },
-                      {
-                        icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37.996.608 2.296.07 2.572-1.065z",
-                        label: "Settings",
-                        active: false,
-                      },
-                    ].map((item, i) => (
-                      <div
-                        key={i}
-                        className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${item.active
-                          ? "bg-accent/20 text-foreground font-medium"
-                          : "text-muted-foreground hover:bg-muted/50"
-                          }`}
-                      >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
-                        </svg>
-                        {item.label}
-                      </div>
-                    ))}
-                </nav>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded bg-muted/50 flex items-center justify-center">
+                    <svg
+                      className="w-3 h-3 text-muted-foreground"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path d="M15 18l-6-6 6-6" />
+                    </svg>
+                  </div>
+                  <div className="w-6 h-6 rounded bg-muted/50 flex items-center justify-center">
+                    <svg
+                      className="w-3 h-3 text-muted-foreground"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path d="M9 18l6-6-6-6" />
+                    </svg>
+                  </div>
+                </div>
               </div>
 
-              {/* Main Content */}
-              <div className="flex-1 p-5 bg-background/50">
-                {/* Header */}
-                <div className="flex items-center justify-between mb-5">
-                  <div>
-                    <h2 className="text-base font-semibold"> Good morning, Lisa </h2>
-                    <p className="text-xs text-muted-foreground">
-                      {currentTime.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="relative">
-                      <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center">
-                        <svg
-                          className="w-4 h-4 text-muted-foreground"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth="1.5"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
-                          />
-                        </svg>
-                      </div>
-                      <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-accent rounded-full border-2 border-card" />
+              {/* Dashboard Content */}
+              <div className="flex min-h-[380px]">
+                {/* Sidebar */}
+                <div className="w-52 bg-muted/30 border-r border-border/30 p-4 hidden md:block">
+                  <div className="flex items-center gap-3 mb-8">
+                    <div className="w-9 h-9 rounded-xl bg-accent/20 flex items-center justify-center shadow-sm">
+                      <span className="font-serif text-lg font-semibold">O</span>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-sm">Your Business</p>
+                      <p className="text-xs text-muted-foreground">Connected to Ovela</p>
                     </div>
                   </div>
-                </div>
 
-                {/* Stats */}
-                <div className="grid grid-cols-3 gap-3 mb-5">
-                  {
-                    stats.map((stat, i) => (
-                      <motion.div
-                        key={i}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.8 + i * 0.1 }}
-                        className="bg-card rounded-xl p-3 border border-border/50 shadow-sm"
-                      >
-                        <p className="text-[10px] text-muted-foreground mb-1"> {stat.label} </p>
-                        <div className="flex items-end gap-2">
-                          <span className="text-xl font-semibold"> {stat.value} </span>
-                          <span className="text-[10px] text-green-600 mb-0.5"> {stat.change} </span>
-                        </div>
-                      </motion.div>
-                    ))}
-                </div>
-
-                {/* Recent Call Activity */}
-                <div className="bg-card rounded-xl border border-border/50 overflow-hidden shadow-sm">
-                  <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between">
-                    <h3 className="font-medium text-sm">Recent Calls</h3>
-                    <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-                      5 handled
-                    </span>
-                  </div>
-                  <div className="divide-y divide-border/30">
+                  <nav className="space-y-1">
                     {
-                      recentCalls.slice(0, 5).map((call, i) => (
-                        <motion.div key={call.id} className="relative">
+                      [
+                        {
+                          icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6",
+                          label: "Dashboard",
+                          active: true,
+                        },
+                        {
+                          icon: "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z",
+                          label: "Bookings",
+                          active: false,
+                        },
+                        {
+                          icon: "M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z",
+                          label: "Clients",
+                          active: false,
+                        },
+                        {
+                          icon: "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z",
+                          label: "Messages",
+                          active: false,
+                        },
+                        {
+                          icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37.996.608 2.296.07 2.572-1.065z",
+                          label: "Settings",
+                          active: false,
+                        },
+                      ].map((item, i) => (
+                        <div
+                          key={i}
+                          className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${item.active
+                            ? "bg-accent/20 text-foreground font-medium"
+                            : "text-muted-foreground hover:bg-muted/50"
+                            }`}
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
+                            <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
+                          </svg>
+                          {item.label}
+                        </div>
+                      ))}
+                  </nav>
+                </div>
+
+                {/* Main Content */}
+                <div className="flex-1 p-5 bg-background/50">
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-5">
+                    <div>
+                      <h2 className="text-base font-semibold"> Good morning, Lisa </h2>
+                      <p className="text-xs text-muted-foreground">
+                        {currentTime.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="relative">
+                        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center">
+                          <svg
+                            className="w-4 h-4 text-muted-foreground"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
+                            />
+                          </svg>
+                        </div>
+                        <div className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-accent rounded-full border-2 border-card" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Stats */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
+                    {
+                      stats.map((stat, i) => (
+                        <motion.div
+                          key={i}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.8 + i * 0.1 }}
+                          className="bg-card rounded-xl p-3 border border-border/50 shadow-sm"
+                        >
+                          <p className="text-[10px] text-muted-foreground mb-1"> {stat.label} </p>
+                          <div className="flex items-end gap-2">
+                            <span className="text-xl font-semibold"> {stat.value} </span>
+                            <span className="text-[10px] text-green-600 mb-0.5"> {stat.change} </span>
+                          </div>
+                        </motion.div>
+                      ))}
+                  </div>
+
+                  {/* Live Action Log */}
+                  <div className="bg-card rounded-xl border border-border/50 overflow-hidden shadow-sm">
+                    <div className="px-4 py-2.5 border-b border-border/50 flex items-center justify-between">
+                      <h3 className="font-medium text-sm">Live Action Log</h3>
+                      <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                        Live Sync
+                      </span>
+                    </div>
+                    <div className="divide-y divide-border/30">
+                      {actionLogs.slice(0, 5).map((log, i) => (
+                        <motion.div key={log.id} className="relative">
                           <motion.div
                             animate={{
                               backgroundColor: activeBooking === i ? "rgba(200, 180, 168, 0.15)" : "transparent",
@@ -718,40 +672,32 @@ export function Hero() {
                             transition={{ duration: 0.3 }}
                             className="absolute inset-0"
                           />
-                          <div className="relative px-4 py-2.5 flex items-center justify-between">
+                          <div className="relative px-4 py-2 flex items-center justify-between">
                             <div className="flex items-center gap-3">
-                              <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-xs font-medium">
-                                {call.avatar}
+                              <div className="w-6 h-6 rounded bg-accent/10 flex items-center justify-center text-accent">
+                                <Activity className="w-3.5 h-3.5" />
                               </div>
                               <div>
-                                <p className="text-xs font-medium">{call.caller}</p>
-                                <p className="text-[10px] text-muted-foreground">{call.type}</p>
+                                <p className="text-xs font-medium">{log.action}</p>
+                                <p className="text-[10px] text-muted-foreground">{log.summary}</p>
                               </div>
                             </div>
-                            <div className="text-right">
-                              <p className="text-xs">{call.time}</p>
-                              <span
-                                className={`text-[9px] px-1.5 py-0.5 rounded-full ${call.status === "synced"
-                                  ? "bg-green-100 text-green-700"
-                                  : call.status === "responded"
-                                    ? "bg-blue-100 text-blue-700"
-                                    : call.status === "forwarded"
-                                      ? "bg-purple-100 text-purple-700"
-                                      : "bg-amber-100 text-amber-700"
-                                  }`}
-                              >
-                                {call.status}
+                            <div className="text-right flex flex-col items-end">
+                              <p className="text-xs text-muted-foreground">{log.time}</p>
+                              <span className="text-[9px] px-1 py-0.5 mt-0.5 rounded bg-muted text-muted-foreground">
+                                {log.duration}
                               </span>
                             </div>
                           </div>
                         </motion.div>
                       ))}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          </MacBookMockup>
-        </motion.div>
+            </MacBookMockup>
+          </motion.div>
+        </div>
 
         {/* Voice Demo Modal Overlay */}
         <AnimatePresence>

@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Allow: /_next/static/
+Allow: /favicon.svg
+Allow: /favicon.ico
+
+Sitemap: https://ovela.dev/sitemap.xml

@@ -4,23 +4,24 @@ import type React from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { useState, useEffect, useRef } from "react"
 
-// Conversation transcript with timing - Real, emotionally engaging dialogue
+// Conversation transcript exactly synced with demo_clip.MP3
 const conversation = [
-  { speaker: "ovela", text: "Hey there! Thanks for calling. This is Ovela - what can I help you with today?", duration: 3500 },
-  { speaker: "user", text: "Oh hi! I've been trying to call all morning but kept getting voicemail...", duration: 3000 },
-  { speaker: "ovela", text: "I'm so sorry about that! Well, you've got me now. What do you need?", duration: 3500 },
-  { speaker: "user", text: "I need to reschedule my appointment for tomorrow. Something came up with my daughter's school.", duration: 4000 },
-  { speaker: "ovela", text: "Of course, no worries at all! Let me find you a better time. How about Thursday at 2 PM?", duration: 4000 },
-  { speaker: "user", text: "That would be perfect, thank you so much!", duration: 2000 },
-  { speaker: "ovela", text: "All set! You'll get a text confirmation in just a sec. Anything else I can help with?", duration: 3500 },
-  { speaker: "user", text: "No, that's it. You're a lifesaver!", duration: 2000 },
+  { speaker: "ovela", text: "Coal Creek Motel. Calls are recorded. What can I do for you?", start: 0, duration: 3440 },
+  { speaker: "user", text: "Hi there, I want to book a room for next Monday to Tuesday on the name of Alex James.", start: 3440, duration: 6080 },
+  { speaker: "ovela", text: "Right, next Monday to Tuesday is March 2nd to 3rd, 2026. What type of room would you like to book?", start: 9520, duration: 6120 },
+  { speaker: "user", text: "I want to book a room for couple, like twin room should be fine.", start: 15640, duration: 4840 },
+  { speaker: "ovela", text: "Okay, the twin room is available from March 2nd to 3rd. Would you like me to place a temporary hold?", start: 20480, duration: 5680 },
+  { speaker: "user", text: "Yes, please.", start: 26160, duration: 1960 },
+  { speaker: "ovela", text: "Thanks Alex, I've placed a temporary hold on the twin room for those dates.", start: 28120, duration: 3360 },
+  { speaker: "ovela", text: "The team will email you a link soon to secure it. Is there anything else I can help with?", start: 31480, duration: 4480 },
+  { speaker: "user", text: "No, that's alright. Thank you.", start: 35960, duration: 2000 },
+  { speaker: "ovela", text: "Cheers, we'll have your room ready.", start: 37960, duration: 2000 }
 ]
 
-// Brand colors - consistent pinkish tones
-const BRAND_GRADIENT = "linear-gradient(to bottom, #e8d5d0 0%, #dcc8c3 50%, #d4bdb8 100%)"
-const BRAND_GRADIENT_ANSWERED = "linear-gradient(to bottom, #d4bdb8 0%, #c9b0ab 50%, #bfa5a0 100%)"
+const BRAND_GRADIENT = "linear-gradient(to bottom, #144272 0%, #0A2647 100%)"
+const BRAND_GRADIENT_ANSWERED = "linear-gradient(to bottom, #205295 0%, #0A2647 100%)"
 
-// iPhone-Style Split Waveform - Both colors visible, only active side animates
+// iPhone-Style Waveform
 function SplitWaveform({
   currentSpeaker,
   isActive,
@@ -30,109 +31,123 @@ function SplitWaveform({
   isActive: boolean
   currentText?: string
 }) {
-  const bars = 6 // 6 bars per side
+  const totalBars = 12 // Total bars in the waveform
 
-  // Calculate intensity based on text length (more words = more intense)
+  // Calculate intensity based on text length
   const textIntensity = currentText ? Math.min(currentText.length / 50, 1.5) : 1
 
   const isIdle = currentSpeaker === null
+  const isOvelaActive = currentSpeaker === "ovela" && isActive
+  const isUserActive = currentSpeaker === "user" && isActive
+
+  const baseColor = "#FFE066"
+  const ovelaColor = "#22C55E"
+  const userColor = "#FFCC33"
 
   return (
-    <div className="flex items-center gap-[1px] h-5">
-      {/* Green side (Ovela) - Left */}
-      <div className="flex items-center gap-[1.5px]">
-        {Array.from({ length: bars }).map((_, i) => {
-          const isOvelaActive = currentSpeaker === "ovela" && isActive
-          const baseHeight = 3
-          const maxHeight = 12 * textIntensity
+    <div className="flex items-center gap-[1.5px] h-5">
+      {Array.from({ length: totalBars }).map((_, i) => {
+        const normalizedPosition = i / (totalBars - 1) // 0 to 1
 
-          return (
-            <motion.div
-              key={`green-${i}`}
-              className="w-[2px] rounded-full bg-green-400"
-              animate={
-                isIdle ? {
-                  // Idle: subtle breathing animation
-                  height: baseHeight + 1,
-                  opacity: 1,
-                } : isOvelaActive ? {
-                  // Active: full animation with physics
-                  height: [
-                    baseHeight + Math.sin(i * 0.5) * 1,
-                    maxHeight * (0.4 + Math.random() * 0.6),
-                    baseHeight + Math.cos(i * 0.6) * 2,
-                    maxHeight * (0.5 + Math.random() * 0.5),
-                    baseHeight + Math.sin(i * 0.5) * 1,
-                  ],
-                  opacity: 1,
-                } : {
-                  height: baseHeight,
-                  opacity: 1,
-                }
+        const idleHeight = 3
+
+        let activeHeight = idleHeight
+        let barColor = baseColor
+        let animationDelay = 0
+        let shouldAnimate = false
+
+        if (isOvelaActive) {
+          const greenZoneEnd = 8
+
+          if (i < greenZoneEnd) {
+            barColor = ovelaColor
+            const positionInGreen = i / greenZoneEnd
+            const intensity = 1 - (positionInGreen * 0.3)
+            activeHeight = idleHeight + (10 * intensity * textIntensity)
+            animationDelay = i * 0.025
+            shouldAnimate = true
+          } else if (i === greenZoneEnd) {
+            barColor = "#7DD87D"
+            activeHeight = idleHeight + 3
+            shouldAnimate = true
+          } else {
+            barColor = baseColor
+            activeHeight = idleHeight + 1
+            shouldAnimate = true
+          }
+        } else if (isUserActive) {
+          const yellowZoneStart = 4
+
+          if (i >= yellowZoneStart) {
+            barColor = userColor
+            const positionInYellow = (i - yellowZoneStart) / (totalBars - yellowZoneStart)
+            const intensity = 0.5 + (positionInYellow * 0.5)
+            activeHeight = idleHeight + (10 * intensity * textIntensity)
+            animationDelay = (totalBars - i) * 0.025
+            shouldAnimate = true
+          } else if (i === yellowZoneStart - 1) {
+            barColor = "#FFD94D"
+            activeHeight = idleHeight + 3
+            shouldAnimate = true
+          } else {
+            barColor = baseColor
+            activeHeight = idleHeight + 1
+            shouldAnimate = true
+          }
+        }
+
+        const isInActiveZone = isOvelaActive
+          ? i < 8
+          : isUserActive
+            ? i >= 4
+            : false
+
+        return (
+          <motion.div
+            key={`bar-${i}`}
+            className="w-[2px] rounded-full"
+            style={{
+              backgroundColor: isIdle ? baseColor : barColor
+            }}
+            animate={
+              isIdle ? {
+                height: idleHeight,
+                opacity: 0.9,
+              } : shouldAnimate ? {
+                height: isInActiveZone ? [
+                  idleHeight,
+                  activeHeight * (0.6 + Math.random() * 0.4),
+                  activeHeight * (0.4 + Math.random() * 0.6),
+                  activeHeight * (0.7 + Math.random() * 0.3),
+                  idleHeight,
+                ] : [
+                  idleHeight,
+                  idleHeight + 1,
+                  idleHeight + 0.5,
+                  idleHeight + 1,
+                  idleHeight,
+                ],
+                opacity: 1,
+              } : {
+                height: idleHeight,
+                opacity: 0.9,
               }
-              transition={{
-                duration: isOvelaActive ? 0.6 + (i % 3) * 0.1 : 0.3,
-                repeat: isOvelaActive ? Infinity : 0,
-                ease: "easeInOut",
-                delay: i * 0.04,
-              }}
-            />
-          )
-        })}
-      </div>
-
-      {/* Orange side (User) - Right */}
-      <div className="flex items-center gap-[1.5px]">
-        {Array.from({ length: bars }).map((_, i) => {
-          const isUserActive = currentSpeaker === "user" && isActive
-          const baseHeight = 3
-          const maxHeight = 12 * textIntensity
-
-          // When idle, show green with yellow gradient at the end
-          const colorClass = isIdle
-            ? i >= bars - 2 ? "bg-yellow-400" : "bg-green-400"
-            : "bg-orange-400"
-
-          return (
-            <motion.div
-              key={`orange-${i}`}
-              className={`w-[2px] rounded-full ${colorClass}`}
-              animate={
-                isIdle ? {
-                  // Idle: subtle breathing, green with yellow gradient
-                  height: baseHeight + 1,
-                  opacity: i >= bars - 2 ? 0.8 : 1, // Yellow bars slightly dimmer for gradient effect
-                } : isUserActive ? {
-                  // Active: full animation with physics
-                  height: [
-                    baseHeight + Math.sin(i * 0.5) * 1,
-                    maxHeight * (0.4 + Math.random() * 0.6),
-                    baseHeight + Math.cos(i * 0.6) * 2,
-                    maxHeight * (0.5 + Math.random() * 0.5),
-                    baseHeight + Math.sin(i * 0.5) * 1,
-                  ],
-                  opacity: 1,
-                } : {
-                  // Inactive: static, full visibility
-                  height: baseHeight,
-                  opacity: 1,
-                }
-              }
-              transition={{
-                duration: isUserActive ? 0.6 + (i % 3) * 0.1 : 0.3,
-                repeat: isUserActive ? Infinity : 0,
-                ease: "easeInOut",
-                delay: i * 0.04,
-              }}
-            />
-          )
-        })}
-      </div>
+            }
+            transition={{
+              duration: isInActiveZone ? 0.5 + (i % 3) * 0.08 : 1.2,
+              repeat: shouldAnimate ? Infinity : 0,
+              ease: "easeInOut",
+              delay: animationDelay,
+            }}
+          />
+        )
+      })}
     </div>
   )
 }
 
-// Compact Dynamic Island with call info
+
+// Dynamic Island
 function DynamicIsland({
   isAnswered,
   callTime,
@@ -153,13 +168,20 @@ function DynamicIsland({
   return (
     <motion.div
       className="absolute top-[10px] left-1/2 -translate-x-1/2 z-26"
+      initial={{ scale: 0.8, opacity: 0 }}
       animate={{
         width: isAnswered ? 155 : 100,
         height: isAnswered ? 30 : 28,
+        scale: 1,
+        opacity: 1,
       }}
-      transition={{ duration: 0.4, ease: [0.32, 0.72, 0, 1] }}
+      transition={{
+        duration: 0.5,
+        ease: [0.32, 0.72, 0, 1],
+        scale: { duration: 0.4, ease: "easeOut" }
+      }}
     >
-      <div className="bg-black rounded-full h-full w-full flex items-center justify-between px-2.5 overflow-hidden">
+      <div className="bg-black rounded-full h-full w-full flex items-center justify-between px-3 overflow-hidden">
         {isAnswered ? (
           <>
             <div className="flex items-center gap-1.5">
@@ -168,12 +190,6 @@ function DynamicIsland({
               </svg>
               <span className="text-green-400 text-[10px] font-medium tabular-nums">{formatTime(callTime)}</span>
             </div>
-
-            <motion.div
-              className="w-[4px] h-[4px] rounded-full bg-yellow-400"
-              animate={{ opacity: [1, 0.4, 1] }}
-              transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
-            />
 
             <SplitWaveform
               currentSpeaker={currentSpeaker}
@@ -194,20 +210,20 @@ function DynamicIsland({
   )
 }
 
-// Glassmorphism Call Button with proper spacing
-function CallButton({ icon, label, isEnd = false }: { icon: React.ReactNode; label: string; isEnd?: boolean }) {
+// Call Button
+function CallButton({ icon, label, isEnd = false, onClick }: { icon: React.ReactNode; label: string; isEnd?: boolean; onClick?: () => void }) {
   return (
-    <button className="flex flex-col items-center gap-2 active:scale-95 transition-transform">
-      <div className={`w-[54px] h-[54px] rounded-full flex items-center justify-center shadow-lg ${isEnd ? "bg-red-500" : "bg-white/25 backdrop-blur-md border border-white/15"
+    <button onClick={onClick} className="flex flex-col items-center gap-2 active:scale-95 transition-transform z-50">
+      <div className={`w-[55px] h-[55px] rounded-full flex items-center justify-center shadow-lg transition-colors ${isEnd ? "bg-[#FF3B30] hover:bg-[#ff4940]" : "bg-white/15 backdrop-blur-xl border border-white/10 hover:bg-white/25"
         }`}>
         {icon}
       </div>
-      <span className="text-white/90 text-[11px] font-medium tracking-wide">{label}</span>
+      <span className="text-white/90 text-[13px] tracking-wide mt-1">{label}</span>
     </button>
   )
 }
 
-// External Floating Transcript with Speaker Label - Theme Adaptive & Responsive
+// Floating Transcript
 function ExternalTranscript({ text, speaker, isVisible }: { text: string; speaker: "ovela" | "user"; isVisible: boolean }) {
   const isOvela = speaker === "ovela"
 
@@ -252,7 +268,7 @@ function IPhoneMockup({ children, dynamicIsland, ovelaTranscript, userTranscript
   userTranscript?: { text: string; visible: boolean }
 }) {
   return (
-    <div className="relative">
+    <div className="relative select-none">
       {ovelaTranscript && <ExternalTranscript text={ovelaTranscript.text} speaker="ovela" isVisible={ovelaTranscript.visible} />}
       {userTranscript && <ExternalTranscript text={userTranscript.text} speaker="user" isVisible={userTranscript.visible} />}
 
@@ -316,10 +332,10 @@ function OvelaText() {
   )
 }
 
-// Consistent Memoji size/position for both screens
-const MEMOJI_SIZE = "w-[220px] h-[220px]"
+// Consistent Memoji/Orb size/position for both screens
+const MEMOJI_SIZE = "w-[210px] h-[210px]"
 const MEMOJI_POSITION = "top-[160px]"
-const MEMOJI_SCALE = 2
+const MEMOJI_SCALE = 1
 
 export function LivePreview() {
   const [callPhase, setCallPhase] = useState<"ringing" | "sliding" | "answered" | "ending">("ringing")
@@ -329,95 +345,121 @@ export function LivePreview() {
   const [ovelaTranscript, setOvelaTranscript] = useState<{ text: string; visible: boolean }>({ text: "", visible: false })
   const [userTranscript, setUserTranscript] = useState<{ text: string; visible: boolean }>({ text: "", visible: false })
   const [isInView, setIsInView] = useState(false)
-  const conversationRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Full animation loop: ringing → answered → end → back to ringing
+  const sectionRef = useRef<HTMLElement>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  // Initial setup: ring until answered
   useEffect(() => {
     if (!isInView) return
+    setCallPhase("ringing")
+  }, [isInView])
 
-    const startLoop = () => {
-      setCallPhase("ringing")
-      setCallTime(0)
+  // Sync state cleanly with audio playback when answered
+  useEffect(() => {
+    if (callPhase !== "answered" || !audioRef.current) return
+
+    const audio = audioRef.current
+
+    // Play audio when sliding transition finishes
+    audio.play().catch(console.error)
+
+    const handleTimeUpdate = () => {
+      const timeMs = audio.currentTime * 1000
+
+      const currentMsg = conversation.find(msg =>
+        timeMs >= msg.start && timeMs < (msg.start + msg.duration)
+      )
+
+      if (currentMsg) {
+        setCurrentSpeaker(currentMsg.speaker as "ovela" | "user")
+        setCurrentText(currentMsg.text)
+        if (currentMsg.speaker === "ovela") {
+          setUserTranscript({ text: "", visible: false })
+          setOvelaTranscript({ text: currentMsg.text, visible: true })
+        } else {
+          setOvelaTranscript({ text: "", visible: false })
+          setUserTranscript({ text: currentMsg.text, visible: true })
+        }
+      } else {
+        setCurrentSpeaker(null)
+        setOvelaTranscript({ text: "", visible: false })
+        setUserTranscript({ text: "", visible: false })
+      }
+
+      setCallTime(Math.floor(audio.currentTime))
+    }
+
+    const handleEnded = () => {
+      setCallPhase("ending")
+
+      // Clear transcripts when audio naturally ends
       setCurrentSpeaker(null)
       setOvelaTranscript({ text: "", visible: false })
       setUserTranscript({ text: "", visible: false })
 
       setTimeout(() => {
-        setCallPhase("sliding")
-        setTimeout(() => setCallPhase("answered"), 700)
-      }, 2500)
+        setCallPhase("ringing")
+        setCallTime(0)
+      }, 2000)
     }
 
-    startLoop()
-  }, [isInView])
-
-  // Call timer
-  useEffect(() => {
-    if (callPhase !== "answered") return
-
-    const timer = setInterval(() => {
-      setCallTime(prev => prev + 1)
-    }, 1000)
-
-    return () => clearInterval(timer)
-  }, [callPhase])
-
-  // Conversation progression with full loop
-  useEffect(() => {
-    if (callPhase !== "answered") return
-
-    let messageIndex = 0
-
-    const playNextMessage = () => {
-      if (messageIndex >= conversation.length) {
-        setCurrentSpeaker(null)
-        setOvelaTranscript({ text: "", visible: false })
-        setUserTranscript({ text: "", visible: false })
-
-        setTimeout(() => {
-          setCallPhase("ending")
-
-          setTimeout(() => {
-            setCallPhase("ringing")
-            setCallTime(0)
-
-            setTimeout(() => {
-              setCallPhase("sliding")
-              setTimeout(() => setCallPhase("answered"), 700)
-            }, 2500)
-          }, 500)
-        }, 2000)
-        return
-      }
-
-      const msg = conversation[messageIndex]
-      setCurrentSpeaker(msg.speaker as "ovela" | "user")
-      setCurrentText(msg.text)
-
-      if (msg.speaker === "ovela") {
-        setUserTranscript({ text: "", visible: false })
-        setOvelaTranscript({ text: msg.text, visible: true })
-      } else {
-        setOvelaTranscript({ text: "", visible: false })
-        setUserTranscript({ text: msg.text, visible: true })
-      }
-
-      conversationRef.current = setTimeout(() => {
-        messageIndex++
-        playNextMessage()
-      }, msg.duration)
-    }
-
-    const startDelay = setTimeout(playNextMessage, 800)
+    audio.addEventListener("timeupdate", handleTimeUpdate)
+    audio.addEventListener("ended", handleEnded)
 
     return () => {
-      clearTimeout(startDelay)
-      if (conversationRef.current) clearTimeout(conversationRef.current)
+      audio.removeEventListener("timeupdate", handleTimeUpdate)
+      audio.removeEventListener("ended", handleEnded)
     }
   }, [callPhase])
 
+  // Intersection observer to pause audio when scrolled out of view
+  useEffect(() => {
+    if (!sectionRef.current) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) {
+            if (audioRef.current && !audioRef.current.paused) {
+              audioRef.current.pause()
+            }
+          } else {
+            if (callPhase === "answered" && audioRef.current && audioRef.current.paused) {
+              audioRef.current.play().catch(console.error)
+            }
+          }
+        })
+      },
+      { threshold: 0.2 }
+    )
+
+    observer.observe(sectionRef.current)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [callPhase])
+
+  const handleEndCall = () => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.currentTime = 0
+    }
+    setCallPhase("ending")
+    // Hide transcripts immediately on hang up
+    setCurrentSpeaker(null)
+    setOvelaTranscript({ text: "", visible: false })
+    setUserTranscript({ text: "", visible: false })
+
+    setTimeout(() => {
+      setCallPhase("ringing")
+      setCallTime(0)
+    }, 1500)
+  }
+
   return (
-    <section id="live-preview" className="py-32 px-6 bg-card">
+    <section id="live-preview" ref={sectionRef} className="py-32 px-6 bg-card">
       <div className="max-w-6xl mx-auto">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -430,14 +472,41 @@ export function LivePreview() {
           <p className="text-muted-foreground text-lg">A real call, handled automatically from start to finish.</p>
         </motion.div>
 
+        {/* Hidden Audio Player */}
+        <audio ref={audioRef} src="/audio/demo_clip.MP3" preload="auto" />
+
         <motion.div
           initial={{ opacity: 0, y: 40 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true }}
           transition={{ duration: 0.8, ease: "easeOut" }}
           onViewportEnter={() => setIsInView(true)}
-          className="flex justify-center"
+          className="flex justify-center relative"
         >
+          {/* Attention Arrow */}
+          <AnimatePresence>
+            {callPhase === "ringing" && (
+              <motion.div
+                initial={{ opacity: 0, x: -20, y: 10 }}
+                animate={{ opacity: 1, x: 0, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9 }}
+                transition={{ duration: 0.8, delay: 1.5 }}
+                className="absolute flex flex-col items-start lg:items-end z-50 lg:z-1 pointer-events-none
+                           top-[86%] left-[1%] sm:left-[8%]
+                           lg:top-[80%] lg:left-auto lg:right-[calc(50%+125px)]"
+              >
+                <div className="bg-accent/90 lg:bg-accent/10 backdrop-blur-md text-white lg:text-foreground/90 px-3 py-1.5 lg:px-4 lg:py-2 rounded-2xl border border-white/20 lg:border-border shadow-2xl lg:shadow-xl text-xs lg:text-sm font-medium -rotate-[2deg] relative top-20 left-1 lg:top-20 lg:left-auto lg:right-20">
+                  Slide to hear demo 📞
+                </div>
+                <img
+                  src="/images/icons8-curly-arrow.gif"
+                  alt="Point arrow"
+                  className="w-16 h-16 lg:w-20 lg:h-20 dark:invert opacity-90 lg:opacity-70 -scale-x-100 rotate-[1deg] lg:rotate-[4deg]"
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+
           <IPhoneMockup
             dynamicIsland={<DynamicIsland isAnswered={callPhase === "answered"} callTime={callTime} currentSpeaker={currentSpeaker} currentText={currentText} />}
             ovelaTranscript={ovelaTranscript}
@@ -471,14 +540,24 @@ export function LivePreview() {
                   {/* OVELA Text - Consistent */}
                   <OvelaText />
 
-                  {/* Memoji - Consistent size/position */}
+                  {/* Video Overlay - Interactive Demo Screen */}
                   <motion.div
-                    className={`absolute ${MEMOJI_POSITION} left-1/2 -translate-x-1/2 z-20`}
-                    initial={{ opacity: 0, scale: 0.9 }}
+                    className={`absolute ${MEMOJI_POSITION} left-1/2 -translate-x-1/2 z-20 pointer-events-none`}
+                    initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: MEMOJI_SCALE }}
                     transition={{ duration: 0.6, delay: 0.15 }}
                   >
-                    <img src="/IMemoji-ovela.png" alt="Ovela AI" className={`${MEMOJI_SIZE} object-contain drop-shadow-[0_20px_40px_rgba(0,0,0,0.25)]`} />
+                    <div
+                      className={`${MEMOJI_SIZE} rounded-full overflow-hidden relative shadow-[0_0_40px_rgba(255,255,255,0.10)] border-1 border-white/20 bg-white/5 backdrop-blur-sm flex items-center justify-center`}
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-tr from-white/10 to-white/5 rounded-full z-10 pointer-events-none" />
+                      <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/10 to-transparent z-5 pointer-events-none rounded-full" />
+                      <video
+                        src="/phone-mockup-overlay/phone-mockup-overlay.mp4"
+                        className="absolute inset-0 w-full h-full object-cover scale-[1.05] pointer-events-none"
+                        autoPlay playsInline muted loop
+                      />
+                    </div>
                   </motion.div>
 
                   {/* Ringing Buttons */}
@@ -504,18 +583,27 @@ export function LivePreview() {
 
                   {/* Slide to Answer */}
                   <div className="absolute bottom-[52px] left-5 right-5 z-30">
-                    <div className="relative h-[50px] bg-white/30 backdrop-blur-md rounded-full flex items-center px-1.5 shadow-lg border border-white/20">
+                    <div className="relative h-[50px] bg-white/20 backdrop-blur-md rounded-full flex items-center px-1.5 shadow-lg border border-white/20">
                       <motion.div
-                        className="absolute w-[44px] h-[44px] bg-white rounded-full flex items-center justify-center shadow-lg"
-                        animate={callPhase === "sliding" ? { x: 195, opacity: 0 } : { x: [0, 10, 0] }}
-                        transition={callPhase === "sliding" ? { duration: 0.5, ease: "easeIn" } : { duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+                        className="absolute w-[44px] h-[44px] bg-white rounded-full flex items-center justify-center shadow-lg z-40 cursor-grab active:cursor-grabbing"
+                        drag="x"
+                        dragConstraints={{ left: 0, right: 195 }}
+                        dragSnapToOrigin={true}
+                        onDragEnd={(_, info) => {
+                          if (info.offset.x >= 140) {
+                            setCallPhase("sliding")
+                            setTimeout(() => setCallPhase("answered"), 500)
+                          }
+                        }}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
                       >
                         <svg className="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 24 24">
                           <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" />
                         </svg>
                       </motion.div>
-                      <div className="flex-1 text-center pl-8">
-                        <span className="text-white/95 text-[14px] font-medium drop-shadow-sm">slide to answer</span>
+                      <div className="flex-1 text-center pl-8 pointer-events-none select-none">
+                        <span className="text-white/95 text-[14px] font-medium drop-shadow-sm">slide to start</span>
                       </div>
                     </div>
                   </div>
@@ -550,28 +638,38 @@ export function LivePreview() {
                   {/* OVELA Text - Same as ringing screen */}
                   <OvelaText />
 
-                  {/* Memoji - Same size/position as ringing */}
+                  {/* Video Overlay - Answered Screen */}
                   <motion.div
-                    className={`absolute ${MEMOJI_POSITION} left-1/2 -translate-x-1/2 z-20`}
-                    initial={{ scale: MEMOJI_SCALE * 0.9, opacity: 0 }}
+                    className={`absolute ${MEMOJI_POSITION} left-1/2 -translate-x-1/2 z-20 pointer-events-none`}
+                    initial={{ scale: MEMOJI_SCALE * 0.95, opacity: 0 }}
                     animate={{ scale: MEMOJI_SCALE, opacity: 1 }}
                     transition={{ duration: 0.4 }}
                   >
-                    <img src="/IMemoji-ovela.png" alt="Ovela AI" className={`${MEMOJI_SIZE} object-contain drop-shadow-[0_20px_40px_rgba(0,0,0,0.25)]`} />
+                    <div
+                      className={`${MEMOJI_SIZE} rounded-full overflow-hidden relative shadow-[0_0_40px_rgba(255,255,255,0.15)] border-2 border-white/20 bg-white/5 backdrop-blur-md flex items-center justify-center`}
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-tr from-white/10 to-white/5 rounded-full z-10 pointer-events-none" />
+                      <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/20 to-transparent z-10 pointer-events-none rounded-full" />
+                      <video
+                        src="/phone-mockup-overlay/phone-mockup-overlay.mp4"
+                        className="absolute inset-0 w-full h-full object-cover scale-[1.05] pointer-events-none"
+                        autoPlay playsInline muted loop
+                      />
+                    </div>
                   </motion.div>
 
-                  {/* Call Controls - Row 1 with proper spacing */}
-                  <div className="absolute bottom-[115px] left-0 right-0 flex justify-around px-8 z-30">
-                    <CallButton icon={<svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" /></svg>} label="speaker" />
-                    <CallButton icon={<svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" /></svg>} label="FaceTime" />
-                    <CallButton icon={<svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" /></svg>} label="mute" />
-                  </div>
+                  {/* Call Controls - CSS Grid for exact layout */}
+                  <div className="absolute bottom-[35px] left-0 right-0 px-8 z-30">
+                    <div className="grid grid-cols-3 gap-y-[15px] gap-x-[15px] place-items-center max-w-[280px] mx-auto">
+                      <CallButton icon={<svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" /></svg>} label="speaker" />
+                      <CallButton icon={<svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z" /></svg>} label="FaceTime" />
+                      <CallButton icon={<svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" /></svg>} label="mute" />
 
-                  {/* Call Controls - Row 2 with proper spacing */}
-                  <div className="absolute bottom-[32px] left-0 right-0 flex justify-around px-8 z-30">
-                    <CallButton icon={<svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2" /><circle cx="6" cy="12" r="2" /><circle cx="18" cy="12" r="2" /></svg>} label="more" />
-                    <CallButton icon={<svg className="w-6 h-6 text-white rotate-[135deg]" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>} label="End" isEnd />
-                    <CallButton icon={<div className="grid grid-cols-3 gap-1">{[...Array(9)].map((_, i) => <div key={i} className="w-1.5 h-1.5 rounded-full bg-white" />)}</div>} label="keypad" />
+                      {/* Row 2 */}
+                      <CallButton icon={<svg className="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2" /><circle cx="6" cy="12" r="2" /><circle cx="18" cy="12" r="2" /></svg>} label="more" />
+                      <CallButton onClick={handleEndCall} icon={<svg className="w-6 h-6 text-white rotate-[135deg]" fill="currentColor" viewBox="0 0 24 24"><path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z" /></svg>} label="end" isEnd />
+                      <CallButton icon={<div className="grid grid-cols-3 gap-1.5 p-1">{[...Array(9)].map((_, i) => <div key={i} className="w-1 h-1 rounded-full bg-white" />)}</div>} label="keypad" />
+                    </div>
                   </div>
                 </motion.div>
               )}
