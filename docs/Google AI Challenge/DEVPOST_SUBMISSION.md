@@ -64,7 +64,7 @@ All three agents run `google-adk` `LlmAgent` + `Runner` with `AppwriteSessionSer
 
 ### 📐 Architecture Diagram
 
-![Ovela AI Architecture Diagram](https://raw.githubusercontent.com/My-CMDhub/Ovela-AI/main/docs/Googlr%20AI%20Challenge/ovela_architecture_diagram.png)
+![Ovela AI Architecture Diagram](https://raw.githubusercontent.com/My-CMDhub/Ovela-AI/main/images/ovela_architecture_diagram.png)
 
 ---
 
