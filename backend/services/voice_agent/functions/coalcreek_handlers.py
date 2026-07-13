@@ -1023,6 +1023,9 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "payment_outstanding":    doc.get("payment_status") not in ("paid", "card_on_file"),
             "payment_link_sent":      bool(doc.get("payment_link_url") or doc.get("payment_link_sent_at")),
             "payment_link_url":       doc.get("payment_link_url", ""),
+            "payment_link_sent_at":   doc.get("payment_link_sent_at", ""),
+            "payment_link_expires_at":doc.get("payment_expires_at", ""),
+            "email_status":           doc.get("payment_status") or "unknown",
             "total_amount":           doc.get("total_amount", ""),
             "other_bookings":         total_docs - 1,
         }
@@ -1047,8 +1050,10 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             )
         elif _pstatus in ("pending_payment", "pending") or _bstatus in ("reserved", "pending", "pending_payment", "link_sent"):
             # 'reserved' is the PMS hold status — it always means payment is outstanding
+            link_sent_at = doc.get("payment_link_sent_at", "")
+            timing_hint = f" (link sent at {link_sent_at[:16].replace('T', ' ')} AEST - CRITICAL: Speak this as a casual relative time like '5 minutes ago' or '2 hours ago'. DO NOT read the exact timestamp!)" if link_sent_at else ""
             result["payment_status_message"] = (
-                "Payment NOT yet received — booking is on hold awaiting payment. "
+                f"Payment NOT yet received — booking is on hold awaiting payment{timing_hint}. "
                 "DO NOT say 'cancelled'. "
                 "Tell the caller their booking is held and payment is outstanding. "
                 "Offer to resend the payment link by calling resend_payment_link."
