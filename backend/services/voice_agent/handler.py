@@ -1060,6 +1060,8 @@ class VoiceAgentHandler:
         - AgentStartedSpeaking: AI started response
         - AgentAudioDone: AI finished speaking
         - FunctionCallRequest: AI wants to call a function
+        - EagerEndOfTurn: User likely finished speaking (early confidence)
+        - TurnResumed: User continued speaking after EagerEndOfTurn
         - Error/Close: Connection issues
         """
         event_type = event.get("type")
@@ -1102,6 +1104,27 @@ class VoiceAgentHandler:
             if self._pending_injection_event is not None:
                 self._pending_injection_event.set()
                 self._pending_injection_event = None
+                
+        elif event_type == "EagerEndOfTurn":
+            # Flux fired the early-confidence trigger (eager_eot_threshold=0.40).
+            # The Agent API is already starting LLM inference speculatively.
+            # We log it for latency observability and mark VAD timing if not already set.
+            transcript_so_far = event.get("transcript", "")
+            logger.info(
+                "⚡ EagerEndOfTurn received | transcript_so_far='%s...' | "
+                "agent will speculatively start LLM now",
+                transcript_so_far[:60],
+            )
+            # If VAD fired but we missed it (edge case on reconnect), set it now
+            if not getattr(self, 'user_speech_start_time', None):
+                self.user_speech_start_time = time.time()
+                self.latency.mark_user_vad()
+
+        elif event_type == "TurnResumed":
+            # User kept talking after EagerEndOfTurn fired. The Agent API has
+            # internally cancelled the speculative LLM call and resumed listening.
+            # We just log it to measure false-start rate.
+            logger.info("↩️ TurnResumed — user continued speaking after EagerEndOfTurn (speculative LLM cancelled)")
             
         elif event_type == "Error":
             logger.error(f"❌ Deepgram Agent error: {event}")
@@ -1175,7 +1198,15 @@ class VoiceAgentHandler:
             # If we survived the meaningless filter, it's a MEANINGFUL interruption!
             # If the AI was actively speaking, we must now fire the deferred `clear` 
             # event and trim the transcript.
-            if getattr(self, '_ai_is_speaking', False):
+            is_twilio_playing = False
+            if hasattr(self, '_tts_playback_start'):
+                bytes_sent = getattr(self, '_twilio_audio_bytes_sent', 0)
+                elapsed_time = time.time() - self._tts_playback_start
+                expected_duration = bytes_sent / 8000.0
+                if elapsed_time < expected_duration + 0.3:
+                    is_twilio_playing = True
+
+            if getattr(self, '_ai_is_speaking', False) or is_twilio_playing:
                 logger.info(f"🛑 Meaningful interruption confirmed ('{content}'). Firing clear event.")
                 
                 # Send clear event to Twilio to stop agent audio
@@ -1470,7 +1501,15 @@ class VoiceAgentHandler:
         voice_settings = self.tenant_config.get("voice_settings", {})
         is_flux = voice_settings.get("model", "flux-general-en").startswith("flux-")
 
-        if is_flux and getattr(self, '_ai_is_speaking', False):
+        is_twilio_playing = False
+        if hasattr(self, '_tts_playback_start'):
+            bytes_sent = getattr(self, '_twilio_audio_bytes_sent', 0)
+            elapsed_time = time.time() - self._tts_playback_start
+            expected_duration = bytes_sent / 8000.0
+            if elapsed_time < expected_duration + 0.3:
+                is_twilio_playing = True
+
+        if is_flux and (getattr(self, '_ai_is_speaking', False) or is_twilio_playing):
             logger.info("🛑 Flux VAD Interruption: Firing Twilio clear event immediately to stop AI.")
             clear_message = {
                 "event": "clear",

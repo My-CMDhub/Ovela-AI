@@ -496,16 +496,6 @@ class BookingsMixin:
                 if docs:
                     return docs
 
-                # 3b. Fallback: search (full-text index, if available)
-                queries = [base_tenant, self.Query.search("guest_name", name_clean), self.Query.limit(5)]
-                result = await self._motel_request(
-                    "GET",
-                    f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
-                    params={"queries": queries}
-                )
-                docs = result.get("documents", []) if result else []
-                if docs:
-                    return docs
 
                 queries = [base_tenant, self.Query.order_desc("created_at"), self.Query.limit(100)]
                 result = await self._motel_request(
