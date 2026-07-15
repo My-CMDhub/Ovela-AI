@@ -39,7 +39,7 @@ backend/tests/**
 !backend/tests/test_interruption_trim.py
 backend/scripts/test_email_zoho.py
 backend/redeploy-guide.md
-backend/Procfile
+# backend/Procfile
 backend/stream
 
 **/*.md
