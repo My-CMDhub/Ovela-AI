@@ -35,6 +35,8 @@ backend/tests/**
 !backend/tests/run_multi_agent_evaluation.py
 !backend/tests/evaluation_run.json
 !backend/tests/asr_noise_simulator.py
+!backend/tests/test_vad.py
+!backend/tests/test_interruption_trim.py
 backend/scripts/test_email_zoho.py
 backend/redeploy-guide.md
 backend/Procfile
@@ -43,3 +45,4 @@ backend/stream
 **/*.md
 !/README.md
 !/docs/EVALUATION_METHODOLOGY.md
+!backend/requirements.txt

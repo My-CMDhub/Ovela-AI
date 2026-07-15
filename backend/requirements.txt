@@ -18,3 +18,6 @@ stripe
 cartesia>=0.1.0
 google-adk>=2.0.0
 google-genai
+# --- Cascaded Pipeline (Phase 12) ---
+webrtcvad>=2.0.10          # C-ext Google WebRTC VAD, <1ms/frame, zero PyTorch
+audioop-lts>=0.2.1         # mu-law PCM decode, Python 3.13+ compatible drop-in
