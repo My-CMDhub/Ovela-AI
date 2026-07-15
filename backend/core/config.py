@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     TENANT_ID: str = "coalcreek"  
     USE_LIVE_SCRAPING: bool = False  # Toggle between Appwrite PMS vs live scraping
 
+    # Observability (Sentry)
+    SENTRY_DSN: str = "https://413ba34889775f89a805a535a5cddec6@o4509518898397185.ingest.us.sentry.io/4511736648105984"
+
     # Meta (WhatsApp Cloud API)
     META_ACCESS_TOKEN: str = ""
     META_PHONE_NUMBER_ID: str = ""

@@ -42,6 +42,15 @@ logging.basicConfig(
     force=True,
 )
 
+import sentry_sdk
+
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        send_default_pii=True,
+        traces_sample_rate=1.0,  # Capture 100% of traces for hackathon baseline
+    )
+
 # Create FastAPI app (New Relic auto-instruments ASGI apps)
 app = FastAPI(title=settings.PROJECT_NAME)
 
