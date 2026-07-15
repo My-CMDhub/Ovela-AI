@@ -9,6 +9,15 @@ from core.config import settings
 from api import twilio, voice, notifications, actions, stripe, adk as adk_api, evaluations as evaluations_api
 
 
+import os
+
+# Heroku Google ADC injection
+if "GOOGLE_CREDENTIALS_JSON" in os.environ and "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+    creds_path = "/tmp/google-credentials.json"
+    with open(creds_path, "w") as f:
+        f.write(os.environ["GOOGLE_CREDENTIALS_JSON"])
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
+
 # Initialize New Relic BEFORE creating FastAPI app
 import newrelic.agent
 newrelic.agent.initialize('newrelic.ini')
