@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     # App Settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Ovela AI Backend"
-    BACKEND_URL: str = os.getenv("BACKEND_URL", "https://ovela-backend-278930799830.australia-southeast1.run.app")
+    BACKEND_URL: str = os.getenv("BACKEND_URL", "https://ovela-12c561a30285.herokuapp.com")
     ENVIRONMENT: str = "demo"  # 'demo' or 'production'
     TENANT_ID: str = "coalcreek"  
     USE_LIVE_SCRAPING: bool = False  # Toggle between Appwrite PMS vs live scraping
