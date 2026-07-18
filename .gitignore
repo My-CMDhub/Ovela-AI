@@ -37,6 +37,9 @@ backend/tests/**
 !backend/tests/asr_noise_simulator.py
 !backend/tests/test_vad.py
 !backend/tests/test_interruption_trim.py
+!backend/tests/test_deepgram_standalone.py
+!backend/tests/test_cartesia_standalone.py
+!backend/tests/test_cascaded_orchestrator.py
 backend/scripts/test_email_zoho.py
 backend/redeploy-guide.md
 # backend/Procfile

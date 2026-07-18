@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "demo"  # 'demo' or 'production'
     TENANT_ID: str = "coalcreek"  
     USE_LIVE_SCRAPING: bool = False  # Toggle between Appwrite PMS vs live scraping
+    VOICE_PIPELINE_MODE: str = "cascaded"  # 'cascaded' (sub-second Phase 12) or 'monolithic'
 
     # Observability (Sentry)
     SENTRY_DSN: str = "https://413ba34889775f89a805a535a5cddec6@o4509518898397185.ingest.us.sentry.io/4511736648105984"

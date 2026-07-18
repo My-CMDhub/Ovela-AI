@@ -215,6 +215,85 @@ class TestVadProcessorMulawEndToEnd:
         with pytest.raises(ValueError, match="mu-law frame"):
             vad_processor.process_mulaw(bytes(80))
 
+    def test_rms_energy_below_threshold_bypasses_vad(self, vad_processor):
+        """
+        Frames with RMS energy below 150 must immediately return False
+        without evaluating the VAD classifier.
+        """
+        import struct
+        import audioop
+        from unittest.mock import patch
+        low_energy_pcm = struct.pack("<160h", *([5] * 160)) # 320 bytes
+        low_energy_mulaw = audioop.lin2ulaw(low_energy_pcm, 2)
+        
+        rms_val = audioop.rms(low_energy_pcm, 2)
+        assert rms_val < 150
+        
+        with patch.object(vad_processor._vad, "is_speech", return_value=True) as mock_is_speech:
+            result = vad_processor.process_mulaw(low_energy_mulaw)
+            assert result is False
+            mock_is_speech.assert_not_called()
+
+    def test_calculate_dbfs(self, vad_processor):
+        """
+        Verify that dBFS calculation is accurate according to full-scale 16-bit reference.
+        """
+        import struct
+        # Max positive sample is 32767
+        full_scale_pcm = struct.pack("<160h", *([32767] * 160))
+        dbfs_full = vad_processor.calculate_dbfs(full_scale_pcm)
+        assert abs(dbfs_full) < 0.1  # extremely close to 0 dBFS
+        
+        silence_pcm = bytes(320)
+        dbfs_silence = vad_processor.calculate_dbfs(silence_pcm)
+        assert dbfs_silence <= -96.0
+
+    def test_dynamic_adaptive_hysteresis(self, vad_processor):
+        """
+        Verify dynamic adaptive hysteresis:
+        1. Starts closed.
+        2. Spike above -32 dBFS opens gate instantly.
+        3. Drop below -32 but above -45 dBFS keeps gate open.
+        4. Drop below -45 dBFS keeps gate open during hangtime (150ms), then closes it.
+        """
+        import struct
+        import time
+        from unittest.mock import patch
+        
+        # 1. Starts closed
+        silence_pcm = bytes(320)
+        with patch.object(vad_processor._vad, "is_speech", return_value=True) as mock_is_speech:
+            assert vad_processor.is_speech(silence_pcm) is False
+            mock_is_speech.assert_not_called()
+            
+        # 2. Spike above -32 dBFS opens gate instantly
+        # RMS of 3000 yields 20 * log10(3000/32768) = -20.7 dBFS (above -32)
+        loud_pcm = struct.pack("<160h", *([3000] * 160))
+        with patch.object(vad_processor._vad, "is_speech", return_value=True) as mock_is_speech:
+            assert vad_processor.is_speech(loud_pcm) is True
+            mock_is_speech.assert_called_once()
+            
+        # 3. Drop below -32 but above -45 dBFS keeps gate open
+        # RMS of 500 yields 20 * log10(500/32768) = -36.3 dBFS (between -32 and -45)
+        mid_pcm = struct.pack("<160h", *([500] * 160))
+        with patch.object(vad_processor._vad, "is_speech", return_value=True) as mock_is_speech:
+            assert vad_processor.is_speech(mid_pcm) is True
+            mock_is_speech.assert_called_once()
+            
+        # 4. Drop below -45 dBFS (RMS of 100 yields -50 dBFS) keeps gate open during hangtime
+        quiet_pcm = struct.pack("<160h", *([100] * 160))
+        with patch.object(vad_processor._vad, "is_speech", return_value=True) as mock_is_speech:
+            # First quiet frame: silence timer starts, gate stays open
+            assert vad_processor.is_speech(quiet_pcm) is True
+            
+        # Let's simulate hangtime expiration (e.g. by mocking time.time to be 200ms in the future)
+        current_time = time.time()
+        with patch("time.time", return_value=current_time + 0.200), \
+             patch.object(vad_processor._vad, "is_speech", return_value=True) as mock_is_speech:
+            # Gate should now close, returning False without calling VAD
+            assert vad_processor.is_speech(quiet_pcm) is False
+            mock_is_speech.assert_not_called()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. IMMUNITY WINDOW
