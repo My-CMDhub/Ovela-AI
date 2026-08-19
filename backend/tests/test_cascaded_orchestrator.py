@@ -368,6 +368,89 @@ class TestCascadedPipelineOrchestrator:
         assert not any("c3RhbGU=" in p for p in sent_media), "stale audio was forwarded"
 
     # ------------------------------------------------------------------
+    # Span instrumentation inside the LLM stage
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_llm_stage_is_broken_into_child_spans(self, orchestrator):
+        """
+        "Span 1" covers 86% of a voice turn but had no internal detail, so
+        neither a human nor the Gemini analyzer could say WHAT inside it was
+        slow. Model wait and tool execution are now timed separately.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_1"
+        tc.function.name = "check_availability"
+        tc.function.arguments = '{"room_type": "any"}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="We have a Queen.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+        orchestrator._sentry_transaction = MagicMock()
+
+        [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "any rooms free?"}]
+        )]
+
+        ops = [c.kwargs.get("op") for c in orchestrator._sentry_transaction.start_child.call_args_list]
+        names = [c.kwargs.get("name", "") for c in orchestrator._sentry_transaction.start_child.call_args_list]
+
+        assert "llm.stream" in ops, f"model wait not timed; got {ops}"
+        assert "tool.execute" in ops, f"tool execution not timed; got {ops}"
+        assert any("check_availability" in n for n in names), \
+            f"tool span must name the tool so a slow tool is identifiable; got {names}"
+
+    @pytest.mark.asyncio
+    async def test_prompt_cache_hit_is_recorded_on_the_transaction(self, orchestrator):
+        """
+        The first turn of a call is ~2x slower than later turns and the leading
+        hypothesis is a cold prompt cache — unprovable while `cached_tokens`
+        exists nowhere in the telemetry.
+        """
+        usage_chunk = MagicMock()
+        usage_chunk.choices = []
+        usage_chunk.usage.prompt_tokens = 9545
+        usage_chunk.usage.prompt_tokens_details.cached_tokens = 4864
+
+        async def one_round(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Sure.")
+            yield usage_chunk
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=[one_round()])
+        orchestrator._sentry_transaction = MagicMock()
+
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "hi"}]
+        )]
+
+        assert chunks == ["Sure."], "the usage chunk must not leak into spoken audio"
+
+        kwargs = orchestrator._openai.chat.completions.create.await_args.kwargs
+        assert kwargs.get("stream_options") == {"include_usage": True}
+
+        recorded = {
+            c.args[0]: c.args[1]
+            for c in orchestrator._sentry_transaction.set_data.call_args_list
+        }
+        assert recorded.get("llm.cached_tokens") == 4864
+        assert recorded.get("llm.prompt_tokens") == 9545
+
+    # ------------------------------------------------------------------
     # Control-flow tool actions (hang_up_call)
     # ------------------------------------------------------------------
 

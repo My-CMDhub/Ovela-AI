@@ -146,7 +146,6 @@ class CascadedPipelineOrchestrator:
         # Sentry transaction and span tracking
         self._sentry_transaction = None
         self._span_1 = None
-        self._span_2 = None
         self._span_3 = None
 
     async def start(self) -> bool:
@@ -385,9 +384,8 @@ class CascadedPipelineOrchestrator:
         self._sentry_transaction = sentry_sdk.start_transaction(name="user_voice_turn_transaction")
         self._span_1 = self._sentry_transaction.start_child(
             op="pipeline.span1",
-            name="Span 1: User Speech Ended -> Tool/DB Resolution"
+            name="Span 1: User Speech Ended -> First Token Yielded"
         )
-        self._span_2 = None
         self._span_3 = None
 
         # Start parallel streaming pipeline
@@ -413,17 +411,13 @@ class CascadedPipelineOrchestrator:
                     async for token in res:
                         if first_token:
                             first_token = False
-                            # Finish Span 1 (Tool/DB Resolution complete)
+                            # Span 1 ends at the first token. What used to be
+                            # "Span 2" was opened and closed on this same line,
+                            # so it always measured 0.01ms — the real detail now
+                            # lives in the llm.stream / tool.execute children.
                             if self._span_1:
                                 self._span_1.finish()
-                            # Start and immediately finish Span 2 (First Token Yielded)
                             if self._sentry_transaction:
-                                self._span_2 = self._sentry_transaction.start_child(
-                                    op="pipeline.span2",
-                                    name="Span 2: Tool/DB Resolution -> First Token Yielded"
-                                )
-                                self._span_2.finish()
-                                # Start Span 3: First Token Yielded -> Cartesia First Audio Chunk Ingestion
                                 self._span_3 = self._sentry_transaction.start_child(
                                     op="pipeline.span3",
                                     name="Span 3: First Token Yielded -> Cartesia First Audio Chunk Ingestion"
@@ -435,17 +429,9 @@ class CascadedPipelineOrchestrator:
                     text = await res
                     if first_token:
                         first_token = False
-                        # Finish Span 1
                         if self._span_1:
                             self._span_1.finish()
-                        # Start and finish Span 2
                         if self._sentry_transaction:
-                            self._span_2 = self._sentry_transaction.start_child(
-                                op="pipeline.span2",
-                                name="Span 2: Tool/DB Resolution -> First Token Yielded"
-                            )
-                            self._span_2.finish()
-                            # Start Span 3
                             self._span_3 = self._sentry_transaction.start_child(
                                 op="pipeline.span3",
                                 name="Span 3: First Token Yielded -> Cartesia First Audio Chunk Ingestion"
@@ -607,11 +593,6 @@ class CascadedPipelineOrchestrator:
             if self._span_1 and getattr(self._span_1, 'timestamp', None) is None:
                 try:
                     self._span_1.finish()
-                except Exception:
-                    pass
-            if self._span_2 and getattr(self._span_2, 'timestamp', None) is None:
-                try:
-                    self._span_2.finish()
                 except Exception:
                     pass
             if self._span_3 and getattr(self._span_3, 'timestamp', None) is None:
@@ -904,15 +885,53 @@ class CascadedPipelineOrchestrator:
 
             # Bounded so a tool-calling loop can never stall the voice turn.
             for _round in range(3):
-                stream = await self._openai.chat.completions.create(
-                    model=model, messages=messages, tools=tools, stream=True,
-                )
+                # Time the model wait separately from tool execution. Span 1
+                # is ~86% of a turn; without this split neither a human nor
+                # the Gemini analyzer can say which half is responsible.
+                llm_span = None
+                if self._sentry_transaction:
+                    llm_span = self._sentry_transaction.start_child(
+                        op="llm.stream",
+                        name=f"LLM round {_round + 1}: request -> first token ({model})",
+                    )
+                # A stream that errors or yields no content leaves this span
+                # open otherwise — a leaked span in the code that exists to
+                # repair leaked spans.
+                try:
+                    stream = await self._openai.chat.completions.create(
+                        model=model, messages=messages, tools=tools, stream=True,
+                    # Adds a final chunk carrying usage; its `choices` is empty,
+                    # which the guard below already skips.
+                        stream_options={"include_usage": True},
+                    )
+                except Exception:
+                    if llm_span:
+                        llm_span.finish()
+                    raise
                 pending: Dict[int, Dict[str, str]] = {}
                 assistant_text = ""
+                first_event = True
 
                 async for event in stream:
+                    usage = getattr(event, "usage", None)
+                    if usage and self._sentry_transaction:
+                        # Proves whether the prompt cache was warm. The first
+                        # turn of a call is ~2x slower than later turns and
+                        # this is the number that confirms or kills that theory.
+                        details = getattr(usage, "prompt_tokens_details", None)
+                        self._sentry_transaction.set_data(
+                            "llm.cached_tokens", getattr(details, "cached_tokens", 0) or 0
+                        )
+                        self._sentry_transaction.set_data(
+                            "llm.prompt_tokens", getattr(usage, "prompt_tokens", 0) or 0
+                        )
                     if not event.choices:
                         continue
+                    if first_event:
+                        first_event = False
+                        if llm_span:
+                            llm_span.finish()
+                            llm_span = None
                     delta = event.choices[0].delta
                     if delta.content:
                         assistant_text += delta.content
@@ -925,6 +944,10 @@ class CascadedPipelineOrchestrator:
                             slot["name"] += tc.function.name
                         if tc.function and tc.function.arguments:
                             slot["args"] += tc.function.arguments
+
+                if llm_span:
+                    llm_span.finish()   # round produced no content event
+                    llm_span = None
 
                 if not pending:
                     return
@@ -944,7 +967,16 @@ class CascadedPipelineOrchestrator:
                     except json.JSONDecodeError:
                         args = {}
                     logger.info(f"🔧 [CascadedOrchestrator] Tool call: {call['name']}({list(args)})")
-                    result = await self.dispatcher.execute(call["name"], args)
+                    tool_span = None
+                    if self._sentry_transaction:
+                        tool_span = self._sentry_transaction.start_child(
+                            op="tool.execute", name=f"Tool: {call['name']}",
+                        )
+                    try:
+                        result = await self.dispatcher.execute(call["name"], args)
+                    finally:
+                        if tool_span:
+                            tool_span.finish()
                     # The dispatcher answers control-flow tools with an `action`
                     # field. Forwarding the dict to the LLM without reading it
                     # makes the model *narrate* the action instead of anyone
