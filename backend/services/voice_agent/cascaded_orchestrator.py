@@ -18,10 +18,14 @@ import logging
 import time
 import uuid
 import inspect
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Optional, List, Dict, Any, Callable, Coroutine, AsyncGenerator
 import sentry_sdk
 from fastapi import WebSocket
 
+from core.config import settings
 from services.voice_agent.vad import VadProcessor, ConversationState, is_backchannel_word
 from services.voice_agent.interruption import (
     MarkTracker,
@@ -32,6 +36,8 @@ from services.voice_agent.interruption import (
 from services.voice_agent.bridges.deepgram_standalone import DeepgramStandaloneBridge
 from services.voice_agent.bridges.cartesia_standalone import CartesiaStandaloneBridge
 from services.voice_agent.text_utils import prepare_for_tts
+from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt
+from services.voice_agent.functions.coalcreek_definitions import get_coalcreek_functions
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +102,11 @@ class CascadedPipelineOrchestrator:
         self.stream_sid = stream_sid
         self.llm_callback = llm_callback or self._default_llm_callback
 
+        # Populated from the Twilio `start` event's customParameters.
+        self.user_phone: str = ""
+        self.tenant_id: str = settings.TENANT_ID
+        self.call_sid: str = ""
+
         # Core state & history
         self.state = ConversationState.AWAITING_INPUT
         self.history: List[Dict[str, Any]] = []
@@ -106,11 +117,15 @@ class CascadedPipelineOrchestrator:
         # Phase 12 modular components
         self.vad = VadProcessor(aggressiveness=3, sample_rate=8000, frame_ms=20)
         self.mark_tracker = MarkTracker()
-        self.deepgram = DeepgramStandaloneBridge(sample_rate=8000, model="flux", version="v2")
-        self.cartesia = CartesiaStandaloneBridge(model_id="sonic-english", sample_rate=8000)
+        self.deepgram = DeepgramStandaloneBridge(sample_rate=8000, model="flux-general-en")
+        self.cartesia = CartesiaStandaloneBridge(model_id="sonic-3", sample_rate=8000)
 
         # Word tracking for current TTS turn
         self._current_turn_word_count = 0
+
+        # True once this turn's first audio chunk has reached Twilio. Barge-in
+        # stays disarmed until then so LLM think-time can't be interrupted.
+        self._agent_audio_started: bool = False
 
         # Sentry transaction and span tracking
         self._sentry_transaction = None
@@ -130,8 +145,8 @@ class CascadedPipelineOrchestrator:
             await self.stop()
             return False
 
-        # Optimize semantic turn-taking endpointing
-        await self.deepgram.send_configure(eot_threshold=0.6, eot_timeout_ms=1000)
+        # Turn-taking thresholds are already set as query params on the connect
+        # URL, so no runtime Configure round-trip is needed here.
 
         self.is_running = True
         logger.info("🟢 [CascadedOrchestrator] Pipeline started successfully")
@@ -152,7 +167,11 @@ class CascadedPipelineOrchestrator:
         if len(mulaw_payload) == 160:
             try:
                 is_speech = self.vad.process_mulaw(mulaw_payload)
-                if is_speech and self.state == ConversationState.AGENT_SPEAKING:
+                if (
+                    is_speech
+                    and self.state == ConversationState.AGENT_SPEAKING
+                    and self._agent_audio_started
+                ):
                     if not self.vad.is_immune():
                         await self.trigger_barge_in(reason="local_vad_acoustic")
             except ValueError:
@@ -202,26 +221,49 @@ class CascadedPipelineOrchestrator:
         async for event in self.deepgram.receive_events():
             event_type = event.get("type")
 
-            if event_type == "StartOfTurn" or event_type == "SpeechStarted":
-                if self.state == ConversationState.AGENT_SPEAKING and not self.vad.is_immune():
+            # Flux v2 always sets type="TurnInfo" and carries the turn state in
+            # `event` (Update/StartOfTurn/EagerEndOfTurn/TurnResumed/EndOfTurn).
+            # Legacy Listen v1 puts the state in `type`, so fall back to it.
+            turn_state = event.get("event") or event_type
+
+            # Extract transcript across Flux v2 (TurnInfo/transcript) and legacy formats
+            transcript = ""
+            if "transcript" in event and event["transcript"]:
+                transcript = str(event["transcript"]).strip()
+            elif "channel" in event:
+                alternatives = event.get("channel", {}).get("alternatives", [])
+                if alternatives:
+                    transcript = alternatives[0].get("transcript", "").strip()
+
+            if event_type in ("Error", "FatalError", "ConfigureFailure"):
+                logger.error(f"🔴 [CascadedOrchestrator] Deepgram rejected the stream: {event}")
+                continue
+
+            if event_type == "Connected":
+                logger.info("🤝 [CascadedOrchestrator] Deepgram session confirmed Connected")
+                continue
+
+            if turn_state in ("StartOfTurn", "SpeechStarted", "UserStartedSpeaking"):
+                if (
+                    self.state == ConversationState.AGENT_SPEAKING
+                    and self._agent_audio_started
+                    and not self.vad.is_immune()
+                ):
                     await self.trigger_barge_in(reason="deepgram_start_of_turn")
 
-            elif event_type == "EagerEndOfTurn":
+            elif turn_state == "EagerEndOfTurn":
                 logger.info("⚡ [CascadedOrchestrator] EagerEndOfTurn received. Pre-warming LLM...")
-                # Could trigger early LLM preparation here
 
-            elif event_type == "TurnResumed":
+            elif turn_state == "TurnResumed":
                 logger.info("🔄 [CascadedOrchestrator] TurnResumed received. Canceling early LLM preparation.")
                 if self._pending_llm_task and not self._pending_llm_task.done():
                     self._pending_llm_task.cancel()
 
-            elif event_type == "EndOfTurn" or event_type == "SpeechEnded":
-                channel = event.get("channel", {})
-                alternatives = channel.get("alternatives", [])
-                if alternatives:
-                    transcript = alternatives[0].get("transcript", "").strip()
-                    if transcript:
-                        await self.handle_user_turn_complete(transcript)
+            elif turn_state in ("EndOfTurn", "SpeechEnded", "Results"):
+                # `Update` is interim — deliberately excluded so the LLM fires
+                # once on turn end, not on every partial transcript.
+                if transcript:
+                    await self.handle_user_turn_complete(transcript)
 
     async def handle_user_turn_complete(self, transcript: str) -> None:
         """
@@ -236,8 +278,9 @@ class CascadedPipelineOrchestrator:
         self.history.append({"role": "user", "content": transcript})
         self.state = ConversationState.AGENT_SPEAKING
 
-        # Arm echo immunity for the first 500ms of agent response
-        self.vad.arm_immunity(duration_s=0.5)
+        # Immunity is armed when the first audio chunk actually reaches Twilio,
+        # not here — see audio_receiver().
+        self._agent_audio_started = False
         self.mark_tracker.reset()
         self._current_turn_word_count = 0
         self.current_context_id = f"ctx_{uuid.uuid4().hex[:8]}"
@@ -327,15 +370,34 @@ class CascadedPipelineOrchestrator:
 
         async def audio_receiver():
             first_chunk_ingested = False
+            # Cartesia multiplexes every context over one socket. After a
+            # barge-in cancel, the killed context still emits trailing chunks
+            # and a `done`; without this filter that stale `done` breaks the
+            # NEXT turn's receiver and the caller hears silence.
+            turn_context_id = self.current_context_id
             try:
                 async for audio_evt in self.cartesia.receive_audio_events():
                     if self.state != ConversationState.AGENT_SPEAKING:
                         break  # Barge-in occurred mid-stream!
 
+                    evt_context_id = audio_evt.get("context_id")
+                    if evt_context_id and turn_context_id and evt_context_id != turn_context_id:
+                        logger.debug(
+                            f"⏭️ [CascadedOrchestrator] Ignoring stale Cartesia event "
+                            f"for {evt_context_id} (current turn: {turn_context_id})"
+                        )
+                        continue
+
                     evt_type = audio_evt.get("type")
                     if evt_type == "chunk":
                         if not first_chunk_ingested:
                             first_chunk_ingested = True
+                            # The agent only becomes *audible* here. Arm barge-in
+                            # and echo immunity now — not when the user's turn
+                            # ended, which is 2-3s of think-time earlier and left
+                            # every reply cancellable before it was ever heard.
+                            self._agent_audio_started = True
+                            self.vad.arm_immunity(duration_s=0.5)
                             # End Span 3
                             if self._span_3:
                                 self._span_3.finish()
@@ -365,6 +427,17 @@ class CascadedPipelineOrchestrator:
                             }
                             await self.twilio_ws.send_text(json.dumps(mark_payload))
                     elif evt_type == "done":
+                        break
+                    elif evt_type == "error":
+                        # voice_id / tts_model come straight from tenant DB with
+                        # no validation. Without this branch a bad value gives
+                        # 15s of dead air and a timeout log that names nothing.
+                        logger.error(
+                            f"🔴 [CascadedOrchestrator] Cartesia rejected synthesis: {audio_evt}"
+                        )
+                        sentry_sdk.capture_message(
+                            f"Cartesia synthesis error: {audio_evt.get('error')}", level="error"
+                        )
                         break
             except Exception as e:
                 logger.error(f"🔴 [CascadedOrchestrator] Audio receiver error: {e}", exc_info=True)
@@ -456,15 +529,22 @@ class CascadedPipelineOrchestrator:
                 except Exception:
                     pass
 
-            try:
-                await producer_task
-            except asyncio.CancelledError:
-                pass
-
-            try:
-                await receiver_task
-            except asyncio.CancelledError:
-                pass
+            # These awaits are bounded. If Cartesia never emits `done` (e.g.
+            # after a cancelled context) an unbounded await here would block the
+            # single Twilio/Deepgram run loop and mute the call permanently.
+            for name, task in (("producer", producer_task), ("receiver", receiver_task)):
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=15.0)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"🟡 [CascadedOrchestrator] {name} task did not finish in 15s — "
+                        "cancelling so the call stays alive"
+                    )
+                    task.cancel()
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.error(f"🔴 [CascadedOrchestrator] {name} task failed: {e}", exc_info=True)
 
             if self.state == ConversationState.AGENT_SPEAKING:
                 full_text = " ".join(full_response_parts).strip()
@@ -528,7 +608,16 @@ class CascadedPipelineOrchestrator:
                     event_type = data.get("event")
                     if event_type == "start":
                         self.stream_sid = data["start"].get("streamSid", self.stream_sid)
-                        logger.info(f"🚀 [CascadedOrchestrator] Twilio stream started: {self.stream_sid}")
+                        # Twilio <Parameter> values: user_phone (privacy-bound
+                        # lookups), tenant_id (voice_settings), user_to.
+                        params = data["start"].get("customParameters", {}) or {}
+                        self.user_phone = params.get("user_phone", "") or ""
+                        self.tenant_id = params.get("tenant_id", settings.TENANT_ID)
+                        self.call_sid = data["start"].get("callSid", "") or self.call_sid
+                        logger.info(
+                            f"🚀 [CascadedOrchestrator] Twilio stream started: {self.stream_sid} "
+                            f"| tenant={self.tenant_id} | caller={self.user_phone[:6]}***"
+                        )
                     elif event_type == "media":
                         payload = data["media"].get("payload")
                         if payload:
