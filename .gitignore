@@ -66,3 +66,4 @@ backend/stream
 **/.claude/
 !backend/tests/test_tenant_config_lookup.py
 !backend/tests/test_latency_watchdog.py
+!backend/tests/test_reservation_cache.py
