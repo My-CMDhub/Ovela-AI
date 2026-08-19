@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -89,6 +90,30 @@ async def startup_event():
     except Exception as adk_err:
         logging.error(f"❌ ADKOrchestrator failed to initialise: {adk_err}")
         app.state.adk_orchestrator = None  # Graceful degradation
+
+    # =========================================================================
+    # FIRST-CALL WARM-UP
+    # `_build_call_context()` imports openai + the dispatcher chain and fetches
+    # the tenant row lazily, on the first turn of the first call. Measured on
+    # v406: 4,316ms to "Call context ready" on the first call after a boot vs
+    # 2ms on the second. Paying it here means the first caller does not.
+    # =========================================================================
+    try:
+        warm_start = time.monotonic()
+        from openai import AsyncOpenAI  # noqa: F401
+        from services.voice_agent.functions import CoalCreekFunctionDispatcher  # noqa: F401
+        from services.voice_agent.abuse_protection import AbuseProtection  # noqa: F401
+        from services.voice_agent.memory import CallerMemoryBank  # noqa: F401
+        from services.appwrite import db_service
+        from core.config import settings as _settings
+
+        await db_service.get_tenant_config(_settings.TENANT_ID)
+        logging.info(
+            f"🔥 Voice call context pre-warmed in {(time.monotonic() - warm_start) * 1000:.0f}ms"
+        )
+    except Exception as warm_err:
+        # A cold first call is slow, not broken — never block startup for this.
+        logging.warning(f"🟡 Voice warm-up skipped: {warm_err}")
 
     logging.info("✅ Application startup complete")
 
