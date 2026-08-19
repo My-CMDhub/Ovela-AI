@@ -3,7 +3,7 @@
 
   <br />
 
-  **A production voice AI receptionist that answers a real phone number — decoupled, instrumented, and measured turn by turn.**
+  **A live voice AI receptionist that answers a real phone number — decoupled, instrumented, and measured turn by turn.**
 
   <br />
 
@@ -38,7 +38,7 @@ them, in its own commit:
 
 | PR | What it fixes | Effect |
 |---|---|---|
-| **1 — Restore the pipeline** | Ten provider/protocol defects, each a real error message that was parsed and dropped by an `if`/`elif` chain with no `else` | 25s of silence, zero synthesised audio, and every turn after the first dying — all resolved |
+| **1 — Restore the pipeline** | Provider and protocol defects, each a real error message that was parsed and dropped by an `if`/`elif` chain with no `else` | 25s of silence, zero synthesised audio, and every turn after the first dying — all resolved |
 | **2 — Control flow + cold start** | Tool results carrying an `action` field that nothing consumed; a first-call cold start of 4,316ms | Calls now end and transfer for real; cold start 4,316ms → 12ms on the first call (2ms warm) |
 | **3 — Repair the telemetry** | A span that measured 0.01ms because it was opened and closed on the same line; a stage holding 84% of a turn with no internal detail | Latency can now be attributed to the stage that causes it |
 | **4 — Stop paying for work already done** | A volatile header at the front of the prompt, so the cache prefix changed every turn; the same booking queried 8× per call | ~98% of the prompt now served from cache; booking query median 1,263ms → 505ms |
@@ -78,9 +78,10 @@ conversational turns with tool-calling ones. Both numbers are real; they count
 different populations, and the conservative one is quoted whenever a single
 figure is given.
 
-**Two regimes.** Turns with no tool call land at 400-890 ms. Turns that call a
-tool add the tool's own cost on top, and `perform_live_search` — a live web
-lookup — is now the dominant one at ~2.1 s, though on only two samples.
+**Two regimes.** Turns with no tool call land at 400-890 ms in the 28-turn
+sample, with a tail to 1,541 ms. Turns that call a tool add the tool's own cost
+on top; `perform_live_search` — a live web lookup — is the dominant one at
+~2.1 s, on only two samples.
 
 The model's own time-to-first-token varies between 574 ms and 1,861 ms on
 byte-identical input, so that share is largely not ours to reclaim. Everything on our side of the line — setup,
@@ -157,9 +158,9 @@ message when something regresses beyond 40%. That threshold comes from
 measurement, not taste: a tighter bound reports the model's own variance as a
 regression.
 
-Its record, stated plainly: it has identified the dominant span correctly on
-every run, on data it had not seen, matching hand analysis. It has not yet found
-a root cause the team did not already have. It reads telemetry in seconds
+Its record, stated plainly: on the runs so far it has named the dominant span
+correctly on data it had not seen, and once flagged a tool I had not examined.
+It has not yet found a root cause I did not already have. It reads telemetry in seconds
 instead of a day, and it cannot see anything that is not instrumented — which is
 precisely why fixing the spans sharpened its answers.
 
