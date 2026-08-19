@@ -848,6 +848,9 @@ class CascadedPipelineOrchestrator:
             call_sid=self.call_sid,
             adk_orchestrator=adk_orchestrator,
         )
+        # Fire the caller's booking lookup now so it overlaps the first model
+        # round instead of landing inside the turn as a ~250ms tool call.
+        self.dispatcher.prefetch_caller_reservation()
         self._openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         await self._apply_voice_settings()
         self._context_ready = True
