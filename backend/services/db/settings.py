@@ -188,22 +188,26 @@ class SettingsMixin:
             return cached["config"]
 
         try:
-            # Primary: try direct document ID lookup
-            path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
-            result = await self._make_request("GET", path)
+            # Primary: query by slug. Tenant rows are keyed by an Appwrite
+            # document id, NOT by the slug, so a document-id lookup 404s and
+            # buys nothing but latency — ~920ms of it, on the critical path of
+            # the first voice turn, before voice_settings can be applied.
+            # AppwriteQuery.equal() produces the wrong string format for REST;
+            # the correct one is a JSON-encoded {method, attribute, values}.
+            slug_query = json.dumps({"method": "equal", "attribute": "slug", "values": [tenant_id]})
+            list_result = await self._make_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/tenants/documents",
+                params={"queries[0]": slug_query},
+            )
+            result = None
+            if list_result and list_result.get("documents"):
+                result = list_result["documents"][0]
 
             if not result:
-                # Fallback: query by slug using correct Appwrite REST query format
-                # AppwriteQuery.equal() produces the wrong string format for REST API.
-                # Correct format: JSON-encoded {method, attribute, values} as queries[0]
-                slug_query = json.dumps({"method": "equal", "attribute": "slug", "values": [tenant_id]})
-                list_result = await self._make_request(
-                    "GET",
-                    f"/databases/{self.motel_db_id}/collections/tenants/documents",
-                    params={"queries[0]": slug_query},
-                )
-                if list_result and list_result.get("documents"):
-                    result = list_result["documents"][0]
+                # Fallback: a tenant whose row genuinely is keyed by its id.
+                path = f"/databases/{self.motel_db_id}/collections/tenants/documents/{tenant_id}"
+                result = await self._make_request("GET", path)
 
             if not result:
                 logger.warning(f"Tenant config not found for {tenant_id}")
