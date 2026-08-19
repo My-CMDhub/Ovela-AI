@@ -14,7 +14,7 @@ from services.voice_agent.bridges.deepgram_standalone import DeepgramStandaloneB
 
 @pytest.fixture
 def bridge():
-    return DeepgramStandaloneBridge(sample_rate=8000, model="flux", version="v2")
+    return DeepgramStandaloneBridge(sample_rate=8000, model="flux-general-en")
 
 
 class TestDeepgramStandaloneBridge:
@@ -23,12 +23,11 @@ class TestDeepgramStandaloneBridge:
         URL must properly encode parameters for Flux v2 streaming with mu-law audio.
         """
         url = bridge.url
-        assert "wss://api.deepgram.com/v1/listen?" in url
-        assert "model=flux" in url
-        assert "version=v2" in url
+        assert "wss://api.deepgram.com/v2/listen?" in url
+        assert "model=flux-general-en" in url
         assert "encoding=mulaw" in url
         assert "sample_rate=8000" in url
-        assert "interim_results=true" in url
+        assert "eot_threshold=0.6" in url
 
     @pytest.mark.asyncio
     async def test_connect_success(self, bridge):
@@ -69,9 +68,10 @@ class TestDeepgramStandaloneBridge:
         mock_ws.send.assert_called_once()
         sent_payload = json.loads(mock_ws.send.call_args[0][0])
         assert sent_payload["type"] == "Configure"
-        assert sent_payload["processors"]["turn_taking"]["eot_threshold"] == 0.8
-        assert sent_payload["processors"]["turn_taking"]["eot_timeout_ms"] == 1200
-        assert sent_payload["processors"]["turn_taking"]["eager_eot_threshold"] == 0.6
+        # Flux v2 schema — `processors` is Listen v1 and is rejected.
+        assert sent_payload["thresholds"]["eot_threshold"] == 0.8
+        assert sent_payload["thresholds"]["eot_timeout_ms"] == 1200
+        assert sent_payload["thresholds"]["eager_eot_threshold"] == 0.6
 
     @pytest.mark.asyncio
     async def test_send_keep_alive(self, bridge):
