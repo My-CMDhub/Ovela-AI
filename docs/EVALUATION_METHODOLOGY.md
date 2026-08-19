@@ -14,14 +14,7 @@ Ovela AI is continuously evaluated against **14 adversarial guest scenarios** sp
 * **Phase 2 (ASR Voice Emulation):** Enabled — measures voice realism resistance (noise-induced score delta per scenario)
 * **Evaluation Engine:** Full ADK graph (OvelaManager → BookingWorker / InfoWorker) on **Gemini 2.5 Flash** via Vertex AI ADC — not a flat prompt baseline.
 
-<div align="center">
-  <br />
-  <a href="https://ovela.dev/evaluations" target="_blank">
-    <img src="../images/eval_dashboard.png" alt="Live Evaluation Dashboard UI" width="100%" />
-  </a>
-  <br />
-  <strong><a href="https://ovela.dev/evaluations" target="_blank">🔗 Access the Live Evaluation Dashboard (ovela.dev/evaluations)</a></strong>
-</div>
+**[Access the live evaluation dashboard →](https://ovela.dev/evaluations)**
 
 ---
 
