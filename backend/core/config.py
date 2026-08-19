@@ -84,7 +84,7 @@ class Settings(BaseSettings):
     # Phone to Tenant Mapping (Ingress)
     # Maps Twilio 'To' number -> Tenant ID (Can be set via env var as JSON)
     PHONE_TO_TENANT_MAP: dict = {
-        "+61468088990": "coalcreek"
+        "+61348236219": "coalcreek"
     }
 
     class Config:
