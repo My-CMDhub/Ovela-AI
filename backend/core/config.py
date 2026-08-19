@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     VOICE_PIPELINE_MODE: str = "cascaded"  # 'cascaded' (sub-second Phase 12) or 'monolithic'
 
     # Observability (Sentry)
-    SENTRY_DSN: str = "https://413ba34889775f89a805a535a5cddec6@o4509518898397185.ingest.us.sentry.io/4511736648105984"
+    SENTRY_DSN: str = ""  # set via env; empty disables Sentry (main.py guards on it)
 
     # Meta (WhatsApp Cloud API)
     META_ACCESS_TOKEN: str = ""
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     # Twilio (Missed Call → WhatsApp)
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_PHONE_NUMBER: str = "+61468088990"  # my purchased number
+    TWILIO_PHONE_NUMBER: str = ""  # set via env
     
 
     # Personal Assistant Target Number
@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: Optional[str] = ""
     
     # Staff Phone (for transfers)
-    STAFF_PHONE_NUMBER: str = "+61475677771"
+    STAFF_PHONE_NUMBER: str = ""  # set via env
     
     # Demo Settings
     TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
