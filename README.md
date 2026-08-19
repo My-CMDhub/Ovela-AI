@@ -125,14 +125,15 @@ does not lose context.
 
 Each stage of a voice turn is wrapped in a Sentry span, so a turn arrives as a
 waterfall rather than a single number. That is what located the bottleneck: one
-span holding **84%** of a 3,891ms turn, which no amount of reading the code had
-revealed.
+span holding a median **84%** of turn time across 25 turns, which no amount of
+reading the code had revealed.
 
 Two of the spans were themselves broken and are fixed in PR3 — one measured a
 zero-width interval, and the one that mattered had no internal detail. With the
 model wait and tool execution now timed separately, a tool-calling turn shows
-something that had been assumed backwards: the model is waited on **twice**, and
-those two waits cost roughly four times more than the tool itself.
+something that had been assumed backwards: the model answers in ~340ms while a
+single booking lookup cost up to 1,571ms. The database was the bottleneck, not
+the model.
 
 ### AI-assisted diagnosis
 
