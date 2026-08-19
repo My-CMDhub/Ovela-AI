@@ -7,6 +7,7 @@
 !/deploy_cloud_run.py
 !/docs/
 !/images/
+!/traces/
 
 # Local working notes. Measurements are published with the write-up, so
 # keeping a copy here would create a second source of truth that can drift.
@@ -54,6 +55,7 @@ backend/stream
 
 **/*.md
 !/README.md
+!/traces/README.md
 !/docs/EVALUATION_METHODOLOGY.md
 !backend/requirements.txt
 
