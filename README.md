@@ -41,6 +41,7 @@ them, in its own commit:
 | **1 — Restore the pipeline** | Ten provider/protocol defects, each a real error message that was parsed and dropped by an `if`/`elif` chain with no `else` | 25s of silence, zero synthesised audio, and every turn after the first dying — all resolved |
 | **2 — Control flow + cold start** | Tool results carrying an `action` field that nothing consumed; a first-call cold start of 4,316ms | Calls now end and transfer for real; cold start 4,316ms → 12ms on the first call (2ms warm) |
 | **3 — Repair the telemetry** | A span that measured 0.01ms because it was opened and closed on the same line; a stage holding 84% of a turn with no internal detail | Latency can now be attributed to the stage that causes it |
+| **4 — Stop paying for work already done** | A volatile header at the front of the prompt, so the cache prefix changed every turn; the same booking queried 8× per call | ~98% of the prompt now served from cache; booking query median 1,263ms → 505ms |
 
 The full write-up, with before/after traces, is in the accompanying DEV post.
 
@@ -58,24 +59,31 @@ larger and more conservative of the two samples taken:
 | Best turn | 400 ms |
 | Worst conversational turn | 1,541 ms |
 
-Where a median turn goes:
+Where the time goes, from one analyser run over 20 consecutive turns
+(`benchmarks/trace_analysis.json`, medians, sample size per row):
 
 ```
-waiting on the LLM        496 ms   (72%)
-other pre-speech work      32 ms
-text → audio (Cartesia)   115 ms
+whole turn                              952 ms   n=19
+  Span 1  speech ended -> first token   838 ms   n=20   (88%)
+    LLM round 1  -> first token         434 ms   n=20
+    LLM round 2  (tool turns only)      406 ms   n=10
+    tool: lookup_booking                505 ms   n=4
+    tool: check_availability            506 ms   n=3
+    tool: perform_live_search         2,127 ms   n=2    <- largest remaining cost
+  Span 3  first token -> first audio    158 ms   n=20
 ```
 
-**Two regimes, stated honestly.** Conversational turns land in the range above.
-Turns that call an external tool — a live availability lookup — take **3–6
-seconds**, dominated by the booking system's own response time, which its
-contract documents as 3–10s. That is not pipeline overhead, and it is not
-included in the median above.
+That 952 ms median is higher than the 790 ms above because this window mixes
+conversational turns with tool-calling ones. Both numbers are real; they count
+different populations, and the conservative one is quoted whenever a single
+figure is given.
 
-Roughly 72% of a turn is now spent waiting on the language model. Repeated
-measurement of the same request shows the model's own time-to-first-token
-varying between 574ms and 1,861ms on byte-identical input, so that share is
-largely not ours to reclaim. Everything on our side of the line — setup,
+**Two regimes.** Turns with no tool call land at 400-890 ms. Turns that call a
+tool add the tool's own cost on top, and `perform_live_search` — a live web
+lookup — is now the dominant one at ~2.1 s, though on only two samples.
+
+The model's own time-to-first-token varies between 574 ms and 1,861 ms on
+byte-identical input, so that share is largely not ours to reclaim. Everything on our side of the line — setup,
 caching, model selection, synthesis, streaming to Twilio — has been driven down
 and is timed per stage.
 
@@ -221,5 +229,4 @@ cd backend && pytest
 ---
 
 <div align="center">
-  <i>Ovela is not a finished answer to human conversation. It's an ongoing attempt to understand it — one call, one interaction, and one lesson at a time.</i> ✧
-</div>
+  </div>
