@@ -256,7 +256,17 @@ async def handle_call_status(
     logger.info(f"📞 Call status callback: {CallSid} from {mask_phone(From)}")
     logger.info(f"   CallStatus: {CallStatus}, CallDuration: {CallDuration}s")
     logger.info(f"   DialCallStatus: {DialCallStatus}, DialCallDuration: {DialCallDuration}s")
-    
+
+    # A completed call is the only reliable signal that fresh voice spans are
+    # on their way to Sentry. Analysis is deferred and fire-and-forget: it must
+    # never delay this webhook, which Twilio expects to answer immediately.
+    if CallStatus == "completed":
+        try:
+            from services.latency_watchdog import schedule_post_call_analysis
+            schedule_post_call_analysis(CallSid)
+        except Exception as e:
+            logger.warning(f"🟡 Could not schedule latency analysis: {e}")
+
     return {"status": "ok"}
 
 

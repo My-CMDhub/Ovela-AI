@@ -7,6 +7,13 @@
 !/deploy_cloud_run.py
 !/docs/
 !/images/
+
+# Local working notes. Measurements are published with the write-up, so
+# keeping a copy here would create a second source of truth that can drift.
+# `gemini_trace_analysis.json` is the exception: it is the analyser's own
+# output and is referenced by scripts/analyze_trace.py.
+/.hackathon/*
+!/.hackathon/gemini_trace_analysis.json
 /memory_bank/
 /.agents/
 /scratch/
@@ -49,3 +56,11 @@ backend/stream
 !/README.md
 !/docs/EVALUATION_METHODOLOGY.md
 !backend/requirements.txt
+
+# Local-only agent config — never pushed
+/CLAUDE.md
+/CLAUDE.local.md
+/.claude/
+**/.claude/
+!backend/tests/test_tenant_config_lookup.py
+!backend/tests/test_latency_watchdog.py
