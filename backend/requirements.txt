@@ -24,3 +24,7 @@ audioop-lts>=0.2.1; python_version >= "3.13" # mu-law PCM decode for Python 3.13
 
 # --- Observability / Hackathon ---
 sentry-sdk[fastapi]
+setuptools==69.5.1
+
+# --- Dev tooling ---
+ruff
