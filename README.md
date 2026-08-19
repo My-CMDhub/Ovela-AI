@@ -32,17 +32,18 @@ repository is currently about.
 
 ## Bug Smash 2026 — what changed
 
-Five stacked pull requests against the pipeline as it stood in `cf99094`.
+Six stacked pull requests against the pipeline as it stood in `cf99094`.
 The diagnostic tooling described further down is deliberately kept out of
 them, in its own commit:
 
 | PR | What it fixes | Effect |
 |---|---|---|
 | **1 — Provider bridges** | Four provider errors, each parsed and dropped by an `if`/`elif` chain with no `else`; plus a `finally` that ran on every `break` | 25s of silence and zero synthesised audio, resolved; the socket stops declaring itself dead after turn one |
-| **2 — Turn loop into the orchestrator** | Barge-in armed before any agent audio existed, so the agent cancelled its own replies; stale-turn chunks; `voice_settings` never read. **Also a design change, labelled as one** | The turn can be timed and interrupted; the ADK graph keeps the cold path |
-| **3 — Control flow + cold start** | Tool results carrying an `action` field that nothing consumed; a first-call cold start of 4,316ms | Calls now end and transfer for real; cold start 4,316ms → 12ms on the first call |
-| **4 — Repair the telemetry** | A span that measured 0.01ms because it was opened and closed on the same line; a stage holding 84% of a turn with no internal detail; then the CallSid as a Sentry conversation id | Latency can be attributed to the stage that causes it, and one call reads as one conversation |
-| **5 — Stop paying for work already done** | A volatile header at the front of the prompt, so the cache prefix changed every turn; the same booking queried 8× per call | ~98% of the prompt now served from cache; 3 of 7 booking queries per call stop executing entirely, total query wait 11,049ms → 4,496ms |
+| **2 — Stop the agent interrupting itself** | Barge-in armed before any agent audio existed, so the agent cancelled its own replies; chunks from an abandoned turn spoken by the next one | The agent stops talking over itself, and stops finishing a sentence the caller already interrupted |
+| **3 — Turn loop into the orchestrator** | Not a bug fix. A design change, labelled as one: the turn moves out of a graph built for background work. `voice_settings` were never read on this path and load with it | The turn can be timed and interrupted; the ADK graph keeps the cold path |
+| **4 — Control flow + cold start** | Tool results carrying an `action` field that nothing consumed; a first-call cold start of 4,316ms | Calls now end and transfer for real; cold start 4,316ms → 12ms on the first call |
+| **5 — Repair the telemetry** | A span that measured 0.01ms because it was opened and closed on the same line; a stage holding 84% of a turn with no internal detail; then the CallSid as a Sentry conversation id | Latency can be attributed to the stage that causes it, and one call reads as one conversation |
+| **6 — Stop paying for work already done** | A volatile header at the front of the prompt, so the cache prefix changed every turn; the same booking queried 8× per call | ~98% of the prompt now served from cache; 3 of 7 booking queries per call stop executing entirely, total query wait 11,049ms → 4,496ms |
 
 The full write-up, with before/after traces, is in the accompanying DEV post.
 
