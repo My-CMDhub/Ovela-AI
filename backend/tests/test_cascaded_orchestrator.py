@@ -368,6 +368,183 @@ class TestCascadedPipelineOrchestrator:
         assert not any("c3RhbGU=" in p for p in sent_media), "stale audio was forwarded"
 
     # ------------------------------------------------------------------
+    # Sentry agent tracing (gen_ai conventions)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_call_start_groups_the_turns_into_one_conversation(self, orchestrator):
+        """
+        Sentry groups multi-turn AI activity by `gen_ai.conversation.id`. A phone
+        call already has a stable, unique identifier for exactly that scope — the
+        Twilio CallSid — so every turn of one call collapses into one
+        conversation instead of N unrelated LLM calls.
+        """
+        async def fake_iter_text():
+            yield json.dumps({
+                "event": "start",
+                "start": {
+                    "streamSid": "MZ1",
+                    "callSid": "CAtest123",
+                    "customParameters": {"user_phone": "+61400000001", "tenant_id": "coalcreek"},
+                },
+            })
+            yield json.dumps({"event": "stop"})
+
+        orchestrator.twilio_ws.iter_text = fake_iter_text
+        with patch.object(orchestrator.deepgram, "connect", AsyncMock(return_value=True)), \
+             patch.object(orchestrator.cartesia, "connect", AsyncMock(return_value=True)), \
+             patch.object(orchestrator, "process_deepgram_events", AsyncMock()), \
+             patch.object(orchestrator, "trigger_initial_greeting", AsyncMock()), \
+             patch.object(orchestrator, "_ensure_call_context", AsyncMock()), \
+             patch.object(orchestrator, "stop", AsyncMock()), \
+             patch("services.voice_agent.cascaded_orchestrator.set_conversation_id") as mock_conv, \
+             patch("services.voice_agent.cascaded_orchestrator.sentry_sdk.set_user") as mock_user:
+            await orchestrator.run_loop()
+
+        mock_conv.assert_called_once_with("CAtest123")
+        # The caller's number identifies the conversation, but is never sent raw.
+        sent = mock_user.call_args[0][0]
+        assert "+61400000001" not in str(sent)
+        assert sent["id"].startswith("+6140")
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_use_sentry_agent_conventions(self, orchestrator):
+        """
+        A tool span has to be op `gen_ai.execute_tool` with `gen_ai.tool.name`
+        or it lands outside Sentry's agent views and the Tool Errors widget.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_1"
+        tc.function.name = "check_availability"
+        tc.function.arguments = '{"room_type": "any"}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="We have a Queen.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+        # A MagicMock accepts any kwarg, so it certified a call the real SDK
+        # rejects with `Span.__init__() got an unexpected keyword argument`.
+        # This drives a real Transaction, so a bad signature raises here.
+        from sentry_sdk.tracing import Transaction
+
+        created = []
+
+        class RecordingTransaction(Transaction):
+            """Real Transaction — a bad start_child signature still raises."""
+            def start_child(self, **kwargs):
+                span = super().start_child(**kwargs)
+                created.append(span)
+                return span
+
+        transaction = RecordingTransaction(name="test_turn")
+        orchestrator._sentry_transaction = transaction
+
+        [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "any rooms free?"}]
+        )]
+
+        tool_spans = [sp for sp in created if sp.op == "gen_ai.execute_tool"]
+        assert tool_spans, f"no gen_ai.execute_tool span; ops were {[sp.op for sp in created]}"
+        sp = tool_spans[0]
+        assert sp.description == "execute_tool check_availability"
+        assert sp._data.get("gen_ai.operation.name") == "execute_tool"
+        assert sp._data.get("gen_ai.tool.name") == "check_availability"
+
+    # ------------------------------------------------------------------
+    # Span instrumentation inside the LLM stage
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_llm_stage_is_broken_into_child_spans(self, orchestrator):
+        """
+        "Span 1" covers 86% of a voice turn but had no internal detail, so
+        neither a human nor the Gemini analyzer could say WHAT inside it was
+        slow. Model wait and tool execution are now timed separately.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_1"
+        tc.function.name = "check_availability"
+        tc.function.arguments = '{"room_type": "any"}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="We have a Queen.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+        orchestrator._sentry_transaction = MagicMock()
+
+        [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "any rooms free?"}]
+        )]
+
+        ops = [c.kwargs.get("op") for c in orchestrator._sentry_transaction.start_child.call_args_list]
+        names = [c.kwargs.get("name", "") for c in orchestrator._sentry_transaction.start_child.call_args_list]
+
+        assert "llm.stream" in ops, f"model wait not timed; got {ops}"
+        assert "gen_ai.execute_tool" in ops, f"tool execution not timed; got {ops}"
+        assert any("check_availability" in n for n in names), \
+            f"tool span must name the tool so a slow tool is identifiable; got {names}"
+
+    @pytest.mark.asyncio
+    async def test_prompt_cache_hit_is_recorded_on_the_transaction(self, orchestrator):
+        """
+        The first turn of a call is ~2x slower than later turns and the leading
+        hypothesis is a cold prompt cache — unprovable while `cached_tokens`
+        exists nowhere in the telemetry.
+        """
+        usage_chunk = MagicMock()
+        usage_chunk.choices = []
+        usage_chunk.usage.prompt_tokens = 9545
+        usage_chunk.usage.prompt_tokens_details.cached_tokens = 4864
+
+        async def one_round(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Sure.")
+            yield usage_chunk
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=[one_round()])
+        orchestrator._sentry_transaction = MagicMock()
+
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "hi"}]
+        )]
+
+        assert chunks == ["Sure."], "the usage chunk must not leak into spoken audio"
+
+        kwargs = orchestrator._openai.chat.completions.create.await_args.kwargs
+        assert kwargs.get("stream_options") == {"include_usage": True}
+
+        recorded = {
+            c.args[0]: c.args[1]
+            for c in orchestrator._sentry_transaction.set_data.call_args_list
+        }
+        assert recorded.get("llm.cached_tokens") == 4864
+        assert recorded.get("llm.prompt_tokens") == 9545
+
+    # ------------------------------------------------------------------
     # Control-flow tool actions (hang_up_call)
     # ------------------------------------------------------------------
 
