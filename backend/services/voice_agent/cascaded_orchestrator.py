@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional, List, Dict, Any, Callable, Coroutine, AsyncGenerator
 import httpx
 import sentry_sdk
+from sentry_sdk.ai import set_conversation_id
 from fastapi import WebSocket
 
 from core.config import settings
@@ -969,11 +970,31 @@ class CascadedPipelineOrchestrator:
                     logger.info(f"🔧 [CascadedOrchestrator] Tool call: {call['name']}({list(args)})")
                     tool_span = None
                     if self._sentry_transaction:
+                        # gen_ai.* naming is what puts these in Sentry's agent
+                        # views and the Tool Errors widget; a custom op does not.
                         tool_span = self._sentry_transaction.start_child(
-                            op="tool.execute", name=f"Tool: {call['name']}",
+                            op="gen_ai.execute_tool",
+                            name=f"execute_tool {call['name']}",
+                        )
+                        # `start_child()` takes no `attributes=` kwarg in this
+                        # SDK — only the top-level start_span() does. The agent
+                        # attributes go on via set_data.
+                        tool_span.set_data("gen_ai.operation.name", "execute_tool")
+                        tool_span.set_data("gen_ai.tool.name", call["name"])
+                        tool_span.set_data(
+                            "gen_ai.tool.call.arguments", json.dumps(args, default=str)[:1000]
                         )
                     try:
                         result = await self.dispatcher.execute(call["name"], args)
+                        if tool_span:
+                            tool_span.set_data(
+                                "gen_ai.tool.call.result", json.dumps(result, default=str)[:1000]
+                            )
+                    except Exception as tool_exc:
+                        if tool_span:
+                            tool_span.set_status("internal_error")
+                            tool_span.set_data("error.type", type(tool_exc).__name__)
+                        raise
                     finally:
                         if tool_span:
                             tool_span.finish()
@@ -1025,6 +1046,14 @@ class CascadedPipelineOrchestrator:
                             f"🚀 [CascadedOrchestrator] Twilio stream started: {self.stream_sid} "
                             f"| tenant={self.tenant_id} | caller={self.user_phone[:6]}***"
                         )
+                        # A call IS a conversation, and Twilio already gives it a
+                        # stable unique id. Without this every turn arrives in
+                        # Sentry as an unrelated LLM call instead of one grouped
+                        # multi-turn exchange.
+                        if self.call_sid:
+                            set_conversation_id(self.call_sid)
+                        if self.user_phone:
+                            sentry_sdk.set_user({"id": f"{self.user_phone[:5]}***{self.user_phone[-2:]}"})
                         # Load tenant config now, concurrently with the greeting,
                         # so voice_settings are live before the first synthesis
                         # instead of arriving a turn late.
