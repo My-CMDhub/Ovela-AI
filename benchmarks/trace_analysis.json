@@ -1,0 +1,71 @@
+{
+  "generated_at": "2026-08-19T18:07:30.562761+10:00",
+  "period": "2h",
+  "span_count": 100,
+  "stats": {
+    "LLM round 2: request -> first token (gpt-4.1-nano)": {
+      "samples": 10,
+      "min_ms": 307.45,
+      "median_ms": 406.28,
+      "max_ms": 469.23,
+      "mean_ms": 384.17
+    },
+    "Span 3: First Token Yielded -> Cartesia First Audio Chunk Ingestion": {
+      "samples": 20,
+      "min_ms": 20.07,
+      "median_ms": 157.85,
+      "max_ms": 2289.35,
+      "mean_ms": 264.18
+    },
+    "execute_tool hang_up_call": {
+      "samples": 2,
+      "min_ms": 0.05,
+      "median_ms": 0.06,
+      "max_ms": 0.06,
+      "mean_ms": 0.06
+    },
+    "user_voice_turn_transaction": {
+      "samples": 19,
+      "min_ms": 400.17,
+      "median_ms": 952.18,
+      "max_ms": 3312.73,
+      "mean_ms": 1389.15
+    },
+    "LLM round 1: request -> first token (gpt-4.1-nano)": {
+      "samples": 20,
+      "min_ms": 316.94,
+      "median_ms": 433.82,
+      "max_ms": 1688.0,
+      "mean_ms": 572.76
+    },
+    "Span 1: User Speech Ended -> First Token Yielded": {
+      "samples": 20,
+      "min_ms": 320.58,
+      "median_ms": 838.38,
+      "max_ms": 3149.31,
+      "mean_ms": 1124.26
+    },
+    "execute_tool check_availability": {
+      "samples": 3,
+      "min_ms": 488.94,
+      "median_ms": 506.18,
+      "max_ms": 511.1,
+      "mean_ms": 502.07
+    },
+    "execute_tool perform_live_search": {
+      "samples": 2,
+      "min_ms": 1869.25,
+      "median_ms": 2126.73,
+      "max_ms": 2126.73,
+      "mean_ms": 1997.99
+    },
+    "execute_tool lookup_booking": {
+      "samples": 4,
+      "min_ms": 0.09,
+      "median_ms": 505.1,
+      "max_ms": 1256.58,
+      "mean_ms": 440.47
+    }
+  },
+  "gemini_analysis": "```json\n{\n  \"bottleneck_span\": \"Span 1: User Speech Ended -> First Token Yielded\",\n  \"bottleneck_share_pct\": 88,\n  \"evidence\": \"The median `user_voice_turn_transaction` is 952.18 ms, exceeding the 800 ms target, with `Span 1: User Speech Ended -> First Token Yielded` accounting for 838.38 ms (88%) of this duration.\",\n  \"root_causes\": [\n    \"High LLM first token generation latency: The `LLM round 1: request -> first token` median is 433.82 ms, which is a significant portion of `Span 1`. The mention of `llm.cached_tokens` suggests prompt caching might be underutilized or ineffective.\",\n    \"Excessive latency in specific tool executions: The `perform_live_search` tool has an extremely high median latency of 2126.73 ms, and other tools like `check_availability` and `lookup_booking` also add ~500 ms when invoked.\",\n    \"Multi-turn LLM reasoning within a single user turn: The presence of `LLM round 2: request -> first token` (median 406.28 ms) indicates that some turns involve sequential LLM calls, increasing the overall `Span 1` duration.\"\n  ],\n  \"remediations\": [\n    {\n      \"action\": \"Implement and optimize prompt caching for the LLM, and refine prompt engineering to reduce the time for the first token generation.\",\n      \"expected_saving_ms\": 150,\n      \"risk\": \"medium\"\n    },\n    {\n      \"action\": \"Profile and optimize the `perform_live_search` tool and other slow tools (`check_availability`, `lookup_booking`), potentially by caching results, improving external service integration, or using asynchronous patterns.\",\n      \"expected_saving_ms\": 300,\n      \"risk\": \"high\"\n    },\n    {\n      \"action\": \"Refine the conversational agent's logic to minimize multi-turn LLM reasoning and reduce the number of tool calls per user turn, aiming for more direct responses.\",\n      \"expected_saving_ms\": 100,\n      \"risk\": \"medium\"\n    }\n  ],\n  \"verdict\": \"The pipeline currently does not meet the sub-800ms TTFA target, with a median `user_voice_turn_transaction` of 952.18 ms.\"\n}\n```"
+}
