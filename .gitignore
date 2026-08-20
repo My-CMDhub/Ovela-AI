@@ -8,6 +8,8 @@
 !/docs/
 !/images/
 !/traces/
+!/benchmarks/
+!/benchmarks/trace_analysis.json
 traces/cover-*
 
 # Local working notes. Measurements are published with the write-up, so
@@ -57,6 +59,8 @@ backend/stream
 **/*.md
 !/README.md
 !/traces/
+!/benchmarks/
+!/benchmarks/trace_analysis.json
 traces/cover-*README.md
 !/docs/EVALUATION_METHODOLOGY.md
 !backend/requirements.txt
