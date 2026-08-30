@@ -1792,12 +1792,25 @@ class _CachedReservationLookup:
         # Only reached for attributes this proxy does not define itself.
         return getattr(self._db, name)
 
+    # The database layer normalises these before it queries, so two callers
+    # asking the same question in different case produce one identical query.
+    # Normalise here too, or the memo keys them separately and pays twice.
+    _NORMALISE = {
+        "guest_name": lambda v: v.strip().title(),
+        "booking_reference": lambda v: v.strip().upper(),
+        "email": lambda v: v.strip().lower(),
+    }
+
     async def lookup_motel_reservation(self, *args, **kwargs):
         if args:
             # Positional callers bypass the memo rather than risk a key that
             # does not match the keyword form of the same query.
             return await self._db.lookup_motel_reservation(*args, **kwargs)
 
+        kwargs = {
+            k: (self._NORMALISE[k](v) if k in self._NORMALISE and isinstance(v, str) else v)
+            for k, v in kwargs.items()
+        }
         key = tuple(sorted(kwargs.items()))
         task = self._cache.get(key)
         if task is None:
