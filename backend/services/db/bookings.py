@@ -7,6 +7,48 @@ from core.utils import mask_phone
 
 logger = logging.getLogger(__name__)
 
+import re as _re
+
+
+def normalise_lookup_value(field: str, value):
+    """
+    Put a lookup value into the one form the stored data uses.
+
+    Both the query and the per-call memo key have to agree on this, or the cache
+    answers a different question from the one the database is asked. The tenant
+    is Australian, so a bare national number is assumed to be +61.
+    """
+    if not isinstance(value, str):
+        return value
+
+    if field in ("guest_name", "name"):
+        # Collapse internal runs of whitespace as well as trimming the ends: a
+        # recogniser emits "Dhruv  Patel" and the stored name has one space.
+        return " ".join(value.split()).title()
+
+    if field == "booking_reference":
+        return value.strip().upper()
+
+    if field in ("email", "guest_email"):
+        return value.strip().lower()
+
+    if field in ("phone", "guest_phone"):
+        digits = _re.sub(r"[^\d+]", "", value.strip())
+        digits = ("+" if digits.startswith("+") else "") + digits.replace("+", "")
+        bare = digits.lstrip("+")
+        if not bare:
+            return value.strip()
+        if digits.startswith("+"):
+            return digits
+        if bare.startswith("0") and len(bare) == 10:      # 0481131771
+            return "+61" + bare[1:]
+        if bare.startswith("61") and len(bare) == 11:     # 61481131771
+            return "+" + bare
+        return "+" + bare
+
+    return value
+
+
 class BookingsMixin:
     """
     Handles all Booking related operations.
@@ -491,7 +533,7 @@ class BookingsMixin:
 
             # 1. Reference is most precise — try first
             if booking_reference:
-                ref_clean = booking_reference.strip().upper()
+                ref_clean = normalise_lookup_value("booking_reference", booking_reference)
                 queries = [base_tenant, self.Query.equal("booking_reference", ref_clean)]
                 result = await self._motel_request(
                     "GET",
@@ -504,7 +546,7 @@ class BookingsMixin:
 
             # 2. Phone match
             if phone:
-                queries = [base_tenant, self.Query.equal("guest_phone", phone), self.Query.order_desc("created_at"), self.Query.limit(5)]
+                queries = [base_tenant, self.Query.equal("guest_phone", normalise_lookup_value("phone", phone)), self.Query.order_desc("created_at"), self.Query.limit(5)]
                 result = await self._motel_request(
                     "GET",
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
@@ -516,7 +558,7 @@ class BookingsMixin:
 
             # 3. Guest name — exact match (title-cased)
             if guest_name:
-                name_clean = guest_name.strip().title()
+                name_clean = normalise_lookup_value("guest_name", guest_name)
                 queries = [base_tenant, self.Query.equal("guest_name", name_clean), self.Query.order_desc("created_at"), self.Query.limit(5)]
                 result = await self._motel_request(
                     "GET",
@@ -545,7 +587,7 @@ class BookingsMixin:
 
             # 4. Email match
             if email:
-                email_clean = email.strip().lower()
+                email_clean = normalise_lookup_value("email", email)
                 queries = [base_tenant, self.Query.equal("guest_email", email_clean), self.Query.order_desc("created_at"), self.Query.limit(5)]
                 result = await self._motel_request(
                     "GET",

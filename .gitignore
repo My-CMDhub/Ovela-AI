@@ -73,3 +73,4 @@ traces/cover-*README.md
 !backend/tests/test_tenant_config_lookup.py
 !backend/tests/test_latency_watchdog.py
 !backend/tests/test_reservation_cache.py
+!backend/tests/test_guest_lookup_normalisation.py
