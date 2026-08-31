@@ -889,6 +889,30 @@ class CascadedPipelineOrchestrator:
                     "only call this again if they say yes."
                 ),
             }
+        # update_guest_info patches the reservation it finds on the caller's
+        # number and re-sends the payment link to whatever email it is given.
+        # It is locked to the caller's own number, which stops it reaching a
+        # stranger's booking — but a shared handset is exactly the case this
+        # pipeline already knows about, and "the number matched" is not "the
+        # guest is on the line". Nothing to patch means nothing to protect, so
+        # the gate only closes when a reservation actually exists.
+        if (name == "update_guest_info"
+                and not self.call_state.identity_confirmed
+                and self.dispatcher
+                and await self.dispatcher.caller_reservation()):
+            logger.warning(
+                "🔒 [CascadedOrchestrator] update_guest_info refused — a reservation "
+                "exists on this number and the caller has not been identified"
+            )
+            return {
+                "success": False,
+                "message": (
+                    "You have not identified this caller yet, and there is a "
+                    "reservation on this number that this would change. Ask who "
+                    "is calling, call lookup_booking with the name they give, and "
+                    "only then update their details."
+                ),
+            }
         result = await self.dispatcher.execute(name, args)
         # Every tool goes through here, so this is the one place that sees what
         # the call has established. Recorded after the gate above, so a refused

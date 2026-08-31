@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 # Import knowledge base services
 from services.motel_knowledge_base import set_tenant_context
+from services.voice_agent.text_utils import normalize_phone_number
 from services.knowledge_base.coalcreek import COALCREEK_DATA
 from core.config import settings
 
@@ -58,6 +59,55 @@ def phone_numbers_match(p1: str, p2: str) -> bool:
         return d1[-9:] == d2[-9:]
     return d1 == d2
 
+
+
+def caller_owns(doc: dict, caller_phone: str) -> bool:
+    """
+    Is this booking the one belonging to the number that rang us?
+
+    Every tool that acts on a booking asks this FIRST — before it says anything
+    about that booking, including whether it has been paid. The ordering is the
+    whole point. `resend_payment_confirmation` used to run its payment-status
+    guard ahead of this check and refuse with "payment_status='pending'", which
+    told anyone who merely named an email address whether that guest had paid.
+    `resend_payment_link` did not ask at all: it took `user_phone` as an
+    argument and never read it, so naming a stranger's email re-sent a Stripe
+    checkout against their booking.
+
+    An absent caller ID or an absent number on the booking is a NO. There is no
+    reading of "we cannot tell" that should end in acting on somebody's money.
+    """
+    if not caller_phone:
+        return False
+    doc_phone = doc.get("guest_phone", "")
+    if not doc_phone:
+        return False
+    try:
+        doc_phone = normalize_phone_number(doc_phone)
+    except Exception:
+        pass
+    return phone_numbers_match(doc_phone, caller_phone)
+
+
+def not_your_booking(tool: str, doc: dict, caller_phone: str, what: str) -> dict:
+    """The refusal. It says what the caller can do instead, so a legitimate
+    guest ringing from a different handset is not simply stopped dead."""
+    logger.warning(
+        "🔒 Privacy boundary: %s refused — caller '%s' owns none of the bookings "
+        "found%s.",
+        tool, caller_phone,
+        f" (nearest: {doc.get('booking_reference')})" if doc.get("booking_reference") else "",
+    )
+    return {
+        "success": False,
+        "found": False,
+        "privacy_refusal": True,
+        "message": (
+            f"For security reasons I can only {what} for bookings that match the "
+            "number you are calling from. If you are calling from a different "
+            "phone, I can take a message for reception instead."
+        ),
+    }
 
 
 # Common STT mishearings for email domains
@@ -1422,12 +1472,23 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
             tenant_id="coalcreek"
         )
         
+        # Ownership first, and before a booking is even chosen. This check used
+        # to sit BELOW the N6 payment guard, so a caller who named somebody
+        # else's email address was refused with "payment_status='pending'" —
+        # which answered the question they were really asking. Nothing about a
+        # booking may be said before we know whose it is.
+        found_any = bool(docs)
+        docs = [d for d in (docs or []) if caller_owns(d, caller_phone)]
+        if found_any and not docs:
+            return not_your_booking("resend_payment_confirmation", {},
+                                    caller_phone, "resend a confirmation")
+
         active_doc = None
-        for doc in (docs or []):
+        for doc in docs:
             if doc.get("status") in ("paid", "confirmed", "link_sent", "pending_payment", "pending"):
                 active_doc = doc
                 break
-                
+
         if not active_doc:
             return {
                 "success": False,
@@ -1453,26 +1514,6 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
                 ),
             }
 
-        # Strict Caller-Phone Lock verification (Approach 1)
-        doc_phone = active_doc.get("guest_phone", "")
-        normalized_doc_phone = None
-        if doc_phone:
-            try:
-                normalized_doc_phone = normalize_phone_number(doc_phone)
-            except Exception:
-                normalized_doc_phone = doc_phone
-
-        if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
-            logger.warning("ARGS DUMP: %s", args); logger.warning(
-                "🔒 Privacy boundary triggered: Caller phone '%s' attempted to resend receipt for '%s' (phone: '%s'). Refusing access.",
-                caller_phone, active_doc.get("guest_name"), doc_phone
-            )
-            return {
-                "success": False,
-                "privacy_refusal": True,
-                "message": "For security reasons, I can only resend booking confirmations matching your calling phone number. Please contact reception for support."
-            }
-            
         # Resend Email (Fire and forget)
         if active_doc.get("status") in ("paid", "confirmed"):
             from services.email import email_service
@@ -1527,6 +1568,10 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
 async def handle_resend_payment_link(args: dict, db_service, user_phone: str) -> dict:
     """
     Resend payment link email for an unpaid/pending booking.
+
+    `user_phone` used to be accepted and never read, so any email address the
+    caller could name produced a Stripe checkout against that guest's booking
+    and told the caller its payment status and reference. It is read now.
     """
     guest_email = args.get("guest_email", "")
     
@@ -1535,13 +1580,29 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
             "success": False,
             "message": "I need your email address to resend the payment link."
         }
-        
+
+    try:
+        caller_phone = normalize_phone_number(user_phone) if user_phone else ""
+    except Exception:
+        caller_phone = user_phone or ""
+
     try:
         docs = await db_service.lookup_motel_reservation(
             email=guest_email,
             tenant_id="coalcreek"
         )
-        
+
+        # Before deciding anything — including whether the booking is already
+        # paid, which is itself an answer — narrow to the bookings that belong
+        # to this caller. Filtered rather than refused outright: one email can
+        # carry two stays, and a guest who booked a room for a friend should
+        # still be able to pay for their own.
+        found_any = bool(docs)
+        docs = [d for d in (docs or []) if caller_owns(d, caller_phone)]
+        if found_any and not docs:
+            return not_your_booking("resend_payment_link", {}, caller_phone,
+                                    "resend a payment link")
+
         active_doc = None
         for doc in (docs or []):
             _ps = doc.get("payment_status") or ""
