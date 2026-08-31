@@ -333,3 +333,44 @@ OTHER GUESTS: NEVER share any other guest's name, email, room, dates, or payment
 - WRONG: Saying "Goodbye, have a great day!" and waiting. (This triggers an awkward silence loop).
 - RIGHT: Call `hang_up_call()` → the system instantly hangs up the phone line.
 {context_header}"""
+
+
+def build_caller_context_note(reservations: list) -> str:
+    """
+    What the agent is told about whoever is on the line, before they speak.
+
+    Deliberately not the guest's name. An earlier version of this note carried
+    the name, the reference and the dates, with a firm instruction not to say
+    them until the caller identified themselves. Measured over repeated runs of
+    scripts/replay_conversation.py, the model volunteered the name on the very
+    first turn in roughly four runs out of five once the caller's speech was
+    even lightly degraded — opening with "To confirm, are you Dhruv Patel?" to
+    someone who had not said a word about who they were.
+
+    The instruction was not weak. Putting the secret in front of a model and
+    asking it not to repeat the secret is the wrong shape. So the note now
+    carries no identifying detail at all: the caller's name, reference, dates
+    and contact details enter the conversation only after lookup_booking has
+    matched a name the caller actually said, which happens in Python.
+
+    What survives is the useful part — the agent knows this is not a stranger,
+    so it asks for a name rather than interrogating them for a reference.
+    """
+    if not reservations:
+        return ""
+
+    count = len(reservations)
+    plural = "" if count == 1 else "s"
+    return (
+        f"CALLER ON FILE. This phone number has {count} reservation{plural} "
+        "against it. You have deliberately NOT been told the guest's name, "
+        "reference, dates or contact details, and you must not guess or invent "
+        "them — this number may be shared, and whoever answered may not be the "
+        "guest.\n"
+        "Do not ask for a booking reference. Ask who is calling, then call "
+        "lookup_booking with the name they give. If it fits the reservation the "
+        "tool will return the full details and you may speak them freely; "
+        "speech recognition mangles names, so a close name is a match and the "
+        "tool decides that, not you. If it does not fit, the tool will say so — "
+        "then do not reveal that any booking exists on this number."
+    )

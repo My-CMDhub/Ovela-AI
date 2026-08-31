@@ -1075,9 +1075,12 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         return result
 
     def _name_matches(doc, name: str) -> bool:
-        n = name.lower()
-        db_name = doc.get("guest_name", "").lower()
-        return n in db_name or db_name in n
+        # Was a substring test, which called "Drew Patel" a mismatch for
+        # "Dhruv Patel" — the single most common thing the recogniser does to
+        # this guest's name. name_confirms() asks the right question: is this
+        # name compatible with the guest the phone number already identified?
+        from services.db.guest_match import name_confirms
+        return name_confirms(name, doc.get("guest_name", ""))
 
     try:
         # ── Step 0: Caller's own phone (Twilio) — always try first ──────────
@@ -1091,12 +1094,49 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                     matched = [d for d in docs if _name_matches(d, guest_name)]
                     if matched:
                         return _format_doc(matched[0], len(matched), found_by="caller_phone", name_already_provided=True)
-                    # If python's strict string check fails, pass the doc to the LLM anyway
-                    # so the LLM can evaluate if it's a fuzzy match (e.g. 'B H R U V' vs 'Drew Patel')
-                    return _format_doc(docs[0], len(docs), found_by="caller_phone", name_mismatch=True)
-                # No name given — return booking, let AI confirm with user
-                else:
+                    # Nothing about this name fits the booking on this number, so
+                    # somebody else is holding the guest's phone. Handing the
+                    # record to the model "so it can judge" is how the guest's
+                    # name gets read out to a stranger — the model repeats what
+                    # it is shown. Withhold the record, not just the answer.
+                    logger.info(
+                        "🔒 Caller-phone booking withheld: stated name does not fit the reservation"
+                    )
+                    return {
+                        "success": True,
+                        "found": False,
+                        "name_mismatch": True,
+                        "needs_reference": True,
+                        "message": (
+                            "No reservation found under that name. Do NOT say whether any "
+                            "booking exists on this phone number, and do NOT read out any "
+                            "other guest's name. Ask for their booking reference, or the "
+                            "exact name the reservation is under."
+                        ),
+                    }
+                # No name given yet. Hand over the stay so the agent can be
+                # useful, and withhold the three fields that identify a person.
+                # Instructing the model not to say the name is weaker than not
+                # showing it: under a degraded transcript it said the name back
+                # to a stranger despite the prompt forbidding it. The fields
+                # return the moment a matching name is given.
+                # A booking reference read off a confirmation email identifies
+                # the caller just as well as a name does.
+                elif raw_ref:
                     return _format_doc(docs[0], len(docs), found_by="caller_phone")
+                else:
+                    result = _format_doc(docs[0], len(docs), found_by="caller_phone")
+                    for field in ("guest_name", "guest_email", "guest_phone",
+                                  "confirmation_prompt"):
+                        result.pop(field, None)
+                    result["identity_unconfirmed"] = True
+                    result["message"] = (
+                        "A reservation is on file for this phone number, and its dates "
+                        "and payment status are above. You have NOT been told the "
+                        "guest's name and must not guess it. Ask who is calling, then "
+                        "call lookup_booking again with the name they give."
+                    )
+                    return result
 
         # ── Step 1: Reference lookup (normalized) ───────────────────────────
         if reference:
@@ -1856,12 +1896,32 @@ class CoalCreekFunctionDispatcher:
         except Exception:
             phone = self.user_phone
         try:
-            asyncio.ensure_future(
+            self._caller_reservation_task = asyncio.ensure_future(
                 self.db_service.lookup_motel_reservation(phone=phone, tenant_id="coalcreek")
             )
         except RuntimeError:
             # No running loop (test context) — a cold first lookup is slow, not broken.
             logger.debug("📇 Reservation prefetch skipped (no event loop)")
+
+    async def caller_reservation(self, timeout: float = 0.25) -> list:
+        """
+        The booking this number belongs to, if the prefetch has landed.
+
+        Fired while the greeting was still playing, so it is normally finished
+        long before this is read. The timeout exists so a slow Appwrite cannot
+        push dead air into the first turn: no note is better than a late one.
+        """
+        task = getattr(self, "_caller_reservation_task", None)
+        if task is None:
+            return []
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout) or []
+        except asyncio.TimeoutError:
+            logger.warning("📇 Caller reservation prefetch missed the first turn")
+            return []
+        except Exception as e:
+            logger.warning(f"📇 Caller reservation prefetch failed: {e}")
+            return []
 
     def fire_adk_cold_path(self, query: str, session_state: dict | None = None) -> None:
         """

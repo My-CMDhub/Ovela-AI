@@ -183,7 +183,10 @@ class TestCascadedPipelineOrchestrator:
 
         orchestrator._context_ready = True
         orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
-        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
         orchestrator._openai = MagicMock()
         orchestrator._openai.chat.completions.create = AsyncMock(
             return_value=fake_stream()
@@ -217,7 +220,10 @@ class TestCascadedPipelineOrchestrator:
 
         orchestrator._context_ready = True
         orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
-        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
         orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
         orchestrator._openai = MagicMock()
         orchestrator._openai.chat.completions.create = AsyncMock(
@@ -427,7 +433,10 @@ class TestCascadedPipelineOrchestrator:
 
         orchestrator._context_ready = True
         orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
-        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
         orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
         orchestrator._openai = MagicMock()
         orchestrator._openai.chat.completions.create = AsyncMock(
@@ -486,7 +495,10 @@ class TestCascadedPipelineOrchestrator:
 
         orchestrator._context_ready = True
         orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
-        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
         orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
         orchestrator._openai = MagicMock()
         orchestrator._openai.chat.completions.create = AsyncMock(
@@ -570,7 +582,10 @@ class TestCascadedPipelineOrchestrator:
 
         orchestrator._context_ready = True
         orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
-        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
         orchestrator.dispatcher.execute = AsyncMock(return_value={
             "action": "hangup", "message": "Thanks for calling, goodbye."
         })
@@ -689,7 +704,10 @@ class TestCascadedPipelineOrchestrator:
 
         orchestrator._context_ready = True
         orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
-        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
         orchestrator.dispatcher.execute = AsyncMock(return_value={
             "action": "transfer",
             "transfer_to": "+61399990000",

@@ -38,7 +38,7 @@ from services.voice_agent.interruption import (
 from services.voice_agent.bridges.deepgram_standalone import DeepgramStandaloneBridge
 from services.voice_agent.bridges.cartesia_standalone import CartesiaStandaloneBridge
 from services.voice_agent.text_utils import prepare_for_tts
-from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt
+from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt, build_caller_context_note
 from services.voice_agent.functions.coalcreek_definitions import get_coalcreek_functions
 
 logger = logging.getLogger(__name__)
@@ -881,7 +881,17 @@ class CascadedPipelineOrchestrator:
                 "content": get_coalcreek_prompt(
                     now.strftime("%Y-%m-%d"), now.strftime("%I:%M %p")
                 ),
-            }] + list(history)
+            }]
+            # Who this number belongs to, looked up while the greeting played.
+            # It goes in a message of its own AFTER the prompt: the prompt is
+            # the cached prefix, and a per-call note in front of it would change
+            # the first bytes on every call and throw that cache away.
+            caller_note = build_caller_context_note(
+                await self.dispatcher.caller_reservation() if self.dispatcher else []
+            )
+            if caller_note:
+                messages.append({"role": "system", "content": caller_note})
+            messages += list(history)
             tools = [
                 {"type": "function", "function": fn}
                 for fn in get_coalcreek_functions()
