@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # Optional Security Keys
     DASHBOARD_API_KEY: Optional[str] = None  # Internal key for dashboard access
 
+    # Off during testing so a live call does not fill a real inbox. Every
+    # other code path behaves exactly as if the send had succeeded.
+    EMAIL_ENABLED: bool = True
+
     # SMTP (Ovela - Zoho)
     SMTP_HOST: str = "smtppro.zoho.com.au"
     SMTP_PORT: int = 465

@@ -173,6 +173,14 @@ class EmailService:
         Send an email via appropriate SMTP provider (Zoho for Ovela, Gmail for Coal Creek).
         to_email: can be a single email string or a list of email strings.
         """
+        if not settings.EMAIL_ENABLED:
+            # Report success: a failure here would make the agent offer to
+            # resend a payment link on every test call.
+            logger.warning(
+                f"📭 EMAIL_ENABLED=false — not sending to {to_email} | subject={subject!r}"
+            )
+            return True
+
         try:
             sender = from_email if from_email else self.default_from_email
 
