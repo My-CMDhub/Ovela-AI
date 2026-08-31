@@ -40,6 +40,7 @@ from services.voice_agent.bridges.cartesia_standalone import CartesiaStandaloneB
 from services.voice_agent.text_utils import prepare_for_tts
 from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt, build_caller_context_note
 from services.voice_agent.call_state import CallState, recent_transcript
+from services.voice_agent.text_utils import booking_summary_confirmed
 from services.voice_agent.text_utils import transfer_consent_given
 from services.voice_agent.functions.coalcreek_definitions import get_coalcreek_functions
 
@@ -889,6 +890,32 @@ class CascadedPipelineOrchestrator:
                     "only call this again if they say yes."
                 ),
             }
+        # create_booking_request holds a room, queues an email and raises a
+        # Stripe checkout. Its own gate is `has_user_confirmed_summary`, an
+        # argument the MODEL fills in — the gate asks the model whether the
+        # model read the summary back. Measured over ten replays of two booking
+        # scenarios: 4 of 7 attempts asserted YES with no price-and-date
+        # summary in the transcript at all. In one, the agent had asked "that's
+        # ada at example dot com, right?", the caller said "yes, that's all
+        # correct" — agreeing to an email spelling — and that became a
+        # confirmed booking summary. It is the transfer bug again, and it is
+        # fixed the same way: read the transcript.
+        if name == "create_booking_request" and not booking_summary_confirmed(history):
+            logger.warning(
+                "🔒 [CascadedOrchestrator] create_booking_request refused — no "
+                "price-and-date summary in the transcript that the caller agreed to"
+            )
+            return {
+                "success": False,
+                "error": (
+                    "You have not read the booking summary back to this caller. A "
+                    "'yes' to some other question is not confirmation of a booking. "
+                    "Say the name, the check-in and check-out dates, the room and "
+                    "the nightly rate in one sentence, ask them to confirm, and call "
+                    "this again only after they agree to THAT."
+                ),
+            }
+
         # update_guest_info patches the reservation it finds on the caller's
         # number and re-sends the payment link to whatever email it is given.
         # It is locked to the caller's own number, which stops it reaching a

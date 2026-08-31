@@ -182,3 +182,83 @@ class TestOneEmailTwoStays:
         assert result.get("privacy_refusal") is None
         assert result.get("booking_reference") == "CC-99999"
         assert "CC-12345" not in str(result)      # the other stay stays invisible
+
+
+class TestBookingNeedsARealSummary:
+    """
+    create_booking_request holds a room, queues an email and raises a Stripe
+    checkout. Its own gate is `has_user_confirmed_summary` — an argument the
+    model fills in, so the gate asks the model whether the model did the thing.
+
+    Measured over ten replays of two booking scenarios: 4 of 7 attempts asserted
+    YES with no price-and-date summary in the transcript. The clearest one is
+    the second test below, taken verbatim from a replay.
+    """
+
+    @pytest.fixture
+    def agent(self):
+        from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestrator
+        agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock())
+        agent.dispatcher = MagicMock()
+        agent.dispatcher.execute = AsyncMock(return_value={"success": True})
+        agent.dispatcher.caller_reservation = AsyncMock(return_value=[])
+        return agent
+
+    CONFIRMED_YES = {"guest_name": "Ada Lovelace", "has_user_confirmed_summary": "YES"}
+
+    @pytest.mark.asyncio
+    async def test_the_models_own_word_is_not_enough(self, agent):
+        """An empty transcript and has_user_confirmed_summary=YES. Nothing was
+        read back to anybody, and the argument saying otherwise is the model's."""
+        result = await agent._execute_tool("create_booking_request", self.CONFIRMED_YES, [])
+
+        assert result["success"] is False
+        agent.dispatcher.execute.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_a_yes_about_the_email_address_is_not_a_confirmed_booking(self, agent):
+        """Verbatim from a replay. The caller agreed that their email was spelled
+        correctly. The model turned that into a confirmed booking summary."""
+        history = [
+            {"role": "assistant",
+             "content": "Got it — that's ada at example dot com, right? Would you "
+                        "like to confirm and proceed with the booking?"},
+            {"role": "user", "content": "Yes, that's all correct, please go ahead."},
+        ]
+
+        result = await agent._execute_tool("create_booking_request", self.CONFIRMED_YES, history)
+
+        assert result["success"] is False
+        agent.dispatcher.execute.assert_not_called()
+        # The refusal has to be actionable or the model simply tries again.
+        assert "read the booking summary back" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_a_real_read_back_and_a_real_yes_goes_through(self, agent):
+        """Also verbatim. The gate has to let the ordinary path work, or it has
+        traded a rare wrong booking for a call that can never book at all."""
+        history = [
+            {"role": "assistant",
+             "content": "The Double Room is available from September 10th for two "
+                        "nights at $135 per night. Would you like me to place a hold "
+                        "and send the payment link?"},
+            {"role": "user", "content": "Yes, that's all correct, please go ahead."},
+        ]
+
+        result = await agent._execute_tool("create_booking_request", self.CONFIRMED_YES, history)
+
+        assert result["success"] is True
+        agent.dispatcher.execute.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_a_summary_the_caller_never_answered_is_not_agreement(self, agent):
+        history = [
+            {"role": "assistant",
+             "content": "Ada, the 10th of September, Double Room at $135 per night."},
+            {"role": "user", "content": "And what time is check-in?"},
+        ]
+
+        result = await agent._execute_tool("create_booking_request", self.CONFIRMED_YES, history)
+
+        assert result["success"] is False
+        agent.dispatcher.execute.assert_not_called()

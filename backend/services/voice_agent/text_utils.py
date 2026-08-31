@@ -521,3 +521,88 @@ def transfer_consent_given(history: list) -> bool:
         if message.get("role") == "assistant":
             return bool(_OFFERED_A_PERSON.search(message.get("content") or ""))
     return False
+
+
+_A_PRICE = re.compile(r"\$\s?\d|\b\d+\s?dollars\b", re.IGNORECASE)
+_A_DATE = re.compile(
+    r"\b(\d{1,2}(?:st|nd|rd|th)|january|february|march|april|may|june|july|"
+    r"august|september|october|november|december|tonight|tomorrow)\b",
+    re.IGNORECASE,
+)
+
+
+def booking_summary_confirmed(history: list) -> bool:
+    """
+    Did the caller actually hear their booking read back, and agree to it?
+
+    create_booking_request is guarded by `has_user_confirmed_summary`, which the
+    MODEL fills in — the gate asks the model whether the model did the thing. It
+    is the same shape as the transfer rule that a live call broke, and it holds
+    a room, sends an email and raises a Stripe checkout.
+
+    A summary is the caller's name, a price and a date, spoken by the agent; the
+    confirmation is the caller agreeing after that. Anything the agent said
+    earlier in the call does not count — the caller must have agreed to THIS
+    read-back, not to something four turns ago.
+
+    Deliberately not strict about phrasing. A false refusal costs a booking, and
+    the refusal is recoverable — the agent is told to read the summary and ask
+    again — so this checks that a summary plausibly happened, not that it was
+    word-perfect.
+    """
+    if not history:
+        return False
+
+    last_user = next(
+        (m.get("content") or "" for m in reversed(history) if m.get("role") == "user"), "")
+    # Punctuation between the words, not just around them: "Yes, confirmed, go
+    # ahead" is agreement, and stripping only the ends leaves "yes," which
+    # matches nothing. (transfer_consent_given has the same narrow parse. It is
+    # left alone on purpose — widening what counts as agreement loosens a
+    # safety gate, and that is a change to measure, not to slip in here.)
+    stripped = re.sub(r"[^\w\s]", " ", last_user).strip().lower()
+    stripped = re.sub(r"\s+", " ", stripped)
+    if not stripped:
+        return False
+    agreeing = stripped in _AGREEING or any(
+        stripped.startswith(word + " ") or stripped == word for word in _AGREEING
+    )
+    if not agreeing:
+        return False
+
+    # The agent's most recent turn is the one the caller just agreed to.
+    said = next(
+        (m.get("content") or "" for m in reversed(history) if m.get("role") == "assistant"), "")
+    if not said:
+        return False
+
+    if not (_A_PRICE.search(said) and _A_DATE.search(said)):
+        return False
+
+    # The caller's name is NOT required here, and that is a measured decision
+    # rather than an oversight. The prompt asks for "[Name], checking in [date],
+    # checking out [date], [room] at $[price]", but across replays the model
+    # reads back the room, the dates and the rate and leaves the name out — so
+    # requiring it would refuse most legitimate bookings. Getting the name into
+    # the read-back is a prompt change, which is Track B and has to be measured
+    # as a rate before this gate can tighten. Until then the rate is reported by
+    # booking_summary_named_guest() and blocks nothing.
+    return True
+
+
+def booking_summary_named_guest(history: list, guest_name: str) -> bool:
+    """
+    Did the read-back the caller agreed to actually include their name?
+
+    Measured, not enforced. The name is the field speech recognition mangles
+    most and the field that ends up on the booking and the payment email, so
+    reading everything back except that one is precisely backwards. This counts
+    how often it happens; tightening the gate waits on the prompt change and its
+    own measurement.
+    """
+    if not booking_summary_confirmed(history):
+        return False
+    said = next(
+        (m.get("content") or "" for m in reversed(history) if m.get("role") == "assistant"), "")
+    first_name = (guest_name or "").strip().split(" ")[0]
+    return bool(first_name) and first_name.lower() in said.lower()
