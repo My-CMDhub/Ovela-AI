@@ -29,6 +29,8 @@ import re
 import sys
 from dataclasses import dataclass, field
 
+from scripts.identity_corpus import CALLER_PHONE
+
 # The prompt asks for a short first sentence so speech starts before the whole
 # answer is written. These are the words the model reaches for to satisfy that
 # cheaply, and reaching for them when nothing was actually said to acknowledge
@@ -56,8 +58,6 @@ WRITE_TOOLS = {
     "create_booking_request", "update_guest_info", "resend_payment_confirmation",
     "resend_payment_link", "request_human_callback", "transfer_to_staff", "hang_up_call",
 }
-
-from scripts.identity_corpus import CALLER_PHONE
 
 DHRUV = CALLER_PHONE           # seeded: Dhruv Patel, CC-76818
 UNKNOWN = "+61400000123"        # matches no reservation
