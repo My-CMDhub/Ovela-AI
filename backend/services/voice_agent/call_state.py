@@ -38,6 +38,11 @@ from dataclasses import dataclass, field
 # is ten exchanges, which is more recent conversation than a phone call needs.
 TRANSCRIPT_WINDOW = 20
 
+# How many recent tool results are kept for the grounding check. Sixty is more
+# than a long call produces; the cap only exists so an hour on the line cannot
+# grow this without bound.
+EVIDENCE_KEPT = 60
+
 # Tools whose success is a promise the business now has to keep. The model may
 # be asked "did you already send that?" ten turns later, and "I think so" is the
 # wrong answer either way.
@@ -86,11 +91,19 @@ class CallState:
     # One-way actions that actually completed, in the order they happened.
     promises: list = field(default_factory=list)
 
+    # Raw tool results, kept only so services/voice_agent/grounding.py can ask
+    # whether a number the agent said came from anywhere. Never sent to the
+    # model — the note above is what the model sees. Bounded so a long call
+    # cannot grow it without limit.
+    evidence: list = field(default_factory=list)
+
     def observe(self, tool_name: str, args: dict, result) -> None:
         """Record what a tool result established. Never raises — a bad result
         must not take down the turn that produced it."""
         if not isinstance(result, dict):
             return
+        self.evidence.append(str(result))
+        del self.evidence[:-EVIDENCE_KEPT]
         try:
             if tool_name == "lookup_booking":
                 self._observe_lookup(result)

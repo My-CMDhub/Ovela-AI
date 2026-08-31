@@ -413,7 +413,8 @@ def _check(turn, reply, calls):
 
 async def run_scenario(sc: Scenario, noise: str, show: bool, allow_writes: bool,
                        inconclusive: list, booking_gate: list, booking_gate_ok: list,
-                       booking_gate_unnamed: list, narrated: list) -> list:
+                       booking_gate_unnamed: list, narrated: list,
+                       ungrounded: list) -> list:
     print(f"\n\033[1m{sc.key}\033[0m — {sc.title}")
     print(f"  {sc.claim}")
 
@@ -435,6 +436,21 @@ async def run_scenario(sc: Scenario, noise: str, show: bool, allow_writes: bool,
             print(f"  {n}. \033[31mERROR\033[0m {exc}")
             failures[0] += 1
             continue
+
+        # Did anything in that reply come from nowhere? Measured, never
+        # blocked — see services/voice_agent/grounding.py. The sources are the
+        # tool results so far, everything the caller has said, and the
+        # business's own knowledge base.
+        from services.voice_agent.grounding import unsourced_claims, business_facts
+        for kind, claim in unsourced_claims(
+                reply,
+                agent.call_state.evidence
+                + [t.says for t in sc.turns]
+                + business_facts()):
+            ungrounded.append((kind, claim))
+            print(f"          \033[33mUNSOURCED\033[0m {kind}: {claim} — "
+                  f"in no tool result, nothing the caller said, and not in the "
+                  f"knowledge base")
 
         safety, help_ = _check(turn, reply, calls[before:])
         opener = opener_of(reply)
@@ -496,12 +512,12 @@ async def main_async(args):
           f"{' | WRITES ALLOWED' if args.allow_writes else ''}")
     leaks = misses = 0
     inconclusive, booking_gate, booking_gate_ok = [], [], []
-    booking_gate_unnamed, narrated = [], []
+    booking_gate_unnamed, narrated, ungrounded = [], [], []
     all_openers, all_first_lens = [], []
     for sc in chosen:
         (a, b), openers, first_lens = await run_scenario(
             sc, args.noise, args.show, args.allow_writes, inconclusive,
-            booking_gate, booking_gate_ok, booking_gate_unnamed, narrated)
+            booking_gate, booking_gate_ok, booking_gate_unnamed, narrated, ungrounded)
         leaks += a
         misses += b
         all_openers += openers
@@ -522,6 +538,18 @@ async def main_async(args):
     if narrated:
         print(f"\033[33mnarrated holds   {len(narrated)}\033[0m — promised a hold or a "
               f"payment link with no tool call behind it ({', '.join(narrated)})")
+
+    if ungrounded:
+        by_kind = {}
+        for kind, claim in ungrounded:
+            by_kind.setdefault(kind, []).append(claim)
+        # Never one number: an invented reference is a fabricated record, an
+        # invented date is usually a restatement gone slightly wrong.
+        print("\nunsourced claims " + "  ".join(
+            f"{kind} {len(v)} ({', '.join(sorted(set(v))[:4])})"
+            for kind, v in sorted(by_kind.items())))
+    else:
+        print("\nunsourced claims 0 — every price, date and reference traced to a source")
 
     if inconclusive:
         print(f"\033[33m{len(inconclusive)} scenario(s) proved nothing\033[0m — "

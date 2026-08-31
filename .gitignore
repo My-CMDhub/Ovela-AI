@@ -81,3 +81,4 @@ traces/cover-*README.md
 !backend/tests/test_agent_guardrails.py
 !backend/tests/test_call_state.py
 !backend/tests/test_tool_preconditions.py
+!backend/tests/test_grounding.py

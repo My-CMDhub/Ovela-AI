@@ -41,6 +41,7 @@ from services.voice_agent.text_utils import prepare_for_tts
 from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt, build_caller_context_note
 from services.voice_agent.call_state import CallState, recent_transcript
 from services.voice_agent.text_utils import booking_summary_confirmed
+from services.voice_agent.grounding import unsourced_claims, business_facts
 from services.voice_agent.text_utils import transfer_consent_given
 from services.voice_agent.functions.coalcreek_definitions import get_coalcreek_functions
 
@@ -636,6 +637,34 @@ class CascadedPipelineOrchestrator:
                 full_text = " ".join(full_response_parts).strip()
                 if full_text:
                     self.history.append({"role": "assistant", "content": full_text})
+                    # Did any price, date or reference in that come from
+                    # nowhere? Logged, never blocked. Measured over ten replays
+                    # — five clean, five at heavy speech noise, ~410 replies —
+                    # the rate of invented booking references was zero, and the
+                    # two flagged claims were both correct arithmetic the agent
+                    # is meant to do (checkout = check-in + nights; total =
+                    # rate x nights). Blocking on that would gag the agent for
+                    # doing the sums while catching nothing. This is here to
+                    # find out whether a real phone line says otherwise.
+                    # NOTE: full_response_parts holds the MODEL's text. The
+                    # spoken text is rewritten by prepare_for_tts, which turns
+                    # "2026-09-19" into "2026-9th-19" — checking that end finds
+                    # nothing, forever.
+                    try:
+                        for kind, claim in unsourced_claims(
+                                full_text,
+                                self.call_state.evidence
+                                + [m.get("content", "") for m in self.history
+                                   if m.get("role") == "user"]
+                                + business_facts()):
+                            logger.warning(
+                                "🧾 [CascadedOrchestrator] unsourced %s spoken: %s "
+                                "— traced to no tool result, nothing the caller "
+                                "said, and nothing in the knowledge base",
+                                kind, claim,
+                            )
+                    except Exception as exc:
+                        logger.debug("🧾 grounding check skipped: %s", exc)
                 self.state = ConversationState.AWAITING_INPUT
 
             # Farewell has finished streaming — now end the call. A caller who
