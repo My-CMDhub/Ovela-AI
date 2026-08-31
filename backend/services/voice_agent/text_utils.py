@@ -459,3 +459,65 @@ def prepare_for_tts(text: str) -> tuple[str, list[str]]:
     clean_text = make_speakable(clean_text)
     
     return clean_text, signals
+
+
+# Words a caller uses to agree, and the things they call a human being. Kept
+# separate because they answer different questions: the first only counts as
+# consent when the agent had just offered, the second stands on its own.
+_AGREEING = {
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please", "alright",
+    "absolutely", "definitely", "correct", "right", "fine", "go ahead",
+    "do it", "yes please", "that would be great", "if you could",
+}
+_ASKED_FOR_A_PERSON = re.compile(
+    r"\b(transfer me|put me through|speak (?:to|with)|talk (?:to|with)|"
+    r"get me|connect me|human|real person|manager|receptionist|front desk|"
+    r"someone (?:else|there)|somebody (?:else|there))\b",
+    re.IGNORECASE,
+)
+_OFFERED_A_PERSON = re.compile(
+    r"\b(put you through|transfer you|reception|front desk|grab the front desk|"
+    r"connect you|speak to (?:someone|a person|staff))\b",
+    re.IGNORECASE,
+)
+
+
+def transfer_consent_given(history: list) -> bool:
+    """
+    Did the caller actually agree to be handed to a person?
+
+    Handing the call over ends everything the agent can do for them, and on a
+    real call the model dialled a human after the caller said "Actually, I am
+    calling for Sarah" — which is not agreement to anything. The prompt already
+    forbade that; a rule with a one-way consequence should not rest on the model
+    choosing to follow it.
+
+    Consent is either the caller asking for a person outright, or the caller
+    agreeing to an offer the agent has just made. A bare "yes" on its own is
+    agreement to whatever was last proposed, which is usually not this.
+    """
+    if not history:
+        return False
+
+    last_user = next(
+        (m.get("content") or "" for m in reversed(history) if m.get("role") == "user"),
+        "",
+    )
+    if not last_user.strip():
+        return False
+
+    if _ASKED_FOR_A_PERSON.search(last_user):
+        return True
+
+    stripped = last_user.strip().strip(".!,").lower()
+    agreeing = stripped in _AGREEING or any(
+        stripped.startswith(word + " ") or stripped == word for word in _AGREEING
+    )
+    if not agreeing:
+        return False
+
+    # A "yes" only transfers the call if a transfer is what was on the table.
+    for message in reversed(history):
+        if message.get("role") == "assistant":
+            return bool(_OFFERED_A_PERSON.search(message.get("content") or ""))
+    return False

@@ -78,3 +78,4 @@ traces/cover-*README.md
 !backend/tests/test_appwrite_db.py
 !backend/tests/test_db_isolation.py
 !backend/tests/test_caller_preload.py
+!backend/tests/test_agent_guardrails.py

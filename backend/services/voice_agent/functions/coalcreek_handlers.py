@@ -1188,9 +1188,20 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 return _format_doc(docs[0], len(docs), found_by="email")
 
         # ── Nothing found ────────────────────────────────────────────────────
+        # This message used to end "want me to put you through to reception?",
+        # which handed the agent an exit on the caller's very first miss and
+        # nothing else to try. On a real call the caller's name missed three
+        # times and the agent then dialled a human. A spoken name that the
+        # matcher cannot place is usually recoverable — spelling it out resolves
+        # it, and the caller had simply never been asked.
         return {
             "found": False,
-            "message": "I couldn't find a booking linked to your number or the details I have here - want me to put you through to reception?"
+            "message": (
+                "No booking matched that. Speech recognition mangles names, so ask "
+                "them to spell the surname out letter by letter and call this again "
+                "with the spelling — that usually finds it. If spelling fails too, "
+                "ask for their booking reference. Do not escalate to a human yet."
+            ),
         }
 
     except Exception as e:

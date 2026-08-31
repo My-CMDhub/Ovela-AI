@@ -39,6 +39,7 @@ from services.voice_agent.bridges.deepgram_standalone import DeepgramStandaloneB
 from services.voice_agent.bridges.cartesia_standalone import CartesiaStandaloneBridge
 from services.voice_agent.text_utils import prepare_for_tts
 from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt, build_caller_context_note
+from services.voice_agent.text_utils import transfer_consent_given
 from services.voice_agent.functions.coalcreek_definitions import get_coalcreek_functions
 
 logger = logging.getLogger(__name__)
@@ -859,6 +860,32 @@ class CascadedPipelineOrchestrator:
             f"| adk_singleton={'yes' if adk_orchestrator else 'no'}"
         )
 
+    async def _execute_tool(self, name: str, args: dict, history: list = None) -> dict:
+        """
+        Every tool the model asks for passes through here.
+
+        Only one is gated today. Handing the caller to a person ends everything
+        the agent can do for them, and on a live call the model dialled a human
+        straight after the caller said "Actually, I am calling for Sarah" — which
+        agrees to nothing. The prompt already said to dial only on an explicit
+        yes; a one-way action should not depend on the model choosing to obey.
+        """
+        # The turn's own history, which is the same list as self.history on a
+        # live call but not in a test that drives one turn directly.
+        history = self.history if history is None else history
+        if name == "transfer_to_staff" and not transfer_consent_given(history):
+            logger.info("🚦 [CascadedOrchestrator] transfer_to_staff blocked — nobody agreed to it")
+            return {
+                "success": False,
+                "transferred": False,
+                "message": (
+                    "You have not been asked to transfer this call. Ask the caller "
+                    "whether they would like to be put through to reception, and "
+                    "only call this again if they say yes."
+                ),
+            }
+        return await self.dispatcher.execute(name, args)
+
     async def _default_llm_callback(self, history: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
         """
         Default LLM response generation using ADKOrchestrator query_stream if available,
@@ -998,7 +1025,7 @@ class CascadedPipelineOrchestrator:
                             "gen_ai.tool.call.arguments", json.dumps(args, default=str)[:1000]
                         )
                     try:
-                        result = await self.dispatcher.execute(call["name"], args)
+                        result = await self._execute_tool(call["name"], args, history)
                         if tool_span:
                             tool_span.set_data(
                                 "gen_ai.tool.call.result", json.dumps(result, default=str)[:1000]
