@@ -57,7 +57,9 @@ WRITE_TOOLS = {
     "resend_payment_link", "request_human_callback", "transfer_to_staff", "hang_up_call",
 }
 
-DHRUV = "+61481131771"          # seeded: Dhruv Patel, CC-76818
+from scripts.identity_corpus import CALLER_PHONE
+
+DHRUV = CALLER_PHONE           # seeded: Dhruv Patel, CC-76818
 UNKNOWN = "+61400000123"        # matches no reservation
 
 

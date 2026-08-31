@@ -13,11 +13,26 @@ surname of a different guest; Katherine Smyth sits beside Catherine Smith; two
 Patels share a surname; several emails are painful to say out loud.
 """
 
+import os
+
+from dotenv import load_dotenv
+
+# Read backend/.env directly: this module is imported by scripts and tests that
+# never construct the Settings object, so nothing else has loaded it.
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+
 TENANT = "coalcreek"
+
+# The owner tests from a real handset. Its number lives in backend/.env, which is
+# gitignored, so it never lands in the repository; the literal below is a
+# placeholder for anyone else running the seeder. Keeping these in sync matters:
+# a wrong number here silently tests the fallback path instead of the real one,
+# which is exactly what happened on the 31 August call.
+CALLER_PHONE = os.getenv("SEED_CALLER_PHONE", "+61481131771")
 
 # guest_name, phone, email, room_type, booking_reference, check-in offset, nights
 GUESTS = [
-    ("Dhruv Patel",        "+61481131771", "dhruv.patel+stays@example.com",  "queen",  "CC-76818", 3, 2),
+    ("Dhruv Patel",        CALLER_PHONE,   "dhruv.patel+stays@example.com",  "queen",  "CC-76818", 3, 2),
     ("Priya Patel",        "+61412998231", "priya_patel91@outlook.com",    "twin",   "CC-76819", 3, 1),
     ("Siobhan O'Connor",   "+61423884190", "s.oconnor-work@bigpond.com",   "king",   "CC-76820", 5, 3),
     ("Xiuying Zhang",      "+61455201773", "xiuying.zhang2@icloud.com",    "queen",  "CC-76821", 1, 2),
