@@ -30,6 +30,16 @@ TENANT = "coalcreek"
 # which is exactly what happened on the 31 August call.
 CALLER_PHONE = os.getenv("SEED_CALLER_PHONE", "+61481131771")
 
+def _spoken_forms(phone: str, expected: str) -> list:
+    """The same Australian number as a caller might read it out: full country
+    code, the local 0-prefixed form, and the form with gaps in it."""
+    forms = [phone]
+    if phone.startswith("+61") and len(phone) == 12:
+        local = "0" + phone[3:]                     # +61491570006 -> 0491570006
+        forms += [local, f"{local[:4]} {local[4:7]} {local[7:]}"]
+    return [(form, "phone", expected) for form in forms]
+
+
 # guest_name, phone, email, room_type, booking_reference, check-in offset, nights
 GUESTS = [
     ("Dhruv Patel",        CALLER_PHONE,   "dhruv.patel+stays@example.com",  "queen",  "CC-76818", 3, 2),
@@ -108,8 +118,12 @@ CASES = [
     ("nobody@nowhere.com",                      "email", None),
 
     # --- phone, with and without country code --------------------------------
-    ("+61481131771",          "phone", "CC-76818"),
-    ("0481131771",            "phone", "CC-76818"),
-    ("0481 131 771",          "phone", "CC-76818"),
+    # Spelled out from CALLER_PHONE rather than typed in. These three were once
+    # literals, and when the owner's test handset changed number the literals
+    # did not follow: the eval went on querying a number nobody was seeded
+    # under and reported three fresh misses as an identity regression. The
+    # roster above is already built from CALLER_PHONE — the queries have to be
+    # too, or the instrument and the data disagree in silence.
+    *_spoken_forms(CALLER_PHONE, "CC-76818"),
     ("+61400000000",          "phone", None),
 ]
