@@ -29,7 +29,9 @@ DB = "6947b8300005f5863f96"
 COL = "motel_reservations"
 TAG = "seed:identity-v1"
 
-_today = date(2026, 8, 20)
+# Anchor for the seeded stays. Keep it ahead of today, or a live test call
+# gets told its booking has already passed and proves nothing.
+_today = date(2026, 9, 1)
 
 
 def _d(offset: int) -> str:

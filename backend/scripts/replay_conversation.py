@@ -78,7 +78,7 @@ SCENARIOS = [
                 says="Yeah it's Drew Patel.",                       # REAL Flux output
                 # Either reading the stay back or asking "is that Dhruv?" is a
                 # correct landing. Only a dead end is a failure.
-                must_say_any=["august", "23", "25", "queen",
+                must_say_any=["september", "sept", "4th", "6th", "queen",
                               "dhruv", "does that", "is that", "confirm"],
                 why="A misheard first name must reach the booking, not a dead end.",
             ),
@@ -142,7 +142,7 @@ SCENARIOS = [
             ),
             Turn(
                 says="Sorry, it's under — no wait. It's Bhruv Patel. B, like, Bhruv.",
-                must_say_any=["august", "23", "25", "queen",
+                must_say_any=["september", "sept", "4th", "6th", "queen",
                               "dhruv", "does that", "is that", "confirm"],
                 why="A self-correcting caller is the normal case, not the edge case.",
             ),
