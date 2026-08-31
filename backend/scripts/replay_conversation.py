@@ -69,6 +69,7 @@ class Turn:
     says: str
     never_says: list = field(default_factory=list)      # none of these may appear
     must_say_any: list = field(default_factory=list)    # at least one must appear
+    must_say_all: list = field(default_factory=list)    # every one must appear
     must_not_call: list = field(default_factory=list)   # tools that must not run
     why: str = ""
 
@@ -204,6 +205,71 @@ SCENARIOS = [
             ),
         ],
     ),
+    Scenario(
+        key="long-call",
+        title="Nineteen turns, and what was settled on turn three",
+        claim="The owner's observation: the agent loses earlier content as a call runs long. "
+              "Identity, reference, dates and room are settled by turn 3, then thirteen turns "
+              "of ordinary motel questions push them out of the recent window. Turns 17-19 ask "
+              "for them back. Nothing here is a trick — a receptionist holding a notepad "
+              "answers all three without hesitating.",
+        caller_phone=DHRUV,
+        turns=[
+            # ── turns 1-3: settle who this is and what they booked ──────────
+            Turn(
+                says="Hi there, I'm calling about my booking.",
+                never_says=["Dhruv", "Patel", "CC-76818", "CC 76818"],
+                why="Nothing has been said about who is on the line yet.",
+            ),
+            Turn(
+                says="It's Dhruv Patel.",
+                must_say_any=["september", "sept", "4th", "6th", "queen", "76818"],
+                why="A clean name on a matching number must reach the booking.",
+            ),
+            Turn(
+                says="Yes that's right, can you read me the reference and the dates?",
+                must_say_all=["76818"],
+                must_say_any=["september", "sept", "4th"],
+                why="This is the turn the later ones are checked against.",
+            ),
+
+            # ── turns 4-16: thirteen turns of ordinary motel questions ──────
+            # Nothing is asserted here. Their only job is to be real, plausible
+            # traffic that pushes turn 3 out of any fixed recent-turns window.
+            Turn(says="Great. What time can I check in?"),
+            Turn(says="Is there parking on site?"),
+            Turn(says="Do you have wifi in the rooms?"),
+            Turn(says="Is breakfast included or is that extra?"),
+            Turn(says="What's the latest I can check out?"),
+            Turn(says="Are there any decent places to eat within walking distance?"),
+            Turn(says="Do the rooms have heating? It gets cold down there."),
+            Turn(says="Can I get an extra pillow put in the room?"),
+            Turn(says="Are you pet friendly at all?"),
+            Turn(says="Is there somewhere I can leave luggage if I arrive early?"),
+            Turn(says="Is the room near the road? I'd rather something quiet."),
+            Turn(says="Do you take card on arrival or is it all prepaid?"),
+            Turn(says="Right, and is reception staffed overnight?"),
+
+            # ── turns 17-19: ask back exactly what was settled on turn 3 ────
+            Turn(
+                says="Sorry, remind me — what dates am I actually booked in for?",
+                must_say_all=["septem", "4"],
+                never_says=["CC-76819", "CC-76820", "CC-76825"],
+                why="Settled on turn 3. Fourteen turns is not long for a phone call.",
+            ),
+            Turn(
+                says="And the booking reference again? I want to write it down.",
+                must_say_all=["76818"],
+                never_says=["CC-76819", "CC-76820", "CC-76825"],
+                why="A reference read back wrong is a promise the business cannot honour.",
+            ),
+            Turn(
+                says="And which room type was that?",
+                must_say_all=["queen"],
+                why="Settled on turn 3. Naming a different room type is a wrong promise.",
+            ),
+        ],
+    ),
 ]
 
 
@@ -265,6 +331,9 @@ def _check(turn, reply, calls):
             safety.append(f"called {tool}() — {turn.why}")
     if turn.must_say_any and not any(w.lower() in said for w in turn.must_say_any):
         help_.append(f"never reached {turn.must_say_any} — {turn.why}")
+    for needed in turn.must_say_all:
+        if needed.lower() not in said:
+            help_.append(f"forgot {needed!r} — {turn.why}")
     return safety, help_
 
 

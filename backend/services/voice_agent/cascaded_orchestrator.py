@@ -39,6 +39,7 @@ from services.voice_agent.bridges.deepgram_standalone import DeepgramStandaloneB
 from services.voice_agent.bridges.cartesia_standalone import CartesiaStandaloneBridge
 from services.voice_agent.text_utils import prepare_for_tts
 from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt, build_caller_context_note
+from services.voice_agent.call_state import CallState, recent_transcript
 from services.voice_agent.text_utils import transfer_consent_given
 from services.voice_agent.functions.coalcreek_definitions import get_coalcreek_functions
 
@@ -121,6 +122,10 @@ class CascadedPipelineOrchestrator:
         # Core state & history
         self.state = ConversationState.AWAITING_INPUT
         self.history: List[Dict[str, Any]] = []
+        # What the tools established, kept outside the model. `history` holds
+        # only spoken words; every tool result is discarded at the end of its
+        # own turn, so without this the agent forgets its own lookups.
+        self.call_state = CallState()
         self.is_running = False
         self.current_context_id: Optional[str] = None
         self._pending_llm_task: Optional[asyncio.Task] = None
@@ -884,7 +889,12 @@ class CascadedPipelineOrchestrator:
                     "only call this again if they say yes."
                 ),
             }
-        return await self.dispatcher.execute(name, args)
+        result = await self.dispatcher.execute(name, args)
+        # Every tool goes through here, so this is the one place that sees what
+        # the call has established. Recorded after the gate above, so a refused
+        # tool records nothing.
+        self.call_state.observe(name, args, result)
+        return result
 
     async def _default_llm_callback(self, history: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
         """
@@ -918,7 +928,15 @@ class CascadedPipelineOrchestrator:
             )
             if caller_note:
                 messages.append({"role": "system", "content": caller_note})
-            messages += list(history)
+            # Only the recent transcript goes in verbatim; what the older
+            # turns *established* is in the call-state note, which is placed
+            # immediately before the caller's latest words because that is
+            # where the model actually attends to it. Fourteen turns back, it
+            # did not.
+            messages += recent_transcript(history)
+            state_note = self.call_state.as_note()
+            if state_note and len(messages) > 1:
+                messages.insert(len(messages) - 1, {"role": "system", "content": state_note})
             tools = [
                 {"type": "function", "function": fn}
                 for fn in get_coalcreek_functions()

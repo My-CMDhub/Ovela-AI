@@ -809,3 +809,40 @@ class TestCascadedPipelineOrchestrator:
         assert mock_client.post.await_count == 1
 
 
+
+
+class TestCallStateWiring:
+    """
+    CallState is only worth anything if something actually feeds it. This repo
+    has already shipped a tool that returned {"action": "hangup"} to nobody, so
+    a value with no consumer gets its own test: `_execute_tool` is the single
+    place every tool result passes through, and it must record there.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_tool_result_reaches_the_call_state(self, orchestrator):
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock(return_value={
+            "found": True, "found_by": "caller_phone",
+            "booking_reference": "CC-76818", "guest_name": "Dhruv Patel",
+            "room_type": "queen", "check_in_date": "2026-09-04",
+            "check_out_date": "2026-09-06",
+        })
+
+        await orchestrator._execute_tool("lookup_booking", {"guest_name": "Dhruv Patel"}, [])
+
+        assert orchestrator.call_state.identity_confirmed
+        assert "CC-76818" in orchestrator.call_state.as_note()
+
+    @pytest.mark.asyncio
+    async def test_a_refused_tool_records_nothing(self, orchestrator):
+        """transfer_to_staff is gated before dispatch. The gate's refusal is not
+        a tool result and must not be logged as a promise the caller was made."""
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock()
+
+        result = await orchestrator._execute_tool("transfer_to_staff", {}, [])
+
+        assert result["transferred"] is False
+        orchestrator.dispatcher.execute.assert_not_called()
+        assert orchestrator.call_state.promises == []
