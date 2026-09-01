@@ -343,3 +343,68 @@ class TestTheAvailabilityMemoReachesTheHandler:
 
         context = agent.dispatcher.execute.await_args.args[2]
         assert isinstance(context.get("availability_cache"), dict)
+
+
+class TestTheMemoNeverStandsInForLookingAgain:
+    """
+    handle_create_booking_request skips its write-time availability re-check
+    whenever `_availability_cache` says the room was free. That is safe only
+    while the memo never reaches it — and threading the per-call context to
+    make repeat questions cheap is exactly what would deliver it.
+
+    A room confirmed free on turn 2 and booked on turn 20 must be looked at
+    again in between. Another caller has twenty turns to take it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_booking_handler_is_never_handed_the_memo(self):
+        from services.voice_agent.functions.coalcreek_handlers import CoalCreekFunctionDispatcher
+
+        dispatcher = CoalCreekFunctionDispatcher(
+            db_service=MagicMock(), user_phone=CALLER,
+            save_reservation_fn=AsyncMock(), abuse_protection=MagicMock())
+
+        seen = {}
+
+        async def spy(args, *a, **kw):
+            seen.update(args)
+            return {"success": False, "error": "stopped in the test"}
+
+        import services.voice_agent.functions.coalcreek_handlers as H
+        original = H.handle_create_booking_request
+        H.handle_create_booking_request = spy
+        try:
+            await dispatcher._dispatch(
+                "create_booking_request", {"guest_name": "Ada"},
+                {"availability_cache": {"2026-09-10|2026-09-12|Double Room": {"available": True}}})
+        finally:
+            H.handle_create_booking_request = original
+
+        assert "_availability_cache" not in seen
+
+    @pytest.mark.asyncio
+    async def test_a_read_still_gets_the_memo(self):
+        """The memo has to keep working where it is safe, or threading the
+        context bought nothing."""
+        from services.voice_agent.functions.coalcreek_handlers import CoalCreekFunctionDispatcher
+
+        dispatcher = CoalCreekFunctionDispatcher(
+            db_service=MagicMock(), user_phone=CALLER,
+            save_reservation_fn=AsyncMock(), abuse_protection=MagicMock())
+
+        seen = {}
+
+        async def spy(args, db, context=None):
+            seen["context"] = context
+            return {"available": True}
+
+        import services.voice_agent.functions.coalcreek_handlers as H
+        original = H.handle_check_availability
+        H.handle_check_availability = spy
+        try:
+            await dispatcher._dispatch("check_availability", {"room_type": "queen"},
+                                       {"availability_cache": {}})
+        finally:
+            H.handle_check_availability = original
+
+        assert isinstance(seen["context"].get("availability_cache"), dict)

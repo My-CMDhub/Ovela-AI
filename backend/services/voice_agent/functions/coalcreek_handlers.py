@@ -2141,11 +2141,13 @@ class CoalCreekFunctionDispatcher:
             return await handle_check_availability(args, self.db_service, context=context)
 
         elif function_name == "create_booking_request":
-            # P11-F: Thread availability_cache into the handler so it can skip re-check
-            if isinstance(context, dict) and "availability_cache" in context:
-                args = dict(args)  # shallow copy — don't mutate caller's dict
-                args["_availability_cache"] = context["availability_cache"]
-
+            # The per-call availability memo is deliberately NOT threaded in
+            # here. It used to be, and the handler skips its write-time
+            # re-check whenever the memo says the room was free — so a room
+            # confirmed at the start of a call could be booked at the end of it
+            # having been taken by somebody else in between. The memo makes a
+            # caller asking twice cheap; it must never stand in for looking at
+            # the live state before writing.
             result = await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn, self.db_service)
 
             if result.get("success"):
