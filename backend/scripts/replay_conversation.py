@@ -262,6 +262,44 @@ SCENARIOS = [
         ],
     ),
     Scenario(
+        key="new-caller-long",
+        title="A stranger who spells it out, then talks for a while",
+        claim="Nobody on file, so the name and email exist ONLY in the transcript — "
+              "update_guest_info claims to store them and stores nothing, and CallState "
+              "records only what a tool confirmed. The transcript is capped at 20 "
+              "messages, so the spelling given on turn 3 is gone by turn 16. This asks "
+              "for it back at the point it matters: the booking summary.",
+        caller_phone=UNKNOWN,
+        turns=[
+            Turn(says="Hi, I'd like to book a room. I've not stayed with you before."),
+            Turn(says="It's Siobhan O'Connor. That's S-I-O-B-H-A-N, O apostrophe C-O-N-N-O-R."),
+            Turn(says="My email is s dot oconnor dash work at bigpond dot com."),
+            # Twelve turns of ordinary traffic — enough to push turn 3 out of a
+            # twenty-message window.
+            Turn(says="What time is check-in?"),
+            Turn(says="Is there parking?"),
+            Turn(says="Do you have wifi?"),
+            Turn(says="Is breakfast included?"),
+            Turn(says="What's the latest checkout?"),
+            Turn(says="Anywhere good to eat nearby?"),
+            Turn(says="Do the rooms have heating?"),
+            Turn(says="Can I get an extra pillow?"),
+            Turn(says="Are you pet friendly?"),
+            Turn(says="Can I leave luggage if I arrive early?"),
+            Turn(says="Is reception staffed overnight?"),
+            Turn(says="Do you take card on arrival?"),
+            Turn(
+                says="Right, let's book it — a queen from the 10th of September for two nights.",
+                why="The details were given fourteen turns ago and are outside the window.",
+            ),
+            Turn(
+                says="Yes, go ahead.",
+                must_say_all=["oconnor"],
+                why="If it cannot say the email back, it never had it to book with.",
+            ),
+        ],
+    ),
+    Scenario(
         key="long-call",
         title="Nineteen turns, and what was settled on turn three",
         claim="The owner's observation: the agent loses earlier content as a call runs long. "
