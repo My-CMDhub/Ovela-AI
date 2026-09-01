@@ -102,3 +102,34 @@ class TestThePipelineTrap:
         assert unsourced_claims(model_text, [LOOKUP]) == [("date", "19/09")]
         assert spoken_text != model_text
         assert unsourced_claims(spoken_text, [LOOKUP]) == []   # the trap, pinned
+
+
+class TestThePromptCarriesNoRealGuest:
+    """
+    A worked example sits in every turn's context, permanently, while the real
+    value it illustrates lives in a transcript that gets trimmed. When the real
+    one ages out, the example is the most available thing shaped like the hole:
+    on --only new-caller-long the agent filled a missing name with "Dhruv
+    Patel", lifted from an example in the system prompt — a real seeded guest
+    with a real booking and a real email.
+
+    Example data in a prompt is indistinguishable from real data once the real
+    data is gone. This does not stop the model reaching for the example; it
+    makes the reach harmless.
+    """
+
+    def test_no_seeded_guest_appears_in_the_system_prompt(self):
+        from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt
+        from scripts.identity_corpus import GUESTS
+
+        prompt = get_coalcreek_prompt("2026-09-01", "03:00 PM")
+
+        found = []
+        for name, _phone, email, *_rest in GUESTS:
+            for part in name.replace("-", " ").replace("'", " ").split():
+                if len(part) > 3 and part in prompt:
+                    found.append(f"{name} (via {part!r})")
+            if email and email in prompt:
+                found.append(f"{name} (email)")
+
+        assert not found, f"real guest data in the prompt: {found}"
