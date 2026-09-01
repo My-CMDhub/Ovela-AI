@@ -606,3 +606,58 @@ def booking_summary_named_guest(history: list, guest_name: str) -> bool:
         (m.get("content") or "" for m in reversed(history) if m.get("role") == "assistant"), "")
     first_name = (guest_name or "").strip().split(" ")[0]
     return bool(first_name) and first_name.lower() in said.lower()
+
+
+_EMAIL_LITERAL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+# "my email is ...", "it's ...", "the address is ..." — the words a caller puts
+# in front of the address before they start spelling it.
+_EMAIL_LEAD_IN = re.compile(
+    r"\b(?:e-?mail(?:\s+address)?(?:\s+is)?|address\s+is|it'?s|that'?s|its)\s+",
+    re.IGNORECASE,
+)
+# The spoken shape: something, then "at", then something, then "dot", then a TLD.
+_EMAIL_SPOKEN = re.compile(r"\bat\b.{0,40}?\bdot\b\s*\w{2,}", re.IGNORECASE)
+
+
+def extract_spoken_email(text: str) -> str:
+    """
+    The email address inside something a caller said, or "".
+
+    Read off the CALLER's own words rather than out of a tool argument. The
+    difference decides whether it survives: an address captured from what the
+    model chose to pass to a tool is only kept when the model chose to pass it,
+    and measured over three replays of the new-caller scenario it did not — the
+    address was spelled out on turn 4 and gone by turn 17. What the caller said
+    is evidence the model did not author, which is the same reason the booking
+    gate reads the transcript.
+
+    Deliberately permissive. This feeds a note that says "read it back to
+    confirm", never a booking; a wrong guess costs one clarifying question,
+    and a miss costs the caller spelling it out twice.
+    """
+    if not text:
+        return ""
+
+    literal = _EMAIL_LITERAL.search(text)
+    if literal:
+        return literal.group(0).strip(".,").lower()
+
+    if not _EMAIL_SPOKEN.search(text):
+        return ""
+
+    # Drop the carrier phrase, keep everything from the address onwards.
+    lead = None
+    for lead in _EMAIL_LEAD_IN.finditer(text):
+        pass                       # the LAST one — "my email, it's ..." has two
+    candidate = text[lead.end():] if lead else text
+    # A sentence ends in a full stop and the normaliser turns "dot" into one
+    # too, so the address arrives with a stray dot glued to the TLD.
+    normalised = normalize_email_for_speech(candidate).strip(".,;:!? ")
+    return normalised if _EMAIL_LITERAL.fullmatch(normalised) else ""
+
+
+def normalize_email_for_speech(raw: str) -> str:
+    """Spoken email to written email. Thin wrapper so the handler's normaliser
+    has one caller-facing name and one home."""
+    from services.voice_agent.functions.coalcreek_handlers import _normalize_email
+    return _normalize_email(raw)

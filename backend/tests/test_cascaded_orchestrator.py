@@ -234,9 +234,14 @@ class TestCascadedPipelineOrchestrator:
             [{"role": "user", "content": "any rooms free?"}]
         )]
 
-        orchestrator.dispatcher.execute.assert_awaited_once_with(
-            "check_availability", {"room_type": "any"}
-        )
+        # Asserted on name and arguments rather than the exact signature: the
+        # orchestrator also threads a per-call context through, which is how
+        # the availability memo reaches the handler, and pinning the arity here
+        # would make that a test failure rather than a feature.
+        orchestrator.dispatcher.execute.assert_awaited_once()
+        name, sent_args = orchestrator.dispatcher.execute.await_args.args[:2]
+        assert name == "check_availability"
+        assert sent_args == {"room_type": "any"}
         assert chunks == ["We have a Queen available."]
 
     @pytest.mark.asyncio

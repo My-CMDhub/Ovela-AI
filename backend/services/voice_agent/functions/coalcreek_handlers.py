@@ -1341,6 +1341,7 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
 
     # ── Correction path: patch reservation + resend Stripe link ──
     email_resent = False
+    patched_reservation = False
     if (guest_email or guest_name) and guest_phone and db_service:
         try:
             docs = await db_service.lookup_motel_reservation(
@@ -1381,6 +1382,7 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                     booking_id=active_doc["$id"],
                     data=patch_data,
                 )
+                patched_reservation = True
                 logger.info("📝 Details corrected in Appwrite for %s", active_doc.get("booking_reference"))
                 final_email = guest_email or active_doc.get("guest_email")
                 if final_email:
@@ -1425,14 +1427,25 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
             f"I've updated your details and resent the payment link. "
             "Could you check your inbox now to make sure it has arrived?"
         )
+    elif patched_reservation:
+        message = "I've successfully updated the details on your booking."
     else:
-        if guest_name and not guest_email:
-            message = "I've successfully updated the name on your booking."
-        else:
-            message = "Details safely stored in my temporary memory for this call."
-        
+        # No reservation on this number, so nothing was written anywhere. This
+        # used to answer "Details safely stored in my temporary memory for this
+        # call" — there was no such memory, nothing was stored, and the model
+        # repeated the claim to the caller. The details ARE now held, by
+        # CallState.heard() in the orchestrator, but they are held as something
+        # the caller said and not as a record, and the wording has to match
+        # that or the agent will treat them as confirmed.
+        message = (
+            "Noted for this call. Nothing is saved anywhere yet — there is no "
+            "booking to attach it to — so read it back to confirm before you "
+            "use it for anything."
+        )
+
     return {
         "success": True,
+        "stored": bool(patched_reservation),
         "message": message,
         "ai_should_say": message
     }

@@ -84,8 +84,25 @@ class CallState:
     total_amount: str = ""
     payment_status: str = ""
 
-    # Availability already quoted aloud, so a second answer cannot contradict
-    # the first: "<dates>, <room>" -> the verdict that was given.
+    # What the CALLER gave us that no tool has confirmed. For a stranger with
+    # no record these are the only copy in existence: update_guest_info used to
+    # answer "Details safely stored in my temporary memory for this call" and
+    # store nothing at all, so the transcript was their only home — and the
+    # transcript is capped at TRANSCRIPT_WINDOW. Measured on
+    # replay_conversation --only new-caller-long: spelled out on turn 3, asked
+    # for on turn 17, lost 3 runs out of 3, once replaced with a different real
+    # guest's name lifted from a worked example in the system prompt.
+    heard_name: str = ""
+    heard_email: str = ""
+    heard_phone: str = ""
+    requested_check_in: str = ""
+    requested_check_out: str = ""
+    requested_room: str = ""
+
+    # PERISHABLE. Availability was true when it was checked and may not be true
+    # now — another caller can take the last room between two turns of this
+    # conversation. Kept so the agent knows it already asked and what it said,
+    # NOT so it can answer from memory. The note says so in as many words.
     availability: dict = field(default_factory=dict)
 
     # One-way actions that actually completed, in the order they happened.
@@ -96,6 +113,52 @@ class CallState:
     # model — the note above is what the model sees. Bounded so a long call
     # cannot grow it without limit.
     evidence: list = field(default_factory=list)
+
+    # Tool arguments that are really the caller talking. The model is passing
+    # back what it heard, so this is where a stranger's details enter the
+    # system — the only place, until a booking exists to hold them.
+    _FROM_CALLER = {
+        "guest_name": "heard_name",
+        "guest_email": "heard_email",
+        "guest_phone": "heard_phone",
+        "check_in_date": "requested_check_in",
+        "check_out_date": "requested_check_out",
+        "room_type": "requested_room",
+    }
+
+    def heard(self, args: dict) -> None:
+        """Keep what the caller gave us, before any tool has verified it.
+
+        Called with the arguments of every tool, because a name reaching
+        lookup_booking and a name reaching create_booking_request are the same
+        caller saying the same thing. Never overwrites with an empty value: the
+        model routinely omits a field it already gave.
+        """
+        if not isinstance(args, dict):
+            return
+        for key, attr in self._FROM_CALLER.items():
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                setattr(self, attr, value.strip())
+
+    def hear_caller(self, said: str) -> None:
+        """Take what we can off the caller's own words, before any tool runs.
+
+        heard() reads tool ARGUMENTS, which only carry a detail when the model
+        chooses to pass it — measured on new-caller-long, the email was spelled
+        out on turn 4 and never reached a tool, so it was gone by turn 17. The
+        caller's sentence is evidence the model did not author, which is the
+        same reason the booking gate reads the transcript.
+        """
+        if not said:
+            return
+        try:
+            from services.voice_agent.text_utils import extract_spoken_email
+            spoken = extract_spoken_email(said)
+            if spoken:
+                self.heard_email = spoken
+        except Exception:      # pragma: no cover - never break a turn over this
+            pass
 
     def observe(self, tool_name: str, args: dict, result) -> None:
         """Record what a tool result established. Never raises — a bad result
@@ -192,19 +255,59 @@ class CallState:
                 stay.append(f"payment {self.payment_status}")
             lines.append(f"- Their booking: {', '.join(stay)}.")
 
-        for what, verdict in self.availability.items():
-            lines.append(f"- Availability already quoted for {what}: {verdict}.")
-
         if self.promises:
             lines.append(f"- Already done on this call: {'; '.join(self.promises)}.")
 
-        if not lines:
+        # What the caller told us and nothing has verified. Kept apart from the
+        # settled facts on purpose: the agent must be able to tell the
+        # difference between "the database says this" and "I think I heard
+        # this", because only one of them is safe to act on.
+        heard = []
+        if self.heard_name:
+            heard.append(f"name as heard: {self.heard_name}")
+        if self.heard_email:
+            heard.append(f"email as heard: {self.heard_email}")
+        if self.heard_phone:
+            heard.append(f"phone as heard: {self.heard_phone}")
+        if self.requested_check_in:
+            stay = self.requested_check_in
+            if self.requested_check_out:
+                stay += f" to {self.requested_check_out}"
+            heard.append(f"dates asked for: {stay}")
+        if self.requested_room:
+            heard.append(f"room asked for: {self.requested_room}")
+
+        # Perishable, and labelled as such. A room that was free when it was
+        # checked can be taken by another caller before this sentence ends.
+        perishable = [f"{what} — {verdict}" for what, verdict in self.availability.items()]
+
+        if not (lines or heard or perishable):
             return ""
-        return (
-            "CALL STATE — established earlier in this call and kept for you by the "
-            "system, because the tool results that produced them are no longer in "
-            "your context. Treat these as things you already know: answer from them "
-            "directly rather than saying you cannot see them, and do not contradict "
-            "them or look them up again unless the caller says something has "
-            "changed.\n" + "\n".join(lines)
-        )
+
+        note = []
+        if lines:
+            note.append(
+                "CALL STATE — established earlier in this call and kept for you by "
+                "the system, because the tool results that produced them are no "
+                "longer in your context. Treat these as things you already know: "
+                "answer from them directly rather than saying you cannot see "
+                "them.\n" + "\n".join(lines)
+            )
+        if heard:
+            note.append(
+                "FROM THE CALLER, NOT YET VERIFIED — this is what they told you, "
+                "kept so you do not have to ask twice. It has not been checked "
+                "against anything. Use it to avoid re-asking, and read it back "
+                "for confirmation before you book, email or charge on the "
+                "strength of it.\n" + "\n".join(f"- {h}" for h in heard)
+            )
+        if perishable:
+            note.append(
+                "AVAILABILITY YOU ALREADY QUOTED — true when it was checked, not "
+                "necessarily true now: another caller can take the last room "
+                "between two of your turns. Say what you said before so you do "
+                "not contradict yourself, and CHECK AGAIN before you promise a "
+                "room or take a booking on it.\n"
+                + "\n".join(f"- {p}" for p in perishable)
+            )
+        return "\n\n".join(note)

@@ -128,6 +128,9 @@ class CascadedPipelineOrchestrator:
         # only spoken words; every tool result is discarded at the end of its
         # own turn, so without this the agent forgets its own lookups.
         self.call_state = CallState()
+        # Per-call scratch shared with the tool handlers. Availability answers
+        # are memoised here for the length of one call.
+        self._tool_context: Dict[str, Any] = {"availability_cache": {}}
         self.is_running = False
         self.current_context_id: Optional[str] = None
         self._pending_llm_task: Optional[asyncio.Task] = None
@@ -919,6 +922,11 @@ class CascadedPipelineOrchestrator:
                     "only call this again if they say yes."
                 ),
             }
+        # What the caller told us, kept before any gate runs: a refusal is not a
+        # reason to forget the name they just spelled out. This is the only copy
+        # for a caller with no record.
+        self.call_state.heard(args)
+
         # create_booking_request holds a room, queues an email and raises a
         # Stripe checkout. Its own gate is `has_user_confirmed_summary`, an
         # argument the MODEL fills in — the gate asks the model whether the
@@ -969,7 +977,12 @@ class CascadedPipelineOrchestrator:
                     "only then update their details."
                 ),
             }
-        result = await self.dispatcher.execute(name, args)
+        # The per-call availability memo only ever worked on the legacy handler,
+        # which passes this context; the cascaded path called execute() with two
+        # arguments and `context` was None, so check_availability re-ran the
+        # whole query every time the model asked — two or three times in a
+        # single booking conversation, against an 18s timeout budget.
+        result = await self.dispatcher.execute(name, args, self._tool_context)
         # Every tool goes through here, so this is the one place that sees what
         # the call has established. Recorded after the gate above, so a refused
         # tool records nothing.
@@ -986,6 +999,10 @@ class CascadedPipelineOrchestrator:
         latest_user_text = history[-1].get("content", "")
         if not latest_user_text:
             return
+        # Anything in the caller's own sentence worth keeping — an address they
+        # spelled out survives here whether or not the model passes it to a
+        # tool, and whether or not the turn is still in the window later.
+        self.call_state.hear_caller(latest_user_text)
 
         try:
             await self._ensure_call_context()

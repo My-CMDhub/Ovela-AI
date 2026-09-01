@@ -161,3 +161,115 @@ def test_only_the_recent_transcript_is_replayed_verbatim():
 def test_a_short_call_is_replayed_whole():
     history = [{"role": "user", "content": "hello"}]
     assert recent_transcript(history) == history
+
+
+# ── what the caller said, which nothing else in the system keeps ────────────
+#
+# For a guest with no record, their spelled-out name and email exist in exactly
+# one place: whatever we choose to keep. update_guest_info answered "Details
+# safely stored in my temporary memory for this call" and stored nothing, so
+# the transcript was it — and the transcript is capped at TRANSCRIPT_WINDOW.
+# Measured on replay_conversation --only new-caller-long: given on turn 3,
+# needed on turn 17, lost 3 runs out of 3.
+
+def test_what_the_caller_spelled_out_is_kept():
+    state = CallState()
+    state.heard({"guest_name": "Siobhan O'Connor", "guest_email": "s.oconnor-work@bigpond.com"})
+    note = state.as_note()
+
+    assert state.heard_name == "Siobhan O'Connor"
+    assert "s.oconnor-work@bigpond.com" in note
+    assert "NOT YET VERIFIED" in note
+
+
+def test_it_is_never_presented_as_a_confirmed_fact():
+    """The agent has to be able to tell "the database says this" from "I think
+    I heard this", because only one of them is safe to book on."""
+    state = CallState()
+    state.heard({"guest_name": "Siobhan O'Connor"})
+
+    assert not state.identity_confirmed
+    assert "read it back for confirmation" in state.as_note()
+
+
+def test_a_field_the_model_omits_does_not_erase_what_it_gave_before():
+    """The model routinely re-sends a subset of the arguments. Treating a
+    missing field as a deletion loses the email on the very next tool call."""
+    state = CallState()
+    state.heard({"guest_name": "Ada Lovelace", "guest_email": "ada@example.com"})
+    state.heard({"guest_name": "Ada Lovelace"})            # email omitted
+    state.heard({"guest_email": ""})                       # and blanked
+
+    assert state.heard_email == "ada@example.com"
+
+
+def test_junk_arguments_are_ignored():
+    state = CallState()
+    state.heard(None)
+    state.heard({"guest_name": None, "guest_email": 42})
+    assert state.heard_name == "" and state.heard_email == ""
+
+
+# ── availability is perishable, and the note has to say so ─────────────────
+
+def test_availability_is_not_offered_as_a_fact_to_answer_from():
+    """The first version of this note said "do not look them up again unless
+    the caller says something has changed" — which is right for a booking
+    reference and wrong for a room, because another caller can take the last
+    one between two turns of this conversation."""
+    state = CallState()
+    state.observe("check_availability",
+                  {"check_in_date": "2026-09-12", "check_out_date": "2026-09-14"},
+                  {"available": True})
+    note = state.as_note()
+
+    assert "CHECK AGAIN" in note
+    assert "not necessarily true now" in note
+    assert "do not" not in note.split("AVAILABILITY YOU ALREADY QUOTED")[1].lower() \
+        or "do not contradict" in note
+
+
+def test_a_settled_booking_is_still_offered_as_a_fact():
+    """The split has to keep working in the other direction: a reference does
+    not go stale, and telling the agent to re-check it would undo A1."""
+    state = CallState()
+    state.observe("lookup_booking", {"guest_name": "Dhruv Patel"}, CONFIRMED)
+    note = state.as_note()
+
+    assert "answer from them directly" in note
+    assert "CC-76818" in note
+
+
+# ── heard off the caller's own words, not off a tool argument ──────────────
+
+def test_an_address_the_caller_spells_out_is_kept_without_any_tool():
+    """heard() reads tool arguments, which only carry a detail when the model
+    chooses to pass it. Measured on new-caller-long, the email was spelled out
+    on turn 4, never reached a tool, and was gone by turn 17."""
+    state = CallState()
+    state.hear_caller("My email is s dot oconnor dash work at bigpond dot com.")
+
+    assert state.heard_email == "s.oconnor-work@bigpond.com"
+    assert "s.oconnor-work@bigpond.com" in state.as_note()
+
+
+def test_an_ordinary_sentence_is_not_mistaken_for_an_address():
+    state = CallState()
+    state.hear_caller("I'd like a room at the motel, and that's all.")
+    state.hear_caller("Sure, that's fine.")
+    assert state.heard_email == ""
+
+
+def test_a_corrected_address_replaces_the_first_one():
+    """Callers misspeak and then fix it. The last one they said is the one."""
+    state = CallState()
+    state.hear_caller("it's ada at example dot com")
+    state.hear_caller("sorry, it's ada dot lovelace at example dot com")
+    assert state.heard_email == "ada.lovelace@example.com"
+
+
+def test_hearing_junk_never_raises():
+    state = CallState()
+    for junk in (None, "", "   ", "at dot"):
+        state.hear_caller(junk)
+    assert state.heard_email == ""

@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 
 from scripts.identity_corpus import CALLER_PHONE
 
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
 # The prompt asks for a short first sentence so speech starts before the whole
 # answer is written. These are the words the model reaches for to satisfy that
 # cheaply, and reaching for them when nothing was actually said to acknowledge
@@ -262,6 +264,26 @@ SCENARIOS = [
         ],
     ),
     Scenario(
+        key="email-capture",
+        title="A new guest gives an email that has to survive being heard",
+        claim="The address the caller confirmed and the address we book with must be "
+              "the same string. The prompt asks the agent to echo a newly collected "
+              "email back for confirmation, then to read it NATURALLY in the final "
+              "summary — so the thing to check is not the summary wording but whether "
+              "the address the caller agreed to is the address that reaches the tool.",
+        caller_phone=UNKNOWN,
+        inconclusive_unless_called="create_booking_request",
+        turns=[
+            Turn(says="Hi, I'd like to book a queen room from the 10th of September "
+                      "for two nights please."),
+            Turn(says="It's Siobhan O'Connor."),
+            Turn(says="That's S-I-O-B-H-A-N, then O apostrophe C-O-N-N-O-R."),
+            Turn(says="My email is s dot oconnor dash work at bigpond dot com."),
+            Turn(says="Yes, that's the right email."),
+            Turn(says="Yes, go ahead and book it."),
+        ],
+    ),
+    Scenario(
         key="new-caller-long",
         title="A stranger who spells it out, then talks for a while",
         claim="Nobody on file, so the name and email exist ONLY in the transcript — "
@@ -292,11 +314,13 @@ SCENARIOS = [
                 says="Right, let's book it — a queen from the 10th of September for two nights.",
                 why="The details were given fourteen turns ago and are outside the window.",
             ),
-            Turn(
-                says="Yes, go ahead.",
-                must_say_all=["oconnor"],
-                why="If it cannot say the email back, it never had it to book with.",
-            ),
+            # No assertion here on purpose. Two different things were being
+            # added together: whether the system still HAS the address (Track A,
+            # deterministic, tests/test_call_state.py) and whether the agent
+            # reads it BACK (Track B, a rate). The `email read-back` counter in
+            # the summary measures the second without pretending it is the
+            # first.
+            Turn(says="Yes, go ahead."),
         ],
     ),
     Scenario(
@@ -381,7 +405,7 @@ async def _build_agent(caller_phone: str, allow_writes: bool):
     agent.call_sid = "HARNESS"
     await agent._ensure_call_context()
 
-    calls, attempted, unearned = [], [], []
+    calls, attempted, unearned, booked_email = [], [], [], []
     real_execute = agent.dispatcher.execute
 
     async def watched(name, args, context=None):
@@ -389,6 +413,8 @@ async def _build_agent(caller_phone: str, allow_writes: bool):
         # argument the MODEL fills in, so the only way to know whether it is
         # ever asserted falsely is to check the same thing against the
         # transcript and count the disagreements.
+        if name == "create_booking_request" and args.get("guest_email"):
+            booked_email.append(args["guest_email"])
         if name == "create_booking_request":
             from services.voice_agent.text_utils import (
                 booking_summary_confirmed, booking_summary_named_guest)
@@ -409,7 +435,7 @@ async def _build_agent(caller_phone: str, allow_writes: bool):
         return await real_execute(name, args, context)
 
     agent.dispatcher.execute = watched
-    return agent, calls, attempted, unearned
+    return agent, calls, attempted, unearned, booked_email
 
 
 async def _one_turn(agent, history, said):
@@ -452,7 +478,8 @@ def _check(turn, reply, calls):
 async def run_scenario(sc: Scenario, noise: str, show: bool, allow_writes: bool,
                        inconclusive: list, booking_gate: list, booking_gate_ok: list,
                        booking_gate_unnamed: list, narrated: list,
-                       ungrounded: list) -> list:
+                       ungrounded: list, email_matched: list,
+                       email_mismatched: list, email_never_echoed: list) -> list:
     print(f"\n\033[1m{sc.key}\033[0m — {sc.title}")
     print(f"  {sc.claim}")
 
@@ -461,7 +488,8 @@ async def run_scenario(sc: Scenario, noise: str, show: bool, allow_writes: bool,
         from tests.asr_noise_simulator import ASRNoiseSimulator
         degrade = ASRNoiseSimulator(seed=42)
 
-    agent, calls, attempted, unearned = await _build_agent(sc.caller_phone, allow_writes)
+    agent, calls, attempted, unearned, booked_email = await _build_agent(
+        sc.caller_phone, allow_writes)
     history, failures = [], [0, 0]
     openers, first_lens = [], []
 
@@ -510,6 +538,25 @@ async def run_scenario(sc: Scenario, noise: str, show: bool, allow_writes: bool,
         failures[0] += len(safety)
         failures[1] += len(help_)
 
+    # Did the caller hear the address we booked with? The prompt asks the agent
+    # to echo a newly collected email back before using it. If the address it
+    # echoed and the address it booked with differ, the caller confirmed one
+    # thing and the motel emailed another.
+    if booked_email:
+        spoken_emails = _EMAIL.findall(" ".join(
+            m["content"] for m in history if m["role"] == "assistant"))
+        for used in booked_email:
+            if not spoken_emails:
+                email_never_echoed.append(sc.key)
+                print("  \033[33mNOT ECHOED\033[0m — booked with "
+                      f"{used!r} without ever reading an address back to the caller")
+            elif used.strip().lower() not in {e.strip().lower() for e in spoken_emails}:
+                email_mismatched.append((spoken_emails[-1], used))
+                print(f"  \033[31mMISMATCH\033[0m — read back {spoken_emails[-1]!r}, "
+                      f"booked with {used!r}")
+            else:
+                email_matched.append(used)
+
     for claimed, summarised, named in unearned:
         if claimed and not summarised:
             booking_gate.append(sc.key)
@@ -551,11 +598,13 @@ async def main_async(args):
     leaks = misses = 0
     inconclusive, booking_gate, booking_gate_ok = [], [], []
     booking_gate_unnamed, narrated, ungrounded = [], [], []
+    email_matched, email_mismatched, email_never_echoed = [], [], []
     all_openers, all_first_lens = [], []
     for sc in chosen:
         (a, b), openers, first_lens = await run_scenario(
             sc, args.noise, args.show, args.allow_writes, inconclusive,
-            booking_gate, booking_gate_ok, booking_gate_unnamed, narrated, ungrounded)
+            booking_gate, booking_gate_ok, booking_gate_unnamed, narrated, ungrounded,
+            email_matched, email_mismatched, email_never_echoed)
         leaks += a
         misses += b
         all_openers += openers
@@ -576,6 +625,12 @@ async def main_async(args):
     if narrated:
         print(f"\033[33mnarrated holds   {len(narrated)}\033[0m — promised a hold or a "
               f"payment link with no tool call behind it ({', '.join(narrated)})")
+
+    seen_email = len(email_matched) + len(email_mismatched) + len(email_never_echoed)
+    if seen_email:
+        print(f"\nemail read-back  {len(email_matched)}/{seen_email} booked with an "
+              f"address the caller had heard  "
+              f"({len(email_mismatched)} mismatched, {len(email_never_echoed)} never echoed)")
 
     if ungrounded:
         by_kind = {}

@@ -262,3 +262,84 @@ class TestBookingNeedsARealSummary:
 
         assert result["success"] is False
         agent.dispatcher.execute.assert_not_called()
+
+
+class TestUpdateGuestInfoTellsTheTruth:
+    """
+    It used to answer "Details safely stored in my temporary memory for this
+    call" for a caller with no reservation — zero DB writes, no in-memory
+    store, nothing. The model repeated the claim to the caller. A tool that
+    reports an action it did not perform is the same bug class as a tool that
+    returns an action nobody performs.
+    """
+
+    @pytest.mark.asyncio
+    async def test_it_does_not_claim_to_have_saved_what_it_did_not_save(self):
+        from services.voice_agent.functions.coalcreek_handlers import handle_update_guest_info
+        db = MagicMock()
+        db.lookup_motel_reservation = AsyncMock(return_value=[])   # a new caller
+
+        result = await handle_update_guest_info(
+            {"guest_name": "Ada Lovelace", "guest_email": "ada@example.com"}, db, CALLER)
+
+        assert result["stored"] is False
+        assert "stored" not in result["message"].lower()
+        assert "nothing is saved" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_a_real_update_still_reports_as_one(self):
+        from services.voice_agent.functions.coalcreek_handlers import handle_update_guest_info
+        mine = dict(STRANGER_BOOKING, guest_phone=CALLER, guest_email="",
+                    status="pending_payment", payment_status="pending")
+        db = MagicMock()
+        db.lookup_motel_reservation = AsyncMock(return_value=[dict(mine, **{"$id": "doc1"})])
+        db.update_motel_reservation = AsyncMock()
+
+        result = await handle_update_guest_info({"guest_name": "Bob Smith"}, db, CALLER)
+
+        assert result["stored"] is True
+        db.update_motel_reservation.assert_awaited_once()
+
+
+class TestTheCallerIsHeardBeforeAnyGate:
+    """A refusal is not a reason to forget the name the caller just spelled
+    out. The details are recorded before the gates run, or a blocked tool
+    silently throws away the only copy."""
+
+    @pytest.mark.asyncio
+    async def test_a_refused_booking_still_keeps_what_the_caller_said(self):
+        from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestrator
+        agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock())
+        agent.dispatcher = MagicMock()
+        agent.dispatcher.execute = AsyncMock(return_value={"success": True})
+        agent.dispatcher.caller_reservation = AsyncMock(return_value=[])
+
+        # No summary was read back, so this is refused by the booking gate.
+        result = await agent._execute_tool(
+            "create_booking_request",
+            {"guest_name": "Siobhan O'Connor", "guest_email": "s.oconnor@bigpond.com",
+             "has_user_confirmed_summary": "YES"}, [])
+
+        assert result["success"] is False
+        agent.dispatcher.execute.assert_not_called()
+        assert agent.call_state.heard_name == "Siobhan O'Connor"
+        assert agent.call_state.heard_email == "s.oconnor@bigpond.com"
+
+
+class TestTheAvailabilityMemoReachesTheHandler:
+    """The per-call availability cache only ever worked on the legacy handler,
+    which passes a context. The cascaded path called execute() with two
+    arguments, so `context` was None and every check_availability re-ran the
+    whole query — two or three times in one booking conversation."""
+
+    @pytest.mark.asyncio
+    async def test_a_per_call_context_is_threaded_through(self):
+        from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestrator
+        agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock())
+        agent.dispatcher = MagicMock()
+        agent.dispatcher.execute = AsyncMock(return_value={"available": True})
+
+        await agent._execute_tool("check_availability", {"room_type": "queen"}, [])
+
+        context = agent.dispatcher.execute.await_args.args[2]
+        assert isinstance(context.get("availability_cache"), dict)
