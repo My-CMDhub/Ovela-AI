@@ -63,3 +63,4 @@ scripts/*.py
 
 # Local documentation
 redeploy-guide.md
+!scripts/probe_live_call.py
