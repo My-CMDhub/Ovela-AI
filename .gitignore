@@ -83,3 +83,4 @@ traces/cover-*README.md
 !backend/tests/test_tool_preconditions.py
 !backend/tests/test_grounding.py
 !backend/scripts/probe_live_call.py
+!backend/tests/test_spelled_names.py

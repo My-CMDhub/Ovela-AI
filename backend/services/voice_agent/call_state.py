@@ -94,6 +94,12 @@ class CallState:
     # guest's name lifted from a worked example in the system prompt.
     heard_name: str = ""
     heard_email: str = ""
+    # What the caller SPELLED, letter by letter. Kept apart from heard_name
+    # because it is better evidence: a caller who spells their name is telling
+    # you they expect the sound to be wrong. On a real call the recogniser got
+    # every letter of "s i o b h a n" right and the booking was still written
+    # as "Cyborn O'Connor", because nothing read the letters.
+    spelled_name: str = ""
     heard_phone: str = ""
     requested_check_in: str = ""
     requested_check_out: str = ""
@@ -153,10 +159,14 @@ class CallState:
         if not said:
             return
         try:
-            from services.voice_agent.text_utils import extract_spoken_email
+            from services.voice_agent.text_utils import (
+                extract_spelled_words, extract_spoken_email)
             spoken = extract_spoken_email(said)
             if spoken:
                 self.heard_email = spoken
+            spelled = extract_spelled_words(said)
+            if spelled:
+                self.spelled_name = " ".join(spelled)
         except Exception:      # pragma: no cover - never break a turn over this
             pass
 
@@ -263,8 +273,16 @@ class CallState:
         # difference between "the database says this" and "I think I heard
         # this", because only one of them is safe to act on.
         heard = []
-        if self.heard_name:
-            heard.append(f"name as heard: {self.heard_name}")
+        if self.spelled_name:
+            heard.append(
+                f"name the caller SPELLED OUT, letter by letter: {self.spelled_name} "
+                f"— use this exact spelling. They spelled it because they expect "
+                f"the sound to be misheard, and it usually is."
+            )
+        if self.heard_name and self.heard_name.lower() != self.spelled_name.lower():
+            label = "name as heard (unreliable — see the spelling above)" \
+                if self.spelled_name else "name as heard"
+            heard.append(f"{label}: {self.heard_name}")
         if self.heard_email:
             heard.append(f"email as heard: {self.heard_email}")
         if self.heard_phone:

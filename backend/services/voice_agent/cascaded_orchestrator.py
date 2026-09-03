@@ -41,7 +41,7 @@ from services.voice_agent.bridges.cartesia_standalone import CartesiaStandaloneB
 from services.voice_agent.text_utils import prepare_for_tts
 from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt, build_caller_context_note
 from services.voice_agent.call_state import CallState, recent_transcript
-from services.voice_agent.text_utils import booking_summary_confirmed
+from services.voice_agent.text_utils import booking_summary_confirmed, spelling_honoured
 from services.voice_agent.grounding import unsourced_claims, business_facts
 from services.voice_agent.text_utils import transfer_consent_given
 from services.voice_agent.functions.coalcreek_definitions import get_coalcreek_functions
@@ -1070,6 +1070,30 @@ class CascadedPipelineOrchestrator:
                     "this again only after they agree to THAT."
                 ),
             }
+
+        # A name the caller spelled out, letter by letter, beats the name the
+        # model thought it heard. On a real call the recogniser transcribed
+        # "s i o b h a n" perfectly and the booking was written as "Cyborn
+        # O'Connor" anyway — three times, each confirmed by a caller who could
+        # not hear the difference in a spoken read-back.
+        if name in ("create_booking_request", "update_guest_info"):
+            spelled = self.call_state.spelled_name
+            if spelled and not spelling_honoured(spelled, args.get("guest_name", "")):
+                self._note_refusal(name)
+                logger.warning(
+                    "🔒 [CascadedOrchestrator] %s refused — caller spelled %r, "
+                    "this would have written %r", name, spelled, args.get("guest_name", ""),
+                )
+                return {
+                    "success": False,
+                    "error": (
+                        f"The caller spelled their name out letter by letter as "
+                        f"'{spelled}'. You passed '{args.get('guest_name', '')}'. Use "
+                        f"the spelling exactly — they spelled it because they knew it "
+                        f"would be misheard. Read '{spelled}' back to them one letter "
+                        f"at a time to confirm, then call this again with that name."
+                    ),
+                }
 
         # update_guest_info patches the reservation it finds on the caller's
         # number and re-sends the payment link to whatever email it is given.

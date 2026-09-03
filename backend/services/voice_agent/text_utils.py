@@ -661,3 +661,112 @@ def normalize_email_for_speech(raw: str) -> str:
     has one caller-facing name and one home."""
     from services.voice_agent.functions.coalcreek_handlers import _normalize_email
     return _normalize_email(raw)
+
+
+# "apostrophe" is what a caller says; these are what the recogniser writes down
+# when they say it. "Epistroph" is verbatim from a real call.
+_APOSTROPHE_WORDS = {"apostrophe", "epistroph", "epistrophe", "apostrophy"}
+_SPELL_NOISE = {"then", "and", "that's", "thats", "it's", "its", "is", "a",
+                "capital", "uppercase", "lowercase", "as", "in", "for", "like",
+                "so", "um", "uh", "okay", "ok", "my", "name", "the", "letter",
+                "letters", "spelled", "spelt", "spelling", "again", "please"}
+_LETTER = re.compile(r"^[a-z]$")
+
+
+def extract_spelled_words(text: str) -> list:
+    """
+    The words a caller spelled out, assembled from their letters.
+
+    This is the difference between a booking under "Siobhan O'Connor" and one
+    under "Cyborn O'Connor". On a real call the recogniser produced:
+
+        "My name is Siban O'Connor. That's s i o b h a n, then o, then
+         apostrophe, c o n n o r."
+
+    Every spelled letter is correct. The phonetic guess beside it is not — and
+    the phonetic guess is what reached the database, three times, because
+    nothing in the system read the letters. A caller who spells their name is
+    telling you they expect the sound to be wrong; taking the sound anyway is
+    ignoring the one piece of evidence they went out of their way to give.
+
+    Returns assembled words in the order they were spelled, e.g.
+    ["Siobhan", "O'Connor"]. Runs shorter than three letters are ignored: "a"
+    and "I" are words, and two stray letters are more likely a false read than
+    a name.
+    """
+    if not text:
+        return []
+
+    # Hyphenated spelling — "S-I-O-B-H-A-N" — becomes separate letter tokens.
+    normalised = re.sub(r"(?<=\b[A-Za-z])-(?=[A-Za-z]\b)", " ", text)
+    tokens = re.findall(r"[A-Za-z']+", normalised)
+
+    lowered = [t.lower() for t in tokens]
+    words, run, pending_apostrophe = [], [], False
+
+    for i, token in enumerate(lowered):
+        if _LETTER.match(token):
+            if pending_apostrophe and run:
+                run.append("'")
+                pending_apostrophe = False
+            run.append(token)
+            continue
+
+        if token in _APOSTROPHE_WORDS:
+            # Only meaningful inside a spelling; a bare "apostrophe" is not.
+            pending_apostrophe = bool(run)
+            continue
+
+        if token in _SPELL_NOISE:
+            # "then" is a filler INSIDE a spelling ("o, then apostrophe, c o n
+            # n o r") and also the join BETWEEN two spelled words ("s i o b h a
+            # n, then o..."). The next meaningful token tells them apart: an
+            # apostrophe continues the word, anything else starts a new one.
+            nxt = next((t for t in lowered[i + 1:]
+                        if t not in _SPELL_NOISE), "")
+            if len(run) >= 3 and nxt not in _APOSTROPHE_WORDS:
+                words.append(_assemble(run))
+                run, pending_apostrophe = [], False
+            continue
+
+        # A real word ends the run.
+        if len(run) >= 3:
+            words.append(_assemble(run))
+        run, pending_apostrophe = [], False
+
+    if len(run) >= 3:
+        words.append(_assemble(run))
+    return words
+
+
+def _assemble(run: list) -> str:
+    """Letters to a word, capitalised the way a name is written."""
+    word = "".join(run)
+    parts = word.split("'")
+    return "'".join(p.capitalize() for p in parts) if len(parts) > 1 else word.capitalize()
+
+
+def spelling_honoured(spelled: str, written: str) -> bool:
+    """
+    Does `written` keep every word the caller spelled out?
+
+    The spelling is the authority. A caller spells their name precisely because
+    the sound is going to be wrong, so a value that drops or alters any spelled
+    word is a value that ignored the only reliable evidence on offer.
+
+    Deliberately one-directional: the written name may carry MORE than was
+    spelled — a caller often spells only the surname and says the first name
+    normally — but it may not carry less, and it may not carry a different
+    version of a word that was spelled.
+    """
+    if not spelled:
+        return True                       # nothing was spelled; nothing to honour
+    if not written:
+        return False
+
+    def _bare(value):
+        return re.sub(r"[^a-z]", "", value.lower())
+
+    written_words = {_bare(w) for w in written.split() if _bare(w)}
+    return all(_bare(word) in written_words
+               for word in spelled.split() if _bare(word))
