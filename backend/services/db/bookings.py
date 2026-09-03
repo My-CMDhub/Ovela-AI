@@ -48,6 +48,26 @@ def normalise_lookup_value(field: str, value):
     return value
 
 
+INACTIVE_STATUSES = {"cancelled", "rejected"}
+
+
+def _live_only(docs: list) -> list:
+    """Drop cancelled and rejected reservations.
+
+    A module-level function, not a method, on purpose: lookup_motel_reservation
+    wraps everything in a broad `except` that returns [] — so an attribute that
+    is not there becomes "no booking found" rather than a crash, and the first
+    version of this was exactly that, silently, in every test that hand-binds
+    the mixin. A free function cannot be unbound.
+
+    A missing status is treated as live. Appwrite stores absent values as None,
+    and refusing to find a booking because of a pipeline glitch is worse than
+    finding it.
+    """
+    return [d for d in (docs or [])
+            if (d.get("status") or "").lower() not in INACTIVE_STATUSES]
+
+
 class BookingsMixin:
     """
     Handles all Booking related operations.
@@ -513,6 +533,12 @@ class BookingsMixin:
             logger.error("Error finding booking by stripe_session_id %s: %s", stripe_session_id, e)
             return None
 
+    # A cancelled booking is not a booking. get_motel_reservations already drops
+    # these before the availability check sees them; the identity lookups did
+    # not, so a cancelled row went on answering the phone — and being newest,
+    # it answered first. Found when a cancelled test booking started resolving
+    # ahead of the real reservation on the same number: identity eval went from
+    # 0 wrong-person to 3.
     async def _recent_reservations(self, base_tenant, limit: int = 100) -> list:
         """This tenant's recent reservations — the candidate set for fuzzy matching."""
         result = await self._motel_request(
@@ -520,7 +546,7 @@ class BookingsMixin:
             f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
             params={"queries": [base_tenant, self.Query.order_desc("created_at"), self.Query.limit(limit)]}
         )
-        return result.get("documents", []) if result else []
+        return _live_only(result.get("documents", []) if result else [])
 
     async def lookup_motel_reservation(
         self,
@@ -548,7 +574,7 @@ class BookingsMixin:
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
                     params={"queries": queries}
                 )
-                docs = result.get("documents", []) if result else []
+                docs = _live_only(result.get("documents", []) if result else [])
                 if docs:
                     return docs
 
@@ -560,7 +586,7 @@ class BookingsMixin:
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
                     params={"queries": queries}
                 )
-                docs = result.get("documents", []) if result else []
+                docs = _live_only(result.get("documents", []) if result else [])
                 if docs:
                     return docs
 
@@ -594,7 +620,7 @@ class BookingsMixin:
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
                     params={"queries": queries}
                 )
-                docs = result.get("documents", []) if result else []
+                docs = _live_only(result.get("documents", []) if result else [])
                 if docs:
                     return docs
 
