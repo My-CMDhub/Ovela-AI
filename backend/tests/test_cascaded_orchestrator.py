@@ -851,3 +851,71 @@ class TestCallStateWiring:
         assert result["transferred"] is False
         orchestrator.dispatcher.execute.assert_not_called()
         assert orchestrator.call_state.promises == []
+
+
+class TestTheCallWritesItselfDown:
+    """
+    Nothing was saved for a live call before this: save_call_transcript only
+    ever fired on the rate-limit-blocked path. Diagnosing the four test calls
+    on 3 September meant fetching each Twilio recording and running it through
+    Whisper — and half the findings came out of the metadata below rather than
+    the words. Seventeen barge-ins in one 186-second call was the number that
+    led to the interrupted-reply bug.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_finished_call_is_written_down(self, orchestrator):
+        orchestrator.call_sid = "CAtest"
+        orchestrator.user_phone = "+61400000000"
+        orchestrator.history = [
+            {"role": "user", "content": "what time is check-in?"},
+            {"role": "assistant", "content": "Check-in is from 2 p.m."},
+        ]
+        orchestrator._tools_called = ["lookup_booking", "lookup_booking", "check_availability"]
+        orchestrator._barge_ins = 17
+
+        saved = AsyncMock(return_value={"ok": True})
+        with patch("services.appwrite.db_service.save_call_transcript", saved):
+            await orchestrator._save_transcript()
+
+        saved.assert_awaited_once()
+        kw = saved.await_args.kwargs
+        assert "Caller: what time is check-in?" in kw["transcript"]
+        assert "Agent: Check-in is from 2 p.m." in kw["transcript"]
+        assert kw["metadata"]["barge_ins"] == 17
+        assert kw["metadata"]["tools"] == {"lookup_booking": 2, "check_availability": 1}
+
+    @pytest.mark.asyncio
+    async def test_it_is_written_once_even_if_teardown_runs_twice(self, orchestrator):
+        orchestrator.history = [{"role": "user", "content": "hello"}]
+        saved = AsyncMock(return_value={"ok": True})
+        with patch("services.appwrite.db_service.save_call_transcript", saved):
+            await orchestrator._save_transcript()
+            await orchestrator._save_transcript()
+        assert saved.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_call_where_nobody_spoke_writes_nothing(self, orchestrator):
+        orchestrator.history = []
+        saved = AsyncMock(return_value={"ok": True})
+        with patch("services.appwrite.db_service.save_call_transcript", saved):
+            await orchestrator._save_transcript()
+        saved.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_write_cannot_break_the_call_tearing_down(self, orchestrator):
+        """A transcript is worth nothing if it can break the thing it describes."""
+        orchestrator.history = [{"role": "user", "content": "hello"}]
+        with patch("services.appwrite.db_service.save_call_transcript",
+                   AsyncMock(side_effect=RuntimeError("Appwrite is down"))):
+            await orchestrator._save_transcript()   # must not raise
+
+    @pytest.mark.asyncio
+    async def test_stopping_the_orchestrator_saves_the_call(self, orchestrator):
+        orchestrator.history = [{"role": "user", "content": "hello"}]
+        with patch.object(orchestrator.deepgram, "close", AsyncMock()), \
+             patch.object(orchestrator.cartesia, "close", AsyncMock()), \
+             patch("services.appwrite.db_service.save_call_transcript",
+                   AsyncMock(return_value={})) as saved:
+            await orchestrator.stop()
+        saved.assert_awaited_once()

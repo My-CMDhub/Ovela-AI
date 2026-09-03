@@ -18,6 +18,7 @@ import logging
 import time
 import uuid
 import inspect
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -148,6 +149,18 @@ class CascadedPipelineOrchestrator:
         # the caller heard it, so the agent has to remember saying it.
         self._current_turn_parts: List[str] = []
 
+        # The call's own record, written once at teardown. Nothing was saved
+        # for a live call before this: save_call_transcript only ever fired on
+        # the rate-limit-blocked path, so reviewing what happened meant pulling
+        # the Twilio recording and running it through Whisper. These counters
+        # are the things that turned out to matter when doing that by hand.
+        self._call_started_at: float = time.time()
+        self._transcript_saved: bool = False
+        self._tools_called: List[str] = []
+        self._refusals: List[str] = []
+        self._unsourced: List[str] = []
+        self._barge_ins: int = 0
+
         # True once this turn's first audio chunk has reached Twilio. Barge-in
         # stays disarmed until then so LLM think-time can't be interrupted.
         self._agent_audio_started: bool = False
@@ -227,6 +240,7 @@ class CascadedPipelineOrchestrator:
 
         logger.info(f"🛑 [CascadedOrchestrator] Barge-in triggered ({reason}). Cutting audio!")
         self.state = ConversationState.AWAITING_INPUT
+        self._barge_ins += 1
 
         # 1. Cancel ongoing Cartesia TTS generation
         if self.current_context_id:
@@ -682,6 +696,7 @@ class CascadedPipelineOrchestrator:
                                 + [m.get("content", "") for m in self.history
                                    if m.get("role") == "user"]
                                 + business_facts()):
+                            self._unsourced.append(f"{kind}:{claim}")
                             logger.warning(
                                 "🧾 [CascadedOrchestrator] unsourced %s spoken: %s "
                                 "— traced to no tool result, nothing the caller "
@@ -791,6 +806,85 @@ class CascadedPipelineOrchestrator:
             logger.error(f"🔴 [CascadedOrchestrator] Transfer failed: {e}")
             sentry_sdk.capture_exception(e)
 
+    def _note_refusal(self, tool: str):
+        """Record a gate firing, for the call's own record. Returns None so it
+        can sit inside the refusal message it belongs to without changing it."""
+        self._refusals.append(tool)
+        return None
+
+    async def _save_transcript(self) -> None:
+        """
+        Write the call down before the process forgets it.
+
+        Nothing was saved for a live call until this existed: save_call_transcript
+        only ever fired on the rate-limit-blocked path, so working out what
+        happened on a real call meant fetching the Twilio recording and running
+        it through Whisper — for every call, every time. The four test calls on
+        3 September were diagnosed that way, and half the findings came out of
+        the metadata below rather than the words.
+
+        Never raises. A failed write must not stop a call tearing down cleanly,
+        and a transcript is worth exactly nothing if it can break the thing it
+        is describing.
+        """
+        if self._transcript_saved or not self.history:
+            return
+        self._transcript_saved = True
+
+        try:
+            lines = []
+            for message in self.history:
+                text = (message.get("content") or "").strip()
+                if not text:
+                    continue
+                lines.append(f"{'Caller' if message.get('role') == 'user' else 'Agent'}: {text}")
+            if not lines:
+                return
+
+            state = self.call_state
+            tools = OrderedDict()
+            for name in self._tools_called:
+                tools[name] = tools.get(name, 0) + 1
+
+            from services.appwrite import db_service
+
+            await db_service.save_call_transcript(
+                tenant_id=self.tenant_id or "coalcreek",
+                call_sid=self.call_sid or "",
+                caller_phone=self.user_phone or "",
+                transcript="\n".join(lines),
+                duration=int(time.time() - self._call_started_at),
+                booking_ref=state.booking_reference or "",
+                status="completed",
+                room_type=state.room_type or "",
+                customer_name=state.guest_name or state.heard_name or "Not provided",
+                metadata={
+                    # The things that turned out to matter when reading these
+                    # calls by hand. Barge-ins first: seventeen of them in one
+                    # 186-second call was the signal that led to the bug where
+                    # an interrupted reply was dropped from the agent's memory.
+                    "barge_ins": self._barge_ins,
+                    "turns": sum(1 for m in self.history if m.get("role") == "user"),
+                    "tools": dict(tools),
+                    "refusals": self._refusals,
+                    "unsourced_claims": self._unsourced,
+                    "identity_confirmed": state.identity_confirmed,
+                    "identity_basis": state.identity_basis,
+                    "promises": state.promises,
+                    "availability_quoted": state.availability,
+                    "heard_email": state.heard_email,
+                    "heard_name": state.heard_name,
+                },
+            )
+            logger.info(
+                "📝 [CascadedOrchestrator] Transcript saved | %s | %d turns | "
+                "%d barge-ins | tools=%s",
+                self.call_sid, sum(1 for m in self.history if m.get("role") == "user"),
+                self._barge_ins, dict(tools),
+            )
+        except Exception as exc:
+            logger.error("📝 [CascadedOrchestrator] Transcript save failed: %s", exc, exc_info=True)
+
     async def stop(self) -> None:
         """
         Stop the orchestrator and close all active bridges.
@@ -798,6 +892,7 @@ class CascadedPipelineOrchestrator:
         self.is_running = False
         if self._pending_llm_task and not self._pending_llm_task.done():
             self._pending_llm_task.cancel()
+        await self._save_transcript()
         await self.deepgram.close()
         await self.cartesia.close()
         logger.info("🛑 [CascadedOrchestrator] Stopped completely")
@@ -939,7 +1034,7 @@ class CascadedPipelineOrchestrator:
                 "success": False,
                 "transferred": False,
                 "message": (
-                    "You have not been asked to transfer this call. Ask the caller "
+                    self._note_refusal("transfer_to_staff") or "You have not been asked to transfer this call. Ask the caller "
                     "whether they would like to be put through to reception, and "
                     "only call this again if they say yes."
                 ),
@@ -948,6 +1043,7 @@ class CascadedPipelineOrchestrator:
         # reason to forget the name they just spelled out. This is the only copy
         # for a caller with no record.
         self.call_state.heard(args)
+        self._tools_called.append(name)
 
         # create_booking_request holds a room, queues an email and raises a
         # Stripe checkout. Its own gate is `has_user_confirmed_summary`, an
@@ -967,7 +1063,7 @@ class CascadedPipelineOrchestrator:
             return {
                 "success": False,
                 "error": (
-                    "You have not read the booking summary back to this caller. A "
+                    self._note_refusal("create_booking_request") or "You have not read the booking summary back to this caller. A "
                     "'yes' to some other question is not confirmation of a booking. "
                     "Say the name, the check-in and check-out dates, the room and "
                     "the nightly rate in one sentence, ask them to confirm, and call "
@@ -993,7 +1089,7 @@ class CascadedPipelineOrchestrator:
             return {
                 "success": False,
                 "message": (
-                    "You have not identified this caller yet, and there is a "
+                    self._note_refusal("update_guest_info") or "You have not identified this caller yet, and there is a "
                     "reservation on this number that this would change. Ask who "
                     "is calling, call lookup_booking with the name they give, and "
                     "only then update their details."
