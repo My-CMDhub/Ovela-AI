@@ -408,3 +408,64 @@ class TestTheMemoNeverStandsInForLookingAgain:
             H.handle_check_availability = original
 
         assert isinstance(seen["context"].get("availability_cache"), dict)
+
+
+class TestTheSummaryMustBeTheOneTheyAnswered:
+    """
+    Found in review. booking_summary_confirmed scanned back for "the most
+    recent assistant turn" — which reaches over anything in between. A barge-in
+    that lands before a single word is heard DELETES that turn, so the scan
+    found an availability quote from two turns earlier, complete with a price
+    and a date, and read it as a booking summary the caller had agreed to.
+    """
+
+    @pytest.mark.asyncio
+    async def test_an_old_availability_quote_is_not_a_booking_summary(self):
+        from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestrator
+        agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock())
+        agent.dispatcher = MagicMock()
+        agent.dispatcher.execute = AsyncMock(return_value={"success": True})
+        agent.dispatcher.caller_reservation = AsyncMock(return_value=[])
+
+        history = [
+            {"role": "user", "content": "have you got anything mid September?"},
+            {"role": "assistant",
+             "content": "Yes, a queen is free on the 14th of September at $180 a night."},
+            {"role": "user", "content": "go on then"},          # reply here was deleted
+            {"role": "user", "content": "yes go ahead and book it"},
+        ]
+
+        result = await agent._execute_tool(
+            "create_booking_request",
+            {"guest_name": "Ada", "has_user_confirmed_summary": "YES"}, history)
+
+        assert result["success"] is False
+        agent.dispatcher.execute.assert_not_called()
+
+
+class TestAHedgedYesIsNotAYes:
+    """Every one of these opened with an agreeing word and meant no. The gate
+    holds a room, sends an email and raises a Stripe checkout."""
+
+    SUMMARY = {"role": "assistant",
+               "content": "Just to confirm, Ada Lovelace, September 10th to the 12th, "
+                          "queen at $135 per night, total $270. Is that right?"}
+
+    @pytest.mark.parametrize("said", [
+        "Fine, I'll think about it and call you back.",
+        "Sure, but I'd need to check with my wife first.",
+        "Right, so how far is that from the beach?",
+        "Okay and what about parking?",
+        "Yes, but is there anything cheaper?",
+    ])
+    def test_a_condition_a_deferral_or_a_question_is_refused(self, said):
+        from services.voice_agent.text_utils import booking_summary_confirmed
+        assert not booking_summary_confirmed([self.SUMMARY, {"role": "user", "content": said}])
+
+    @pytest.mark.parametrize("said", [
+        "Yes.", "Yes, go ahead and book it.", "Yes, that's all correct, please go ahead.",
+        "Yep, that's right.", "Please do.",
+    ])
+    def test_a_real_yes_still_books(self, said):
+        from services.voice_agent.text_utils import booking_summary_confirmed
+        assert booking_summary_confirmed([self.SUMMARY, {"role": "user", "content": said}])

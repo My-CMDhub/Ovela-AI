@@ -30,7 +30,18 @@ Two boundaries it must not cross, both Track A:
   per-call cache makes that free.
 """
 
+import logging
+import re
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
+
+# The words that make a run of letters a NAME rather than an email, a booking
+# reference or a street. Matched against the agent's question as well as the
+# caller's answer, because the cue usually sits in the question.
+_SPELLING_A_NAME = re.compile(
+    r"\b(name|names|spell|spelt|spelled|spelling|surname|initial|initials|"
+    r"first|last|given|family)\b", re.IGNORECASE)
 
 # How much of the transcript the model still sees word for word. Older turns are
 # dropped rather than summarised: their *facts* are in the note below, and a
@@ -147,7 +158,7 @@ class CallState:
             if isinstance(value, str) and value.strip():
                 setattr(self, attr, value.strip())
 
-    def hear_caller(self, said: str) -> None:
+    def hear_caller(self, said: str, agent_asked: str = "") -> None:
         """Take what we can off the caller's own words, before any tool runs.
 
         heard() reads tool ARGUMENTS, which only carry a detail when the model
@@ -155,6 +166,15 @@ class CallState:
         out on turn 4 and never reached a tool, so it was gone by turn 17. The
         caller's sentence is evidence the model did not author, which is the
         same reason the booking gate reads the transcript.
+
+        `agent_asked` is the agent's preceding question, and it is what tells a
+        spelled NAME from a spelled anything-else. Callers spell emails and
+        references far more often than names, and the letters look identical:
+        "j o h n s m i t h at gmail dot com" assembled to a name called
+        "Johnsmith", which then blocked every correctly-spelled name for the
+        rest of the call. The cue is frequently not in the caller's sentence at
+        all — "It is o then Epistroph, then c o n n o r" is a real turn, and it
+        is only a name because the agent had just asked for one.
         """
         if not said:
             return
@@ -164,11 +184,22 @@ class CallState:
             spoken = extract_spoken_email(said)
             if spoken:
                 self.heard_email = spoken
+        except Exception as exc:   # pragma: no cover - never break a turn
+            logger.debug("hear_caller: email extraction failed — %s", exc)
+
+        try:
+            # An address already claimed this sentence. The same letters cannot
+            # also be a name, and guessing wrong here is not a missed detail —
+            # it poisons the booking gate for the whole call.
+            if spoken:
+                return
+            if not _SPELLING_A_NAME.search(f"{agent_asked} {said}"):
+                return
             spelled = extract_spelled_words(said)
             if spelled:
                 self.spelled_name = " ".join(spelled)
-        except Exception:      # pragma: no cover - never break a turn over this
-            pass
+        except Exception as exc:   # pragma: no cover - never break a turn
+            logger.debug("hear_caller: spelling extraction failed — %s", exc)
 
     def observe(self, tool_name: str, args: dict, result) -> None:
         """Record what a tool result established. Never raises — a bad result

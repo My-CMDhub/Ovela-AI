@@ -157,3 +157,72 @@ class TestTheGate:
 
         assert result["success"] is False
         agent.dispatcher.execute.assert_not_called()
+
+
+class TestASpellingMustBeANameToCount:
+    """
+    Found in review, and it was the more dangerous half of the spelling fix.
+
+    Callers spell emails and references far more often than names, and the
+    letters are indistinguishable. "j o h n s m i t h at gmail dot com"
+    assembled into a name called "Johnsmith" — which then failed
+    spelling_honoured against every correctly-written name for the REST of the
+    call, because spelled_name is never cleared. So the gate either refused
+    every real name, or the model obeyed the refusal and wrote "Johnsmith" onto
+    the booking and the payment email.
+
+    The cue that separates them is usually in the agent's question, not the
+    caller's answer: "It is o then Epistroph, then c o n n o r" is only a name
+    because the agent had just asked for one.
+    """
+
+    @pytest.mark.parametrize("said,asked", [
+        ("Yeah it's j o h n s m i t h at gmail dot com", "And your email?"),
+        ("d p p a t e l 2 0 0 0 4 at gmail dot com", "What's your email address?"),
+        ("the reference is C C dash A B C D E F", "Do you have your booking reference?"),
+        ("it's m c k e n z i e street", "What's the address?"),
+    ])
+    def test_letters_that_are_not_a_name_are_not_taken_as_one(self, said, asked):
+        state = CallState()
+        state.hear_caller(said, agent_asked=asked)
+        assert state.spelled_name == ""
+
+    def test_an_address_claims_the_sentence_before_a_name_can(self):
+        """The same letters cannot be both. Asked for a name and given an
+        address, the address wins and no name is recorded — the alternative is
+        a name called "Johnsmith" blocking the booking gate for the rest of the
+        call."""
+        state = CallState()
+        state.hear_caller("my email is j o h n at gmail dot com",
+                          agent_asked="And your name?")
+
+        assert state.heard_email == "john@gmail.com"
+        assert state.spelled_name == ""
+
+    def test_the_cue_may_come_from_the_agents_question(self):
+        state = CallState()
+        state.hear_caller("Okay. It is o then Epistroph, then c o n n o r.",
+                          agent_asked="Could you please spell your last name for me?")
+        assert state.spelled_name == "O'Connor"
+
+    def test_the_cue_may_come_from_the_callers_own_sentence(self):
+        state = CallState()
+        state.hear_caller(REAL_SPELLING)
+        assert state.spelled_name == "Siobhan O'Connor"
+
+
+class TestTheGateComparesLettersNotWordBreaks:
+    """A caller who spells straight through, with no filler between the words,
+    assembles as one run — and a word-by-word check then refused the very name
+    that had just been spelled."""
+
+    @pytest.mark.parametrize("spelled,written", [
+        ("Siobhanoconnor", "Siobhan O'Connor"),
+        ("Maryannesmith", "Mary Anne Smith"),
+        ("Davidjones", "David Jones"),
+    ])
+    def test_where_the_words_divide_is_not_evidence(self, spelled, written):
+        assert spelling_honoured(spelled, written)
+
+    def test_and_a_genuinely_different_name_is_still_refused(self):
+        assert not spelling_honoured("Siobhan O'Connor", "Cyborn O'Connor")

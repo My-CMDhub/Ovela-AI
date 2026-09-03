@@ -1159,7 +1159,11 @@ class CascadedPipelineOrchestrator:
         # Anything in the caller's own sentence worth keeping — an address they
         # spelled out survives here whether or not the model passes it to a
         # tool, and whether or not the turn is still in the window later.
-        self.call_state.hear_caller(latest_user_text)
+        self.call_state.hear_caller(
+            latest_user_text,
+            agent_asked=next((m.get("content", "") for m in reversed(history)
+                              if m.get("role") == "assistant"), ""),
+        )
 
         try:
             await self._ensure_call_context()

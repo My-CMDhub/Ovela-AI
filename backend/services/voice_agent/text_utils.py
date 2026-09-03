@@ -523,6 +523,31 @@ def transfer_consent_given(history: list) -> bool:
     return False
 
 
+# A yes that carries a condition, a deferral or a counter-question is not a
+# yes. "Fine, I'll think about it and call you back", "Sure, but I'd need to
+# check with my wife first" and "Right, so how far is that from the beach?" all
+# opened with an agreeing word and all meant no.
+_NOT_REALLY_AGREEING = re.compile(
+    r"\b(but|however|though|think about|thinking about|call you back|ring back|"
+    r"call back|later|not (?:now|yet|sure)|check with|hold off|maybe|"
+    r"how (?:much|far|many|long)|what about|instead|cheaper|before i)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_agreement(stripped: str, raw: str) -> bool:
+    """Did the caller actually say yes to what was just put to them?"""
+    if stripped in _AGREEING:
+        return True
+    if not any(stripped.startswith(word + " ") for word in _AGREEING):
+        return False
+    # An opening "yes" followed by a question is a question.
+    if "?" in raw or _NOT_REALLY_AGREEING.search(raw):
+        return False
+    # "Yes, go ahead and book it" is agreement. A paragraph is a conversation.
+    return len(stripped.split()) <= 8
+
+
 _A_PRICE = re.compile(r"\$\s?\d|\b\d+\s?dollars\b", re.IGNORECASE)
 _A_DATE = re.compile(
     r"\b(\d{1,2}(?:st|nd|rd|th)|january|february|march|april|may|june|july|"
@@ -564,15 +589,19 @@ def booking_summary_confirmed(history: list) -> bool:
     stripped = re.sub(r"\s+", " ", stripped)
     if not stripped:
         return False
-    agreeing = stripped in _AGREEING or any(
-        stripped.startswith(word + " ") or stripped == word for word in _AGREEING
-    )
-    if not agreeing:
+    if not _is_agreement(stripped, last_user):
         return False
 
-    # The agent's most recent turn is the one the caller just agreed to.
-    said = next(
-        (m.get("content") or "" for m in reversed(history) if m.get("role") == "assistant"), "")
+    # The summary has to be the reply IMMEDIATELY before the caller's answer.
+    # Scanning back for "the most recent assistant turn" reaches over anything
+    # in between — and a barge-in that lands before a single word is heard
+    # DELETES that turn, so the scan found an availability quote from two turns
+    # earlier, complete with a price and a date, and read it as a booking
+    # summary the caller had agreed to.
+    if len(history) < 2 or history[-1].get("role") != "user" \
+            or history[-2].get("role") != "assistant":
+        return False
+    said = history[-2].get("content") or ""
     if not said:
         return False
 
@@ -767,6 +796,9 @@ def spelling_honoured(spelled: str, written: str) -> bool:
     def _bare(value):
         return re.sub(r"[^a-z]", "", value.lower())
 
-    written_words = {_bare(w) for w in written.split() if _bare(w)}
-    return all(_bare(word) in written_words
-               for word in spelled.split() if _bare(word))
+    # Compared as one run of letters, not word by word. Where a spelled name
+    # divides into words is guesswork — a caller who says "s i o b h a n o c o
+    # n n o r" without a filler between them assembles as one word, and a
+    # word-by-word check then refused "Siobhan O'Connor", the very name that
+    # had just been spelled. The letters are the evidence; the spaces are not.
+    return _bare(spelled) in _bare(written)
