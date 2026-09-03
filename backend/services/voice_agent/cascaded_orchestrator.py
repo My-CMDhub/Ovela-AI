@@ -1045,6 +1045,21 @@ class CascadedPipelineOrchestrator:
         self.call_state.heard(args)
         self._tools_called.append(name)
 
+        # The date handlers resolve relative phrases from the caller's own
+        # words — "next weekend", "in three days" — and that argument was only
+        # ever set by the legacy handler. On this path it was always absent, so
+        # every relative date was resolved by the model, unvalidated, and a
+        # whole tested resolver never ran. Safe to thread now that an explicit
+        # date the model DID resolve takes precedence over anything in the
+        # utterance; before that ordering it would have let a passing "tomorrow"
+        # move a booking that already had real dates.
+        if name in ("check_availability", "create_booking_request") and history:
+            latest = next((m.get("content") for m in reversed(history)
+                           if m.get("role") == "user"), "")
+            if latest:
+                args = dict(args)
+                args["_user_utterance"] = latest
+
         # create_booking_request holds a room, queues an email and raises a
         # Stripe checkout. Its own gate is `has_user_confirmed_summary`, an
         # argument the MODEL fills in — the gate asks the model whether the

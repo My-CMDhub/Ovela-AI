@@ -241,7 +241,12 @@ class TestCascadedPipelineOrchestrator:
         orchestrator.dispatcher.execute.assert_awaited_once()
         name, sent_args = orchestrator.dispatcher.execute.await_args.args[:2]
         assert name == "check_availability"
-        assert sent_args == {"room_type": "any"}
+        # Underscore-prefixed keys are threaded in by the orchestrator, not
+        # chosen by the model — the caller's own words go to the date handlers
+        # this way. Asserting the exact dict would make every such addition a
+        # test failure rather than a feature.
+        assert {k: v for k, v in sent_args.items() if not k.startswith("_")} \
+            == {"room_type": "any"}
         assert chunks == ["We have a Queen available."]
 
     @pytest.mark.asyncio

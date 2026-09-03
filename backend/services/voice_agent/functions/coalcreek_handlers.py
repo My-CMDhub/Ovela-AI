@@ -224,28 +224,54 @@ def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utteranc
     - ISO dates (YYYY-MM-DD)
     """
     today = _today_melbourne_date()
-    text = f"{check_in_raw or ''} {check_out_raw or ''} {user_utterance or ''}".lower().strip()
 
     resolved_check_in = _parse_iso_date(check_in_raw)
     resolved_check_out = _parse_iso_date(check_out_raw)
 
+    # An explicit date the model already resolved WINS over a phrase in the
+    # utterance. This used to be the other way round, with the phrase branches
+    # first and the ISO branch last — so "the 10th to the 12th, oh and can I
+    # check in tomorrow if I'm early?" booked tomorrow. The caller mentioning a
+    # relative day is not the caller changing their dates.
+    if resolved_check_in:
+        if not resolved_check_out or resolved_check_out <= resolved_check_in:
+            resolved_check_out = resolved_check_in + timedelta(days=1)
+        return resolved_check_in, resolved_check_out, "iso"
+
+    # Only the utterance is consulted from here: check_in_raw and check_out_raw
+    # did not parse, so anything in them is not a date.
+    text = (user_utterance or "").lower().strip()
+
+    # "this X" is the next X, counting today. "next X" is that one, plus a week.
+    #
+    # Both used to collapse to the same answer: "this weekend" and "next
+    # weekend" BOTH returned the coming Saturday, and so did "this Friday" and
+    # "next Friday". A caller asking about next weekend was given this one,
+    # confidently, with no way to notice.
+    def _from_qualifier(qualifier: str, weekday: int):
+        target = _next_weekday(today, weekday, include_today=True)
+        if qualifier == "next":
+            target += timedelta(days=7)
+        return target
+
     # Weekend phrases: Saturday check-in, Sunday check-out (AU motel convention)
-    if re.search(r"\b(upcoming|next|this)\s+weekend\b", text) or re.search(r"\bupcoming\s+weekand\b", text):
-        saturday = _next_weekday(today, 5, include_today=False)
-        sunday = saturday + timedelta(days=1)
-        return saturday, sunday, "weekend_phrase"
+    weekend = re.search(r"\b(upcoming|next|this)\s+week(?:end|and)\b", text)
+    if weekend:
+        saturday = _from_qualifier(weekend.group(1), 5)
+        return saturday, saturday + timedelta(days=1), "weekend_phrase"
 
     # upcoming/next/this weekday
     weekday_match = re.search(r"\b(upcoming|next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", text)
     if weekday_match:
-        qualifier = weekday_match.group(1)
-        weekday_word = weekday_match.group(2)
-        target = WEEKDAY_INDEX[weekday_word]
-        include_today = qualifier == "this"
-        target_date = _next_weekday(today, target, include_today=include_today)
-        if qualifier in {"upcoming", "next"} and target_date <= today:
-            target_date = target_date + timedelta(days=7)
-        return target_date, target_date + timedelta(days=1), "weekday_phrase"
+        qualifier, weekday_word = weekday_match.groups()
+        target_date = _from_qualifier(qualifier, WEEKDAY_INDEX[weekday_word])
+        # "next Friday" said on a Wednesday means different things to different
+        # people, and the cost of guessing is a guest arriving a week out. The
+        # suffix tells the handler to read the date back before acting on it.
+        source = "weekday_phrase"
+        if qualifier == "next" and today.weekday() != WEEKDAY_INDEX[weekday_word]:
+            source = "weekday_phrase_ambiguous"
+        return target_date, target_date + timedelta(days=1), source
 
     # after/in N days
     days_match = re.search(r"\b(?:after|in)\s+(\d{1,3})\s+days?\b", text)
@@ -264,11 +290,6 @@ def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utteranc
 
     if re.search(r"\btoday\b", text):
         return today, today + timedelta(days=1), "today"
-
-    if resolved_check_in:
-        if not resolved_check_out or resolved_check_out <= resolved_check_in:
-            resolved_check_out = resolved_check_in + timedelta(days=1)
-        return resolved_check_in, resolved_check_out, "iso"
 
     return None, None, "unresolved"
 
