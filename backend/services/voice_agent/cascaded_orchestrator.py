@@ -143,6 +143,10 @@ class CascadedPipelineOrchestrator:
 
         # Word tracking for current TTS turn
         self._current_turn_word_count = 0
+        # What the agent has said SO FAR this turn. On self, not local to the
+        # run loop, because a barge-in has to be able to write it into history —
+        # the caller heard it, so the agent has to remember saying it.
+        self._current_turn_parts: List[str] = []
 
         # True once this turn's first audio chunk has reached Twilio. Barge-in
         # stays disarmed until then so LLM think-time can't be interrupted.
@@ -236,7 +240,23 @@ class CascadedPipelineOrchestrator:
             except Exception as e:
                 logger.warning(f"🟡 [CascadedOrchestrator] Failed to send clear event to Twilio: {e}")
 
-        # 3. Prune un-heard words from last assistant message per MarkTracker
+        # 3. Record what the caller actually heard of this turn.
+        #
+        # This used to prune without appending, and the message it pruned was
+        # the PREVIOUS turn's — the current one is only appended by the run
+        # loop after streaming finishes, and that append is skipped when the
+        # turn was interrupted. So an interrupted reply vanished from the
+        # agent's own memory while the caller had heard it, and the turn before
+        # it was truncated to this turn's word count.
+        #
+        # Heard on a real call: "Check-in is from 2 p.m." answered three times
+        # in ninety seconds, because each answer was cut off and then forgotten.
+        spoken = " ".join(self._current_turn_parts).strip()
+        self._current_turn_parts = []
+        if spoken:
+            self.history.append({"role": "assistant", "content": spoken})
+        # Now prune targets the message it was always meant to: this one. A
+        # confirmed index of zero drops it, which is right — nothing was heard.
         confirmed_idx = self.mark_tracker.confirmed_index
         self.history = prune_conversation_history(self.history, confirmed_word_index=confirmed_idx)
         self.mark_tracker.reset()
@@ -459,7 +479,8 @@ class CascadedPipelineOrchestrator:
         producer_task = asyncio.create_task(llm_producer())
 
         # 2. Run Text Chunk Sender and Audio Playout concurrently
-        full_response_parts = []
+        self._current_turn_parts = []
+        full_response_parts = self._current_turn_parts
         self._total_words_sent = 0
 
         async def audio_receiver():
@@ -638,6 +659,7 @@ class CascadedPipelineOrchestrator:
             interrupted = self.state != ConversationState.AGENT_SPEAKING
             if not interrupted:
                 full_text = " ".join(full_response_parts).strip()
+                self._current_turn_parts = []
                 if full_text:
                     self.history.append({"role": "assistant", "content": full_text})
                     # Did any price, date or reference in that come from

@@ -13,7 +13,22 @@ All tests run fully offline — zero live Appwrite calls.
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import date
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+
+def _soon(days_ahead: int) -> str:
+    """A date that is always in the future.
+
+    These were literals. They were future dates when they were written and the
+    calendar caught up with them: handle_create_booking_request refuses a
+    check-in in the past, correctly, so the tests started failing on a Tuesday
+    for a reason that had nothing to do with the code. A test that rots on a
+    date joins the quarantine of known failures, which is where a real bug goes
+    to hide.
+    """
+    today = datetime.now(ZoneInfo("Australia/Melbourne")).date()
+    return (today + timedelta(days=days_ahead)).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -152,8 +167,8 @@ class TestHandleCreateBookingRequest:
 
         args = {
             "guest_name": "Jane Smith",
-            "check_in_date": "2026-09-01",
-            "check_out_date": "2026-09-03",
+            "check_in_date": _soon(7),
+            "check_out_date": _soon(9),
             "room_type": "queen",
             "num_guests": 2,
             "guest_email": "jane@example.com",
@@ -192,8 +207,8 @@ class TestHandleCreateBookingRequest:
 
         args = {
             "guest_name": "Bob Error",
-            "check_in_date": "2026-09-01",
-            "check_out_date": "2026-09-02",
+            "check_in_date": _soon(7),
+            "check_out_date": _soon(8),
             "room_type": "queen",
             "num_guests": 1,
             "guest_email": "bob@example.com",
@@ -246,8 +261,8 @@ class TestHandleCreateBookingRequest:
 
         save_mock = AsyncMock()
         args = {
-            "check_in_date": "2026-09-01",
-            "check_out_date": "2026-09-02",
+            "check_in_date": _soon(7),
+            "check_out_date": _soon(8),
             "room_type": "queen",
         }
 

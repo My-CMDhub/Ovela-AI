@@ -460,3 +460,102 @@ class TestCognitiveDelay:
         assert delay_ms >= 80, (
             f"Value {delay_ms} looks like seconds not milliseconds — expected >= 80ms"
         )
+
+
+# ── what the caller heard must survive being interrupted ───────────────────
+#
+# From a real call, 3 September: "Check-in is from 2 p.m." was answered three
+# times in ninety seconds. Each answer was cut off by the caller, and each was
+# then forgotten — so the agent had no idea it had already said it.
+#
+# Two bugs in one place. trigger_barge_in() pruned history to the words the
+# caller had actually heard, but the CURRENT turn's reply is only appended by
+# the run loop after streaming finishes, and that append is skipped when the
+# turn was interrupted. So the pruning was applied to the PREVIOUS turn's
+# message — truncating a fully-heard reply to this turn's word count — while
+# the reply the caller had just half-heard was dropped entirely.
+
+import pytest
+from unittest.mock import AsyncMock, MagicMock
+
+from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestrator
+from services.voice_agent.vad import ConversationState
+
+
+@pytest.fixture
+def speaking_agent():
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.cartesia = MagicMock()
+    agent.cartesia.cancel_stream = AsyncMock()
+    agent.state = ConversationState.AGENT_SPEAKING
+    return agent
+
+
+class TestAnInterruptedReplyIsRemembered:
+    @pytest.mark.asyncio
+    async def test_the_heard_part_of_the_reply_reaches_history(self, speaking_agent):
+        agent = speaking_agent
+        agent.history = [{"role": "user", "content": "what time is check-in?"}]
+        agent._current_turn_parts = ["Check-in is from 2 p.m.", "Parking is at the door."]
+        agent.mark_tracker.confirmed_index = 6      # heard the first sentence
+
+        await agent.trigger_barge_in(reason="test")
+
+        said = [m for m in agent.history if m["role"] == "assistant"]
+        assert said, "the agent forgot a reply the caller had already heard"
+        assert "Check-in is from 2 p.m." in said[-1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_words_the_caller_never_heard_are_not_remembered(self, speaking_agent):
+        """The other half: claiming to have said something nobody heard is how
+        an agent starts referring back to information it never delivered."""
+        agent = speaking_agent
+        agent.history = [{"role": "user", "content": "what time is check-in?"}]
+        agent._current_turn_parts = ["Check-in is from 2 p.m.", "Parking is at the door."]
+        agent.mark_tracker.confirmed_index = 6
+
+        await agent.trigger_barge_in(reason="test")
+
+        assert "Parking" not in agent.history[-1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_a_reply_cut_off_before_a_single_word_landed_is_dropped(self, speaking_agent):
+        agent = speaking_agent
+        agent.history = [{"role": "user", "content": "hello"}]
+        agent._current_turn_parts = ["Nothing of this reached the caller."]
+        agent.mark_tracker.confirmed_index = 0
+
+        await agent.trigger_barge_in(reason="test")
+
+        assert all(m["role"] != "assistant" for m in agent.history)
+
+    @pytest.mark.asyncio
+    async def test_an_earlier_fully_heard_reply_is_left_alone(self, speaking_agent):
+        """The sharper half of the bug. mark_tracker resets at the start of
+        every agent turn, so the confirmed index belongs to THIS turn — and
+        pruning the previous turn's message with it silently truncated a reply
+        the caller had heard in full."""
+        agent = speaking_agent
+        agent.history = [
+            {"role": "user", "content": "what time is check-in?"},
+            {"role": "assistant", "content": "Check-in is from 2 p.m. and checkout is at 10 a.m."},
+            {"role": "user", "content": "and parking?"},
+        ]
+        agent._current_turn_parts = ["All our rooms have parking at the door."]
+        agent.mark_tracker.confirmed_index = 3
+
+        await agent.trigger_barge_in(reason="test")
+
+        earlier = agent.history[1]["content"]
+        assert earlier == "Check-in is from 2 p.m. and checkout is at 10 a.m.", \
+            "a fully-heard earlier reply was truncated by this turn's word count"
+
+    @pytest.mark.asyncio
+    async def test_the_turn_buffer_is_emptied_so_it_cannot_be_said_twice(self, speaking_agent):
+        agent = speaking_agent
+        agent.history = [{"role": "user", "content": "hi"}]
+        agent._current_turn_parts = ["Hello there, how can I help?"]
+        agent.mark_tracker.confirmed_index = 5
+
+        await agent.trigger_barge_in(reason="test")
+        assert agent._current_turn_parts == []
