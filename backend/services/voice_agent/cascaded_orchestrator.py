@@ -29,7 +29,9 @@ from sentry_sdk.ai import set_conversation_id
 from fastapi import WebSocket
 
 from core.config import settings
-from services.voice_agent.vad import VadProcessor, ConversationState, is_backchannel_word
+# is_backchannel_word is applied through route_transcript, not here — the
+# decision belongs with the state it depends on.
+from services.voice_agent.vad import VadProcessor, ConversationState
 from services.voice_agent.interruption import (
     MarkTracker,
     prune_conversation_history,
@@ -47,6 +49,24 @@ from services.voice_agent.text_utils import transfer_consent_given
 from services.voice_agent.functions.coalcreek_definitions import get_coalcreek_functions
 
 logger = logging.getLogger(__name__)
+
+# How much continuous speech commits a barge-in without waiting for words.
+# 20ms webrtcvad frames. LiveKit's acoustic interruption model needs a median
+# of 216ms before it will commit; without a model, half a second is the
+# conservative equivalent — long enough that "mhmm" and "yeah" fall short,
+# short enough that a real interruption is not talked over. Anything below the
+# threshold is decided by is_backchannel_word() once Flux returns the text.
+BARGE_IN_COMMIT_FRAMES = 25          # 25 x 20ms = 500ms
+
+# mu-law at 8kHz: one byte is one sample, 8000 samples a second. Turning bytes
+# sent into seconds of speech is what lets the drain wait be bounded by the
+# audio that actually exists rather than by a flat guess.
+MULAW_BYTES_PER_SECOND = 8000.0
+
+# Slack on top of the audio's own duration before giving up on Twilio's marks.
+# The wait exists so a long reply stays interruptible while it plays; the cap
+# exists so a dropped mark cannot leave the agent permanently deaf.
+PLAYBACK_DRAIN_GRACE_S = 2.0
 
 
 def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[str], str]:
@@ -149,6 +169,12 @@ class CascadedPipelineOrchestrator:
         # the caller heard it, so the agent has to remember saying it.
         self._current_turn_parts: List[str] = []
 
+        # How much audio this turn has handed to Twilio, and when the first of
+        # it went. Together they say how long the caller will still be hearing
+        # the agent after we have finished sending.
+        self._audio_bytes_sent: int = 0
+        self._playback_started_at: float = 0.0
+
         # The call's own record, written once at teardown. Nothing was saved
         # for a live call before this: save_call_transcript only ever fired on
         # the rate-limit-blocked path, so reviewing what happened meant pulling
@@ -160,10 +186,19 @@ class CascadedPipelineOrchestrator:
         self._refusals: List[str] = []
         self._unsourced: List[str] = []
         self._barge_ins: int = 0
+        self._backchannels_held: int = 0
 
         # True once this turn's first audio chunk has reached Twilio. Barge-in
         # stays disarmed until then so LLM think-time can't be interrupted.
         self._agent_audio_started: bool = False
+
+        # Consecutive 20ms frames of speech heard while the agent is talking.
+        # Acoustic energy alone used to cut the agent off on the FIRST voiced
+        # frame, which is why "mhmm" and "go on" stopped it dead: a continuer
+        # and a bid for the floor look identical to a VAD. Now the frames have
+        # to add up to real speech before anything is cancelled, and a short
+        # utterance is decided on its WORDS when Flux delivers them.
+        self._speech_frames: int = 0
 
         # Control-flow tool actions. The dispatcher signals call termination by
         # returning {"action": "hangup"}; it is executed after the farewell has
@@ -212,12 +247,19 @@ class CascadedPipelineOrchestrator:
             try:
                 is_speech = self.vad.process_mulaw(mulaw_payload)
                 if (
-                    is_speech
-                    and self.state == ConversationState.AGENT_SPEAKING
+                    self.state == ConversationState.AGENT_SPEAKING
                     and self._agent_audio_started
+                    and not self.vad.is_immune()
                 ):
-                    if not self.vad.is_immune():
-                        await self.trigger_barge_in(reason="local_vad_acoustic")
+                    if is_speech:
+                        self._speech_frames += 1
+                        # Sustained speech is a bid for the floor whatever the
+                        # words turn out to be. Below the threshold nothing is
+                        # cancelled — the decision waits for Flux.
+                        if self._speech_frames == BARGE_IN_COMMIT_FRAMES:
+                            await self.trigger_barge_in(reason="sustained_speech")
+                    else:
+                        self._speech_frames = 0
             except ValueError:
                 pass
 
@@ -385,12 +427,13 @@ class CascadedPipelineOrchestrator:
                 continue
 
             if turn_state in ("StartOfTurn", "SpeechStarted", "UserStartedSpeaking"):
-                if (
-                    self.state == ConversationState.AGENT_SPEAKING
-                    and self._agent_audio_started
-                    and not self.vad.is_immune()
-                ):
-                    await self.trigger_barge_in(reason="deepgram_start_of_turn")
+                # Deliberately does NOT cut. This event fires the moment Flux
+                # hears voice, before there is a single word to judge, so
+                # cutting here is the same mistake as cutting on a VAD frame:
+                # "mhmm" and "stop" are indistinguishable until the text lands.
+                # Sustained speech (handle_media) or the transcript itself
+                # (handle_user_turn_complete) commits the interruption.
+                logger.debug("👂 [CascadedOrchestrator] Caller started speaking")
 
             elif turn_state == "EagerEndOfTurn":
                 logger.info("⚡ [CascadedOrchestrator] EagerEndOfTurn received. Pre-warming LLM...")
@@ -410,10 +453,26 @@ class CascadedPipelineOrchestrator:
         """
         Handle finalized user utterance after Deepgram Flux verifies turn completion.
         """
+        # Judged against the state the agent is ACTUALLY in. This check used to
+        # be reached only after an acoustic barge-in had already flipped the
+        # state to AWAITING_INPUT — so a backchannel was never recognised as
+        # one, because by the time its words arrived the agent was no longer
+        # "speaking". On a real call, thirteen "mhmm"/"yeah"/"go on" turns cut
+        # the agent off and not one of them was logged as ignored.
         action = route_transcript(transcript, state=self.state)
         if action == "ignore":
-            logger.info(f"🔇 [CascadedOrchestrator] Ignored transcript/backchannel: '{transcript}'")
+            logger.info(
+                "🔇 [CascadedOrchestrator] Backchannel — letting the agent finish: %r",
+                transcript,
+            )
+            self._speech_frames = 0
+            self._backchannels_held += 1
             return
+
+        # A short but genuine interruption — "stop", "no, wait" — never reaches
+        # the sustained-speech threshold. The words are what commit it.
+        if action == "interrupt" and self.state == ConversationState.AGENT_SPEAKING:
+            await self.trigger_barge_in(reason="semantic_interrupt")
 
         logger.info(f"🗣️ [CascadedOrchestrator] User finished turn: '{transcript}'")
         self.history.append({"role": "user", "content": transcript})
@@ -422,6 +481,7 @@ class CascadedPipelineOrchestrator:
         # Immunity is armed when the first audio chunk actually reaches Twilio,
         # not here — see audio_receiver().
         self._agent_audio_started = False
+        self._speech_frames = 0
         self.mark_tracker.reset()
         self._current_turn_word_count = 0
         self.current_context_id = f"ctx_{uuid.uuid4().hex[:8]}"
@@ -496,6 +556,8 @@ class CascadedPipelineOrchestrator:
         self._current_turn_parts = []
         full_response_parts = self._current_turn_parts
         self._total_words_sent = 0
+        self._audio_bytes_sent = 0
+        self._playback_started_at = 0.0
 
         async def audio_receiver():
             first_chunk_ingested = False
@@ -526,6 +588,7 @@ class CascadedPipelineOrchestrator:
                             # ended, which is 2-3s of think-time earlier and left
                             # every reply cancellable before it was ever heard.
                             self._agent_audio_started = True
+                            self._playback_started_at = time.time()
                             self.vad.arm_immunity(duration_s=0.5)
                             # End Span 3
                             if self._span_3:
@@ -543,6 +606,8 @@ class CascadedPipelineOrchestrator:
                                 "media": {"payload": base64_data},
                             }
                             await self.twilio_ws.send_text(json.dumps(media_payload))
+                            # base64 -> 3 bytes of audio per 4 characters.
+                            self._audio_bytes_sent += (len(base64_data) * 3) // 4
 
                             # Send milestone marks every ~3 words to keep Twilio sync tight
                             self._current_turn_word_count += 3
@@ -669,6 +734,19 @@ class CascadedPipelineOrchestrator:
                     pass
                 except Exception as e:
                     logger.error(f"🔴 [CascadedOrchestrator] {name} task failed: {e}", exc_info=True)
+
+            # Everything has been HANDED to Twilio; the caller has not heard it
+            # yet. Cartesia streams faster than real time, so a long reply is
+            # fully sent seconds before it finishes playing — and flipping to
+            # AWAITING_INPUT here disarmed barge-in for the whole of the rest
+            # of the playback. That is why long answers could not be
+            # interrupted: the caller talked, and nothing was listening.
+            #
+            # Twilio echoes a mark as each word is actually played, so wait for
+            # the last one before standing down. Bounded, because a dropped
+            # mark must not strand the call in a state where the agent will
+            # never listen again.
+            await self._await_playback(interrupted=self.state != ConversationState.AGENT_SPEAKING)
 
             interrupted = self.state != ConversationState.AGENT_SPEAKING
             if not interrupted:
@@ -806,6 +884,39 @@ class CascadedPipelineOrchestrator:
             logger.error(f"🔴 [CascadedOrchestrator] Transfer failed: {e}")
             sentry_sdk.capture_exception(e)
 
+    async def _await_playback(self, interrupted: bool) -> None:
+        """
+        Stay AGENT_SPEAKING until Twilio says the caller has actually heard it.
+
+        The agent is audible for as long as Twilio has buffered audio, which is
+        far longer than it takes us to send it. Barge-in is gated on
+        AGENT_SPEAKING, so standing down at send-time made every long reply
+        uninterruptible — the caller spoke, the VAD saw it, and the state check
+        threw it away.
+
+        Returns as soon as the last word is confirmed, or on the timeout. The
+        timeout matters more than the wait: a mark that never comes back must
+        not leave the agent permanently deaf.
+        """
+        if interrupted or not self._total_words_sent or not self.stream_sid:
+            return
+        # Bounded by the audio itself: however long what we sent takes to play,
+        # plus a little. A flat timeout is either too short for a long answer
+        # or leaves the agent hanging on a short one.
+        expected_s = self._audio_bytes_sent / MULAW_BYTES_PER_SECOND
+        deadline = self._playback_started_at + expected_s + PLAYBACK_DRAIN_GRACE_S
+        while self.mark_tracker.confirmed_index < self._total_words_sent:
+            if time.time() > deadline:
+                logger.warning(
+                    "🟡 [CascadedOrchestrator] Playback marks never completed "
+                    "(%d/%d confirmed) — standing down anyway",
+                    self.mark_tracker.confirmed_index, self._total_words_sent,
+                )
+                break
+            if self.state != ConversationState.AGENT_SPEAKING:
+                return          # barge-in committed while we waited; that is the point
+            await asyncio.sleep(0.05)
+
     def _note_refusal(self, tool: str):
         """Record a gate firing, for the call's own record. Returns None so it
         can sit inside the refusal message it belongs to without changing it."""
@@ -864,6 +975,7 @@ class CascadedPipelineOrchestrator:
                     # 186-second call was the signal that led to the bug where
                     # an interrupted reply was dropped from the agent's memory.
                     "barge_ins": self._barge_ins,
+                    "backchannels_held": self._backchannels_held,
                     "turns": sum(1 for m in self.history if m.get("role") == "user"),
                     "tools": dict(tools),
                     "refusals": self._refusals,

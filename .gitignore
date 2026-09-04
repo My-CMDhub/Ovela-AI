@@ -86,3 +86,4 @@ traces/cover-*README.md
 !backend/tests/test_spelled_names.py
 !backend/tests/test_cancelled_bookings.py
 !backend/tests/test_relative_dates.py
+!backend/tests/test_backchannel_barge_in.py

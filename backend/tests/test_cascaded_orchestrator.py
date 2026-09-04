@@ -66,21 +66,56 @@ class TestCascadedPipelineOrchestrator:
             mock_send.assert_called_once_with(audio_bytes)
 
     @pytest.mark.asyncio
-    async def test_handle_twilio_audio_triggers_barge_in_on_speech(self, orchestrator):
+    async def test_sustained_speech_triggers_barge_in(self, orchestrator):
         """
-        When agent is speaking and local VAD detects speech (and immunity expired),
-        trigger_barge_in must be invoked immediately.
+        Speech has to add up before anything is cancelled.
+
+        This asserted a cut on the FIRST voiced frame, and that is exactly what
+        made the agent uninterruptible-by-words: a continuer and a bid for the
+        floor look identical to a VAD, so "mhmm" stopped it dead. On one real
+        call thirteen backchannels cut the agent off and not one was recognised
+        as a backchannel, because the cut had already flipped the state the
+        recogniser needed. Below the threshold the decision now waits for Flux.
         """
+        from services.voice_agent.cascaded_orchestrator import BARGE_IN_COMMIT_FRAMES
+
         orchestrator.is_running = True
         orchestrator.state = ConversationState.AGENT_SPEAKING
-        orchestrator._agent_audio_started = True  # agent is audibly speaking
+        orchestrator._agent_audio_started = True
+        frame = b"\x00\x01\x02\x03" * 40          # 160 bytes = one 20ms frame
+
         with patch.object(orchestrator.deepgram, "send_audio", AsyncMock()), \
              patch.object(orchestrator.vad, "process_mulaw", return_value=True), \
              patch.object(orchestrator.vad, "is_immune", return_value=False), \
              patch.object(orchestrator, "trigger_barge_in", AsyncMock()) as mock_barge:
-            audio_bytes = b"\x00\x01\x02\x03" * 40  # 160 bytes
-            await orchestrator.handle_twilio_audio(audio_bytes)
-            mock_barge.assert_called_once_with(reason="local_vad_acoustic")
+
+            for _ in range(BARGE_IN_COMMIT_FRAMES - 1):
+                await orchestrator.handle_twilio_audio(frame)
+            mock_barge.assert_not_called()          # half a second of "mhmm" is not a cut
+
+            await orchestrator.handle_twilio_audio(frame)
+            mock_barge.assert_called_once_with(reason="sustained_speech")
+
+    @pytest.mark.asyncio
+    async def test_a_gap_in_the_speech_resets_the_count(self, orchestrator):
+        """Two short backchannels with a breath between them are two short
+        backchannels, not one long interruption."""
+        from services.voice_agent.cascaded_orchestrator import BARGE_IN_COMMIT_FRAMES
+
+        orchestrator.is_running = True
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator._agent_audio_started = True
+        frame = b"\x00\x01\x02\x03" * 40
+        speech = [True] * (BARGE_IN_COMMIT_FRAMES - 1) + [False] \
+            + [True] * (BARGE_IN_COMMIT_FRAMES - 1)
+
+        with patch.object(orchestrator.deepgram, "send_audio", AsyncMock()), \
+             patch.object(orchestrator.vad, "process_mulaw", side_effect=speech), \
+             patch.object(orchestrator.vad, "is_immune", return_value=False), \
+             patch.object(orchestrator, "trigger_barge_in", AsyncMock()) as mock_barge:
+            for _ in speech:
+                await orchestrator.handle_twilio_audio(frame)
+            mock_barge.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_trigger_barge_in_sends_clear_and_cancels_cartesia(self, orchestrator):
@@ -158,9 +193,11 @@ class TestCascadedPipelineOrchestrator:
         await orchestrator.handle_twilio_audio(b"\xff" * 160)
         orchestrator.trigger_barge_in.assert_not_awaited()
 
-        # Once audio is genuinely flowing, barge-in must work again.
+        # Once audio is genuinely flowing, sustained speech must cut through.
+        from services.voice_agent.cascaded_orchestrator import BARGE_IN_COMMIT_FRAMES
         orchestrator._agent_audio_started = True
-        await orchestrator.handle_twilio_audio(b"\xff" * 160)
+        for _ in range(BARGE_IN_COMMIT_FRAMES):
+            await orchestrator.handle_twilio_audio(b"\xff" * 160)
         orchestrator.trigger_barge_in.assert_awaited_once()
 
     @staticmethod

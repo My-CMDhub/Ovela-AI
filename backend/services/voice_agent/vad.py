@@ -190,6 +190,17 @@ class VadProcessor:
         return time.time() < self._immunity_until
 
 
+# Words that, on their own or in any combination, mean "keep talking". A caller
+# saying only these has not asked for the floor.
+_CONTINUER_WORDS = {
+    "mhmm", "mmhmm", "mm", "hmm", "mmm", "uhhuh", "uh", "huh", "ah", "oh",
+    "yeah", "yep", "yup", "yes", "ok", "okay", "right", "sure", "gotcha",
+    "go", "on", "continue", "carry", "keep", "going", "i", "see", "got", "it",
+    "of", "course", "fine", "good", "great", "cool", "nice", "true", "indeed",
+    "understood", "makes", "sense", "please", "and", "so", "then",
+}
+
+
 def is_backchannel_word(utterance: str) -> bool:
     """
     Determine if an utterance is a short affirmation backchannel (≤3 words)
@@ -220,5 +231,15 @@ def is_backchannel_word(utterance: str) -> bool:
     trigger_words = {"wait", "stop", "no", "actually"}
     if any(w in trigger_words for w in words):
         return False
-        
+
+    # Continuers: the caller telling the agent to KEEP GOING. Recognised as
+    # whole phrases because the word count alone gets them wrong — "go on, go
+    # on" is four words and was classified as an interruption, so on a real
+    # call the agent cut itself off every time the caller encouraged it to
+    # carry on. Repetition is normal here ("yeah, yeah", "mhmm, mhmm"), so the
+    # set of DISTINCT words is what matters, not the length.
+    distinct = set(words)
+    if distinct and distinct <= _CONTINUER_WORDS:
+        return True
+
     return len(words) <= 3
