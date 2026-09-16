@@ -366,6 +366,27 @@ class CascadedPipelineOrchestrator:
         self.history.append({"role": "assistant", "content": greeting})
         self.state = ConversationState.AGENT_SPEAKING
 
+        # The greeting is a turn, and until it said so it was a second speaker
+        # nobody could take the floor from. Its only stop condition was the
+        # shared `self.state`, which `handle_user_turn_complete` sets back to
+        # AGENT_SPEAKING three lines after the barge-in — so the greeting's
+        # tail played over the caller's first answer and then stood that turn
+        # down mid-sentence. Measured: 12 greeting frames interleaved with the
+        # answer, the answer cut at 22 of 60 chunks, and because it counted as
+        # interrupted it never reached history at all, so the agent answered
+        # the same question again.
+        #
+        # Registering as `_turn_task` is what lets `_abandon_current_turn`
+        # cancel and join it like any other turn.
+        self._turn_id += 1
+        my_turn = self._turn_id
+        self._turn_task = asyncio.current_task()
+
+        def mine() -> bool:
+            return (self.is_running
+                    and self.state == ConversationState.AGENT_SPEAKING
+                    and self._turn_id == my_turn)
+
         # Greeting audio starts immediately, so barge-in is armed from here
         # (gated by the 3s echo-immunity window below).
         self._agent_audio_started = True
@@ -380,8 +401,10 @@ class CascadedPipelineOrchestrator:
                 
                 # Stream in 1600-byte (200ms) chunks to Twilio
                 chunk_size = 1600
+                total_words = len(greeting.split())
+                sent_bytes = 0
                 for i in range(0, len(raw_bytes), chunk_size):
-                    if not self.is_running or self.state != ConversationState.AGENT_SPEAKING:
+                    if not mine():
                         break
                     chunk = raw_bytes[i:i + chunk_size]
                     payload_b64 = base64.b64encode(chunk).decode("utf-8")
@@ -392,8 +415,24 @@ class CascadedPipelineOrchestrator:
                     }
                     if self.twilio_ws:
                         await self.twilio_ws.send_text(json.dumps(media_event))
+                    sent_bytes += len(chunk)
+
+                    # Marks, so an interrupted greeting knows what was heard.
+                    # Without them `confirmed_index` stayed 0, and pruning a
+                    # single assistant message at index 0 empties the history
+                    # — the agent forgot it had greeted and greeted again.
+                    heard = min(
+                        int((sent_bytes / MULAW_BYTES_PER_SECOND) * SPOKEN_WORDS_PER_SECOND),
+                        total_words,
+                    )
+                    if self.twilio_ws and heard:
+                        await self.twilio_ws.send_text(json.dumps({
+                            "event": "mark",
+                            "streamSid": self.stream_sid,
+                            "mark": {"name": self.mark_tracker.register_word(heard)},
+                        }))
                     await asyncio.sleep(0.18)  # ~200ms pacing for 8kHz mu-law audio
-                if self.state == ConversationState.AGENT_SPEAKING:
+                if mine():
                     self.state = ConversationState.AWAITING_INPUT
                 return
             except Exception as e:
@@ -427,7 +466,7 @@ class CascadedPipelineOrchestrator:
             async def greeting_reader() -> None:
                 first = True
                 async for audio_evt in self.cartesia.receive_audio_events():
-                    if not self.is_running or self.state != ConversationState.AGENT_SPEAKING:
+                    if not mine():
                         return
                     evt_ctx = audio_evt.get("context_id")
                     if evt_ctx and evt_ctx != greeting_context:
@@ -467,21 +506,24 @@ class CascadedPipelineOrchestrator:
             # parked in recv() on the one Cartesia socket, the first turn
             # opened a second reader, and the call was mute from its first
             # word.
-            await self._stop_audio_reader()
             self._audio_reader = asyncio.create_task(greeting_reader())
             await self._audio_reader
 
             # Everything is handed to Twilio; the caller has not heard it yet.
-            await self._await_playback(
-                interrupted=self.state != ConversationState.AGENT_SPEAKING,
-                turn_id=None,
-            )
+            # A real turn id, because `turn_id=None` disables the guard the
+            # drain uses to notice it has been overtaken.
+            await self._await_playback(interrupted=not mine(), turn_id=my_turn)
+        except asyncio.CancelledError:
+            # The floor was taken from the greeting. Let go quietly; whoever
+            # took it owns the state now.
+            raise
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] Failed streaming initial greeting: {e}")
         finally:
-            await self._stop_audio_reader()
-            if self.state == ConversationState.AGENT_SPEAKING:
-                self.state = ConversationState.AWAITING_INPUT
+            if self._turn_id == my_turn:
+                await self._stop_audio_reader()
+                if self.state == ConversationState.AGENT_SPEAKING:
+                    self.state = ConversationState.AWAITING_INPUT
 
     async def process_deepgram_events(self) -> None:
         """
@@ -573,21 +615,45 @@ class CascadedPipelineOrchestrator:
         while self.is_running and pending is not None:
             turn = asyncio.create_task(self.handle_user_turn_complete(pending))
             nxt = asyncio.create_task(self._finished_turns.get())
-            done, _ = await asyncio.wait(
-                {turn, nxt}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if nxt in done:
-                # The caller has moved on. Stop waiting on this turn; the next
-                # `handle_user_turn_complete` takes the floor from it properly.
-                pending = nxt.result()
-                turn.cancel()
-            else:
-                nxt.cancel()
-                if turn.done() and not turn.cancelled() and turn.exception():
-                    exc = turn.exception()
-                    logger.error("🔴 [CascadedOrchestrator] Turn failed: %s", exc, exc_info=exc)
-                    sentry_sdk.capture_exception(exc)
+            try:
+                done, _ = await asyncio.wait(
+                    {turn, nxt}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if nxt in done:
+                    # The caller has moved on. Stop waiting on this turn; the
+                    # next `handle_user_turn_complete` takes the floor properly.
+                    pending = nxt.result()
+                    turn.cancel()
+                    self._report_turn_failure(turn)
+                else:
+                    nxt.cancel()
+                    self._report_turn_failure(turn)
+                    pending = await self._finished_turns.get()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # This loop is the only thing draining the queue. If it dies
+                # the read loop keeps enqueueing into a queue nobody reads and
+                # the call goes permanently deaf — the quiet failure this file
+                # has been bitten by before. Log it, report it, keep answering.
+                logger.error(
+                    "🔴 [CascadedOrchestrator] Turn worker error: %s", exc, exc_info=True
+                )
+                sentry_sdk.capture_exception(exc)
                 pending = await self._finished_turns.get()
+
+    @staticmethod
+    def _report_turn_failure(turn: asyncio.Task) -> None:
+        """
+        Retrieve a finished turn's exception so it is reported here rather than
+        surfacing as asyncio's "Task exception was never retrieved" at exit.
+        """
+        if not turn.done() or turn.cancelled():
+            return
+        exc = turn.exception()
+        if exc:
+            logger.error("🔴 [CascadedOrchestrator] Turn failed: %s", exc, exc_info=exc)
+            sentry_sdk.capture_exception(exc)
 
     async def _abandon_current_turn(self) -> None:
         """
@@ -644,11 +710,18 @@ class CascadedPipelineOrchestrator:
 
         logger.info(f"🗣️ [CascadedOrchestrator] User finished turn: '{transcript}'")
 
+        # Recorded BEFORE anything that can be cancelled. The worker cancels
+        # this handler the moment the caller says something else, and with the
+        # append below the abandon a transcript caught in that window was
+        # dropped with nothing logged: "hello? what rooms do you have?" simply
+        # never reached the model. The assistant's partial reply is already in
+        # history by now — `trigger_barge_in` puts it there — so the order of
+        # the two stays right.
+        self.history.append({"role": "user", "content": transcript})
+
         # Whatever was speaking has now been cut (above) and must let go before
         # this turn touches the state it was using.
         await self._abandon_current_turn()
-
-        self.history.append({"role": "user", "content": transcript})
         self.state = ConversationState.AGENT_SPEAKING
 
         # Immunity is armed when the first audio chunk actually reaches Twilio,
@@ -732,7 +805,8 @@ class CascadedPipelineOrchestrator:
         total_words_sent = 0
 
         def mine() -> bool:
-            return (self.state == ConversationState.AGENT_SPEAKING
+            return (self.is_running
+                    and self.state == ConversationState.AGENT_SPEAKING
                     and self._turn_id == my_turn)
 
         # 1. Start LLM Producer Task
@@ -965,6 +1039,18 @@ class CascadedPipelineOrchestrator:
             logger.error(f"🔴 [CascadedOrchestrator] Phrase streaming error: {e}", exc_info=True)
         finally:
             # Cleanup any active Sentry spans
+            # A turn that no longer holds the floor is not worth waiting for.
+            # The next turn cannot start until `_abandon_current_turn` returns,
+            # and that waits on this teardown, which was shield-waiting a
+            # Cartesia reader parked in recv() with nothing left to wake it:
+            # measured at 15.4 SECONDS of dead air after a barge-in whenever
+            # the cancelled context happened not to emit a trailing chunk.
+            # Whether it does is a provider detail this code must not bet on.
+            if not mine():
+                for task in (producer_task, receiver_task):
+                    if not task.done():
+                        task.cancel()
+
             # These awaits are bounded. If Cartesia never emits `done` (e.g.
             # after a cancelled context) an unbounded await here would block the
             # single Twilio/Deepgram run loop and mute the call permanently.
@@ -1077,6 +1163,16 @@ class CascadedPipelineOrchestrator:
                 self._pending_hangup = False
                 self._pending_transfer = None
                 self._pending_turn = 0
+
+            # The call is over. `stop()` cancels this turn, but the two joins
+            # above swallow that cancellation (once each) and the teardown runs
+            # to the end — so without this a transfer promised in the last turn
+            # was dialled about thirty seconds after the caller hung up.
+            if not self.is_running:
+                self._pending_hangup = False
+                self._pending_transfer = None
+                self._pending_turn = 0
+                return
 
             if self._pending_hangup:
                 self._pending_hangup = False
@@ -1330,9 +1426,16 @@ class CascadedPipelineOrchestrator:
         Stop the orchestrator and close all active bridges.
         """
         self.is_running = False
-        for task in (self._turn_worker_task, self._turn_task):
+        for task in (self._turn_worker_task, self._turn_task, self._audio_reader):
             if task and not task.done():
                 task.cancel()
+        # Awaited, so the bridges are not closed underneath a live reader.
+        for task in (self._turn_worker_task, self._turn_task, self._audio_reader):
+            if task:
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
         await self._save_transcript()
         await self.deepgram.close()
         await self.cartesia.close()

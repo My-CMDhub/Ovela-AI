@@ -56,6 +56,22 @@ SHORT_BUT_MEANT_IT = [
     "and the price?", "how much total?", "what about parking?",
     "cancel my booking", "change my dates", "is it available?",
     "send it again", "make it two nights", "any rooms tonight?",
+    # The first fix for the above traded one data loss for another: the
+    # continuer vocabulary held function words ("i", "it", "of", "and",
+    # "you", "be", "all", "should", "keep", "see", "go", "on"), and because
+    # classification was a subset test over that bag they composed into whole
+    # sentences. Multi-word continuers are matched as phrases now.
+    "keep it", "see you", "I should go", "all of it", "should I keep it",
+    "and then", "you keep it", "should I",
+]
+
+# Every one of these must be held, so the fix for the line above cannot be
+# "let everything through".
+HELD_AS_BACKCHANNEL = [
+    "Okay.", "Mhmm.", "Yeah.", "Right.", "Thanks.", "Alright.", "Oh.",
+    "Perfect.", "Go on. Go on.", "Okay. Continue.", "I see.", "Of course.",
+    "Got it.", "Makes sense.", "Should be fine.", "All good.", "Thank you.",
+    "Fair enough.", "Mm-hmm.", "Yeah, yeah.",
 ]
 
 
@@ -76,6 +92,12 @@ class TestShortIsNotMeaningless:
         assert not is_backchannel_word(said), (
             f"{said!r} was classified as a backchannel and would be discarded "
             f"while the agent spoke — the caller's words never reach the model"
+        )
+
+    @pytest.mark.parametrize("said", HELD_AS_BACKCHANNEL)
+    def test_a_real_backchannel_is_still_held(self, said):
+        assert is_backchannel_word(said), (
+            f"{said!r} would cut the agent off mid-sentence"
         )
 
 

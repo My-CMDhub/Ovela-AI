@@ -779,3 +779,224 @@ async def test_the_greeting_falls_back_to_synthesis_when_the_clip_fails():
         "been stood down"
     )
     assert agent.state == ConversationState.AWAITING_INPUT
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A third review found the invariant held for the turn pipeline and not for the
+# greeting, which was a second speaker the worker knew nothing about — plus two
+# faults in the paths that enforce the invariant.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_the_greeting_gives_up_the_floor_to_the_first_turn():
+    """
+    The greeting ran on its own task with no turn id, and its only stop
+    condition was the shared `self.state` — which the new turn sets back to
+    AGENT_SPEAKING three lines after the barge-in. So the greeting's tail
+    played over the caller's first answer and then stood that turn down
+    mid-sentence. Measured before the fix: 12 greeting frames interleaved
+    with the answer, the answer cut at 22 of 60 chunks, and because it
+    counted as interrupted it never reached history — so the agent answered
+    the same question again.
+
+    `arm_immunity(3.0)` covers the whole clip, so acoustic barge-in is off
+    for the greeting and this path — a Flux EndOfTurn — is the only way to
+    interrupt it. It is the common case, not an edge case.
+
+    Red only when BOTH the greeting's turn-id gate and its registration as
+    `_turn_task` are removed; either one alone stops the overlap. Same
+    redundancy as `test_only_one_turn_is_ever_live`, and worth keeping, but it
+    means this pins neither mechanism on its own.
+    """
+    import json as _json
+
+    greeting_media_after_handover = []
+    handed_over = asyncio.Event()
+
+    ws = AsyncMock()
+
+    async def record(payload):
+        # The turn stub below writes no audio of its own, so every media frame
+        # after the handover belongs to the greeting. Filtering on "is a turn
+        # running" instead — which the first version of this test did — makes
+        # the failure unrecordable and the test worthless.
+        if handed_over.is_set() and _json.loads(payload).get("event") == "media":
+            greeting_media_after_handover.append(payload)
+
+    ws.send_text = AsyncMock(side_effect=record)
+    turn_running = {"yes": False}
+
+    agent = CascadedPipelineOrchestrator(twilio_ws=ws, stream_sid="MZtest")
+    agent.cartesia = MagicMock()
+    agent.cartesia.cancel_stream = AsyncMock()
+    agent.cartesia.send_transcript_chunk = AsyncMock()
+    agent.is_running = True
+
+    async def pipeline(*_a, **_kw):
+        turn_running["yes"] = True
+        agent.state = ConversationState.AGENT_SPEAKING
+        await asyncio.sleep(0.5)
+        # Only reached if the greeting did not stand this turn down.
+        agent.history.append({"role": "assistant", "content": "Yes, we have rooms tonight."})
+        agent.state = ConversationState.AWAITING_INPUT
+
+    agent._run_parallel_streaming_pipeline = pipeline
+
+    greeting = asyncio.create_task(agent.trigger_initial_greeting())
+    await asyncio.sleep(0.4)                     # greeting is playing
+    assert not greeting.done(), "the greeting finished before the test could interrupt it"
+
+    handed_over.set()
+    await agent.handle_user_turn_complete("do you have a room for tonight?")
+
+    assert not greeting_media_after_handover, (
+        f"{len(greeting_media_after_handover)} frames of greeting audio were still "
+        f"written to Twilio after the first turn took the floor"
+    )
+    spoken = [m for m in agent.history if m["role"] == "assistant"
+              and "rooms tonight" in m["content"]]
+    assert spoken, (
+        "the first answer never reached history — the greeting's tail stood the "
+        "turn down mid-sentence and it counted as interrupted"
+    )
+    greeting.cancel()
+
+
+async def test_a_call_that_has_stopped_keeps_no_promises():
+    """
+    `stop()` cancels the turn, but the pipeline's teardown swallows that
+    cancellation once per join and runs to the end — so a transfer promised in
+    the last turn was dialled about thirty seconds after the caller hung up.
+    The turn-id guard passes, because the turn id never moved.
+    """
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.cartesia = MagicMock()
+    agent.cartesia.cancel_stream = AsyncMock()
+    agent.cartesia.send_transcript_chunk = AsyncMock()
+    agent._transfer_call = AsyncMock()
+    agent._hangup_call = AsyncMock()
+
+    async def audio():
+        yield {"type": "chunk", "context_id": "ctx", "data": "QUJDRA=="}
+        yield {"type": "done", "context_id": "ctx"}
+
+    agent.cartesia.receive_audio_events = audio
+    agent.state = ConversationState.AGENT_SPEAKING
+    agent.is_running = True
+
+    async def llm(history):
+        yield "Putting you through now."
+
+    agent.llm_callback = llm
+    agent._turn_id += 1
+    agent._pending_transfer = "+61300000000"
+    agent._pending_turn = agent._turn_id
+
+    agent.is_running = False          # the caller hung up; stop() ran
+    await agent._run_parallel_streaming_pipeline(agent._turn_id, context_id="ctx")
+
+    agent._transfer_call.assert_not_called()
+    agent._hangup_call.assert_not_called()
+
+
+async def test_abandoning_a_turn_does_not_leave_the_caller_in_silence():
+    """
+    `_abandon_current_turn` waits for the abandoned pipeline, whose teardown
+    shield-waited its Cartesia reader for 15s — and that reader is parked in
+    recv() with nothing to wake it once its context is cancelled. Nothing
+    could cancel it except the NEXT turn, which cannot start until the wait
+    returns. Measured at 15.4 seconds of dead air after a barge-in.
+
+    Whether a cancelled Cartesia context emits a trailing chunk is a provider
+    detail, and the code must not bet on the optimistic branch — so this
+    server goes silent, which is the bad case.
+
+    **A canary, not a regression test.** It stays green with the pre-cancel
+    removed, because cancelling the pipeline task also interrupts the
+    shield-wait inside it, and I could not reproduce the 15s through this
+    path. The reviewer measured it driving the worker; the pre-cancel is kept
+    because not waiting on a socket for a turn that is over is right either
+    way, and this assertion will catch the wait if another path reintroduces
+    it.
+    """
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.cartesia = MagicMock()
+    agent.cartesia.cancel_stream = AsyncMock()
+    agent.cartesia.send_transcript_chunk = AsyncMock()
+
+    async def audio():
+        yield {"type": "chunk", "context_id": "ctx_one", "data": "QUJDRA=="}
+        await asyncio.sleep(3600)       # parked, exactly like a cancelled context
+
+    agent.cartesia.receive_audio_events = audio
+    agent.is_running = True
+    agent.state = ConversationState.AGENT_SPEAKING
+
+    async def llm(history):
+        yield "Check-in is from two p.m."
+
+    agent.llm_callback = llm
+    agent._turn_id += 1
+    agent._turn_task = asyncio.create_task(agent._run_parallel_streaming_pipeline(
+        agent._turn_id, context_id="ctx_one"))
+    await asyncio.sleep(0.2)
+
+    agent.state = ConversationState.AWAITING_INPUT       # barge-in
+    started = time.monotonic()
+    await agent._abandon_current_turn()
+    waited = time.monotonic() - started
+
+    assert waited < 1.0, (
+        f"the caller waited {waited:.1f}s of dead air before the next turn could "
+        f"start, because the abandoned turn was shield-waiting a parked socket"
+    )
+
+
+async def test_a_transcript_is_not_lost_when_the_handler_is_cancelled():
+    """
+    `history.append` for the caller's words sat BELOW
+    `await self._abandon_current_turn()`, and the worker cancels the handler
+    the moment the caller says something else. A transcript caught in that
+    window was dropped with nothing logged — the caller said it, the model
+    never saw it.
+
+    The window is opened here the way a real one is: a turn that is slow to
+    die, so the next handler is still inside `_abandon_current_turn` when the
+    caller speaks again.
+
+    **A canary, not a regression test.** It stays green with the append moved
+    back below the abandon — I could not get the worker to cancel a handler
+    mid-abandon in this harness, though a reviewer demonstrated the loss with
+    their own. The ordering is kept because recording what the caller said
+    before doing anything cancellable is right regardless, and this assertion
+    will catch the loss if a future change widens the window.
+    """
+    async def pipeline(*_a, **_kw):
+        agent.state = ConversationState.AGENT_SPEAKING
+        try:
+            await asyncio.sleep(2.0)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.30)      # slow teardown, like the real joins
+            raise
+
+    agent = _agent(pipeline)
+    dg = FakeDeepgram([
+        (0.00, {"type": "TurnInfo", "event": "EndOfTurn", "transcript": "what rooms do you have?"}),
+        (0.10, {"type": "TurnInfo", "event": "EndOfTurn", "transcript": "hello? what rooms do you have?"}),
+        (0.15, {"type": "TurnInfo", "event": "EndOfTurn", "transcript": "are you still there?"}),
+    ])
+    agent.deepgram = dg
+
+    producer = asyncio.create_task(dg.produce())
+    reader = asyncio.create_task(agent.process_deepgram_events())
+    worker = asyncio.create_task(agent._turn_worker())
+    await producer
+    await asyncio.sleep(0.9)
+    reader.cancel()
+    worker.cancel()
+
+    said = [m["content"] for m in agent.history if m["role"] == "user"]
+    assert "hello? what rooms do you have?" in said, (
+        f"the caller's words were dropped in the cancellation window; history "
+        f"holds only {said!r}"
+    )

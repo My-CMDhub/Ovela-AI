@@ -192,17 +192,44 @@ class VadProcessor:
 
 # Words that, on their own or in any combination, mean "keep talking". A caller
 # saying only these has not asked for the floor.
+# Single words that are never anything but "I am still listening".
 _CONTINUER_WORDS = {
     "mhmm", "mmhmm", "mm", "hmm", "mmm", "uhhuh", "uh", "huh", "ah", "oh",
     "yeah", "yep", "yup", "yes", "ok", "okay", "right", "sure", "gotcha",
-    "go", "on", "continue", "carry", "keep", "going", "i", "see", "got", "it",
-    "of", "course", "fine", "good", "great", "cool", "nice", "true", "indeed",
-    "understood", "makes", "sense", "please", "and", "so", "then",
-    # Heard cutting the agent off on real calls (3-5 September): "Thanks.",
-    # "Alright.", "Should be fine.", "No. All good."
-    "thanks", "thank", "you", "alright", "lovely", "perfect", "brilliant",
-    "should", "be", "all", "well", "mm-hmm", "aha", "okey", "dokey",
+    "continue", "fine", "good", "great", "cool", "nice", "true", "indeed",
+    "understood", "please", "thanks", "thank", "alright", "lovely", "perfect",
+    "brilliant",
+    # "Go." on its own, heard cutting the agent off on 3 September, means
+    # "go on". Safe as a single because the subset test is conjunctive: "I
+    # should go" still needs "i" and "should" to be continuers, and they are
+    # deliberately not.
+    "go",
 }
+
+# Multi-word continuers, matched as whole phrases rather than as a bag of
+# words. A subset test over a vocabulary containing function words composes
+# them into sentences: with "i", "it", "of", "and", "so", "then", "go", "on",
+# "keep", "see", "got", "you", "be", "all", "should" all present as singles,
+# "keep it", "see you", "I should go" and "all of it" were every one of them
+# classified as a backchannel and discarded — the same data loss as the
+# `len(words) <= 3` rule they replaced. Compared on DISTINCT words so that
+# "go on, go on" still matches "go on".
+_CONTINUER_PHRASES = frozenset({
+    frozenset({"go", "on"}),
+    frozenset({"carry", "on"}),
+    frozenset({"keep", "going"}),
+    frozenset({"i", "see"}),
+    frozenset({"got", "it"}),
+    frozenset({"of", "course"}),
+    frozenset({"makes", "sense"}),
+    frozenset({"should", "be", "fine"}),
+    frozenset({"all", "good"}),
+    frozenset({"sounds", "good"}),
+    frozenset({"fair", "enough"}),
+    frozenset({"thank", "you"}),
+    frozenset({"thats", "fine"}),
+    frozenset({"thats", "great"}),
+})
 
 
 def is_backchannel_word(utterance: str) -> bool:
@@ -241,7 +268,7 @@ def is_backchannel_word(utterance: str) -> bool:
         
     # Lowercase and strip basic punctuation for word count and trigger checks
     normalized = utterance.lower()
-    for char in ".,!?:;()-":
+    for char in ".,!?:;()-'":
         normalized = normalized.replace(char, " ")
     words = normalized.split()
     
@@ -253,14 +280,17 @@ def is_backchannel_word(utterance: str) -> bool:
     if any(w in trigger_words for w in words):
         return False
 
-    # Continuers: the caller telling the agent to KEEP GOING. Recognised as
-    # whole phrases because the word count alone gets them wrong — "go on, go
-    # on" is four words and was classified as an interruption, so on a real
-    # call the agent cut itself off every time the caller encouraged it to
-    # carry on. Repetition is normal here ("yeah, yeah", "mhmm, mhmm"), so the
-    # set of DISTINCT words is what matters, not the length.
+    # Continuers: the caller telling the agent to KEEP GOING. Recognised by
+    # vocabulary, never by length — "go on, go on" is four words and was once
+    # classified as an interruption, so the agent cut itself off every time
+    # the caller encouraged it to carry on. Repetition is normal here
+    # ("yeah, yeah", "mhmm, mhmm"), so DISTINCT words are what matter.
     distinct = set(words)
-    if distinct and distinct <= _CONTINUER_WORDS:
+    if not distinct:
+        return True
+    if distinct <= _CONTINUER_WORDS:
+        return True
+    if distinct in _CONTINUER_PHRASES:
         return True
 
     # Anything carrying a word we do not recognise as a continuer is the

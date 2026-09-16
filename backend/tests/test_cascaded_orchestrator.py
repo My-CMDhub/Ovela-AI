@@ -22,10 +22,16 @@ def mock_twilio_ws():
 
 @pytest.fixture
 def orchestrator(mock_twilio_ws):
-    return CascadedPipelineOrchestrator(
+    agent = CascadedPipelineOrchestrator(
         twilio_ws=mock_twilio_ws,
         stream_sid="MZ123456789",
     )
+    # A live call. The pipeline's `mine()` and its one-way-action block both
+    # require it: a turn that outlives `stop()` must stop working, and a call
+    # that has ended keeps no promises — a transfer was being dialled about
+    # thirty seconds after the caller hung up.
+    agent.is_running = True
+    return agent
 
 
 class TestCascadedPipelineOrchestrator:
