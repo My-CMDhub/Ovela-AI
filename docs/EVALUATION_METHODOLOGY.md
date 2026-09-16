@@ -104,7 +104,9 @@ Readers of [`evaluation_run.json`](../backend/tests/evaluation_run.json) will no
 
 **What happens in production:** The Hot Path pre-recorded system audio ("Let me check that for you.") plays immediately as a filler while the Cold Path processes. The guest hears zero silence. The `[no response]` gap is completely invisible in live telephony — it only surfaces in the simulation trace because the harness does not simulate filler audio playback.
 
-**Evidence:** The production Cloud Run logs show consistent sub-850ms TTFT on every turn including tool calls, with Deepgram Nova-3 filler audio bridging any ADK graph latency. The simulation waivers section (above) explicitly covers this test environment constraint.
+**Evidence — corrected 2026-09-16.** This paragraph previously read "the production Cloud Run logs show consistent sub-850ms TTFT on every turn including tool calls". **That claim is withdrawn.** It described the ADK/Cloud Run path, which is no longer the conversational driver, and instrumented Sentry spans from the live cascaded pipeline contradict the "including tool calls" half of it: a turn that calls a tool has a p50 of **1.5–2.7 s** on every day with data between 18 August and 16 September. Only a plain turn — one LLM round, no tool — is inside budget, at a p50 of **551–706 ms** (six days, n≥12 each).
+
+The point the paragraph was making still stands and does not need the number: a `[no response]` in the harness trace is a polling artifact, and on a live call the pre-recorded filler ("Let me check that for you.") covers the tool round trip, so the guest hears no silence. What the filler does **not** do is make the turn fast — it makes the wait bearable. Current figures, with sample sizes, live in `memory_bank/END_SESSION.md`; regenerate them with `python -m scripts.analyze_trace --period 7d --by-day` from `backend/`.
 
 ---
 *Evaluated on Google Gemini Enterprise ADK — Gemini 2.5 Flash via Vertex AI Application Default Credentials.*
