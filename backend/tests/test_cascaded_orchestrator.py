@@ -165,6 +165,12 @@ class TestCascadedPipelineOrchestrator:
 
         with patch("asyncio.sleep", AsyncMock()) as mock_sleep:
             await orchestrator.handle_user_turn_complete("Do you have availability?")
+            # The turn is its own task now and is deliberately not awaited by
+            # the handler: awaiting it there blocked the Deepgram read loop for
+            # the whole reply, so nothing the caller said was read until the
+            # answer had finished playing. The turn still has to finish before
+            # its effects can be asserted — it just no longer holds the socket.
+            await orchestrator._turn_task
             assert len(orchestrator.history) == 2
             assert orchestrator.history[0]["content"] == "Do you have availability?"
             assert orchestrator.history[1]["content"] == "Sure I can check that for you right now."

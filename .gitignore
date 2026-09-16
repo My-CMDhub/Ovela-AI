@@ -88,3 +88,4 @@ traces/cover-*README.md
 !backend/tests/test_relative_dates.py
 !backend/tests/test_backchannel_barge_in.py
 !backend/tests/test_analyze_trace.py
+!backend/tests/test_turn_pipelining.py

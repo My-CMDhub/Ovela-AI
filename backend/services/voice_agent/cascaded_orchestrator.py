@@ -164,7 +164,10 @@ class CascadedPipelineOrchestrator:
         self._tool_context: Dict[str, Any] = {"availability_cache": {}}
         self.is_running = False
         self.current_context_id: Optional[str] = None
-        self._pending_llm_task: Optional[asyncio.Task] = None
+        # The turn currently being spoken. Named for what it is: this used to
+        # be `_pending_llm_task` and doubled as the handle TurnResumed cancels,
+        # so a TurnResumed could kill the reply the caller was listening to.
+        self._turn_task: Optional[asyncio.Task] = None
 
         # Phase 12 modular components
         self.vad = VadProcessor(aggressiveness=3, sample_rate=8000, frame_ms=20)
@@ -407,7 +410,12 @@ class CascadedPipelineOrchestrator:
                     if self.twilio_ws:
                         await self.twilio_ws.send_text(json.dumps(mark_event))
                     word_count += 1
-            self.mark_tracker.set_total_words(word_count)
+            # `mark_tracker.set_total_words(word_count)` used to sit here.
+            # MarkTracker has no such method and never did, so this line
+            # raised AttributeError straight into the `except` below and every
+            # fallback greeting logged "Failed streaming initial greeting"
+            # after streaming it perfectly well. Nothing reads a total from
+            # the tracker — `confirmed_index` is the only thing barge-in needs.
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] Failed streaming initial greeting: {e}")
         finally:
@@ -456,9 +464,19 @@ class CascadedPipelineOrchestrator:
                 logger.info("⚡ [CascadedOrchestrator] EagerEndOfTurn received. Pre-warming LLM...")
 
             elif turn_state == "TurnResumed":
-                logger.info("🔄 [CascadedOrchestrator] TurnResumed received. Canceling early LLM preparation.")
-                if self._pending_llm_task and not self._pending_llm_task.done():
-                    self._pending_llm_task.cancel()
+                # The caller paused and carried on, so Flux withdraws the end
+                # of turn it had proposed. There is nothing of ours to undo:
+                # the EagerEndOfTurn branch above only logs, so no speculative
+                # work was ever started.
+                #
+                # This branch used to cancel `_pending_llm_task` — which,
+                # because the same attribute held the live turn, meant a
+                # TurnResumed cancelled the answer being spoken. The reply is
+                # appended to history only after its playback drains, so the
+                # agent lost all record of an answer the caller had heard and
+                # then gave it again. On call 2 the caller asked "about my
+                # previous question?" twice.
+                logger.info("🔄 [CascadedOrchestrator] TurnResumed — caller is still talking.")
 
             elif turn_state in ("EndOfTurn", "SpeechEnded", "Results"):
                 # `Update` is interim — deliberately excluded so the LLM fires
@@ -511,11 +529,46 @@ class CascadedPipelineOrchestrator:
         )
         self._span_3 = None
 
-        # Start parallel streaming pipeline
-        self._pending_llm_task = asyncio.create_task(
-            self._run_parallel_streaming_pipeline()
-        )
-        await self._pending_llm_task
+        # The turn runs as its own task and is deliberately NOT awaited here.
+        #
+        # This coroutine is called from inside `process_deepgram_events`'
+        # `async for`. Awaiting the turn there stopped us READING the socket
+        # for the whole of it — LLM, TTS, every audio byte, and the playback
+        # drain. Deepgram kept sending; the events queued in the socket and
+        # were handled in a burst once the answer finished playing:
+        #
+        #     05:48:28.412472  EagerEndOfTurn
+        #     05:48:28.412677  TurnResumed
+        #     05:48:28.412808  EagerEndOfTurn
+        #     05:48:28.412928  User finished turn: 'do you allow pets?'
+        #
+        # Four events inside 0.5ms is a backlog draining, not speech. The
+        # caller had asked seconds earlier — "I must wait several seconds,
+        # then it detects the new question" — and the wait was one reply long,
+        # so it grew and shrank with the length of the last answer. Sentry
+        # never showed it: Span 1 opens below this line, after the read.
+        #
+        # The previous turn is not cancelled. Every loop inside the pipeline
+        # is guarded on its own turn id and winds itself down, and whatever
+        # the caller actually heard was already appended to history by
+        # `trigger_barge_in` above. Cancelling here would throw that away.
+        self._turn_task = asyncio.create_task(self._run_parallel_streaming_pipeline())
+        self._turn_task.add_done_callback(self._turn_task_finished)
+
+    @staticmethod
+    def _turn_task_finished(task: asyncio.Task) -> None:
+        """
+        Nothing awaits a turn any more, so nothing would report its failure.
+        An unretrieved exception on a fire-and-forget task is silent until the
+        process exits — and this pipeline's dangerous bugs are all the quiet
+        ones.
+        """
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.error("🔴 [CascadedOrchestrator] Turn failed: %s", exc, exc_info=exc)
+            sentry_sdk.capture_exception(exc)
 
     async def _run_parallel_streaming_pipeline(self) -> None:
         """
@@ -524,6 +577,25 @@ class CascadedPipelineOrchestrator:
         """
         start_time = time.time()
         llm_queue = asyncio.Queue()
+
+        # Claimed before any task is created, so every loop below can ask
+        # whether it is still the turn that started it.
+        #
+        # `self.state` alone cannot answer that. Barge-in sets AWAITING_INPUT
+        # and `handle_user_turn_complete` sets AGENT_SPEAKING back three lines
+        # later for the new turn, so a loop that only watches the shared flag
+        # wakes up, sees "speaking", and keeps writing the OLD reply's audio
+        # into the same Twilio socket the new reply is using. The caller hears
+        # both answers at once — reported as "the new answer overlaps the
+        # previous one". The context_id filter does not catch it either: a
+        # stale receiver compares events against the context it captured
+        # itself, so its own trailing chunks match and pass.
+        self._turn_id += 1
+        my_turn = self._turn_id
+
+        def mine() -> bool:
+            return (self.state == ConversationState.AGENT_SPEAKING
+                    and self._turn_id == my_turn)
 
         # 1. Start LLM Producer Task
         async def llm_producer():
@@ -545,7 +617,7 @@ class CascadedPipelineOrchestrator:
                                     op="pipeline.span3",
                                     name="Span 3: First Token Yielded -> Cartesia First Audio Chunk Ingestion"
                                 )
-                        if self.state != ConversationState.AGENT_SPEAKING:
+                        if not mine():
                             break
                         await llm_queue.put(token)
                 else:
@@ -575,8 +647,6 @@ class CascadedPipelineOrchestrator:
         self._total_words_sent = 0
         self._audio_bytes_sent = 0
         self._playback_started_at = 0.0
-        self._turn_id += 1
-        my_turn = self._turn_id
 
         async def audio_receiver():
             first_chunk_ingested = False
@@ -587,8 +657,8 @@ class CascadedPipelineOrchestrator:
             turn_context_id = self.current_context_id
             try:
                 async for audio_evt in self.cartesia.receive_audio_events():
-                    if self.state != ConversationState.AGENT_SPEAKING:
-                        break  # Barge-in occurred mid-stream!
+                    if not mine():
+                        break  # barge-in, or a newer turn owns the line now
 
                     evt_context_id = audio_evt.get("context_id")
                     if evt_context_id and turn_context_id and evt_context_id != turn_context_id:
@@ -670,7 +740,7 @@ class CascadedPipelineOrchestrator:
 
         try:
             while True:
-                if self.state != ConversationState.AGENT_SPEAKING:
+                if not mine():
                     break
 
                 chunk = await llm_queue.get()
@@ -692,7 +762,7 @@ class CascadedPipelineOrchestrator:
                 phrases, text_buffer = split_buffer_into_phrases(text_buffer, is_last_chunk)
 
                 for phrase in phrases:
-                    if self.state != ConversationState.AGENT_SPEAKING:
+                    if not mine():
                         break
 
                     full_response_parts.append(phrase.strip())
@@ -1042,8 +1112,8 @@ class CascadedPipelineOrchestrator:
         Stop the orchestrator and close all active bridges.
         """
         self.is_running = False
-        if self._pending_llm_task and not self._pending_llm_task.done():
-            self._pending_llm_task.cancel()
+        if self._turn_task and not self._turn_task.done():
+            self._turn_task.cancel()
         await self._save_transcript()
         await self.deepgram.close()
         await self.cartesia.close()

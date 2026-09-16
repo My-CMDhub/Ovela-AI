@@ -11,39 +11,60 @@ from services.voice_agent.vad import ConversationState, is_backchannel_word
 
 class MarkTracker:
     """
-    Tracks word delivery milestones (`mark_word_N`) echoed back by Twilio
-    to precisely measure how many words reached the caller's ear before barge-in.
+    Tracks word delivery milestones echoed back by Twilio to measure how many
+    words reached the caller's ear before barge-in.
+
+    Marks carry the turn they belong to. They used to be named `mark_word_N`
+    with nothing to say which turn that was, and Twilio keeps echoing marks
+    for audio it had already queued when the barge-in landed. Those late
+    echoes arrive during the NEXT turn, whose marks reuse the same names, so
+    turn 1's `mark_word_18` confirmed turn 2's eighteenth word while the
+    caller had heard three. `confirmed_index` is what barge-in prunes history
+    against, so an index that runs ahead of the ear makes the agent believe
+    the caller heard sentences that were never played — and it does not repeat
+    them.
     """
     def __init__(self):
         self._registered_marks = set()
         self.confirmed_index = 0
+        self.generation = 0
 
     def register_word(self, word_index: int) -> str:
         """
-        Register a word index and generate its unique mark name for Twilio.
+        Register a word index and generate its mark name for Twilio. The name
+        carries this turn's generation so a late echo cannot be mistaken for
+        one of ours.
         """
-        mark_name = f"mark_word_{word_index}"
+        mark_name = f"mark_t{self.generation}_w{word_index}"
         self._registered_marks.add(mark_name)
         return mark_name
 
     def confirm_mark(self, mark_name: str) -> None:
         """
-        Confirm a mark echoed by Twilio if it was previously registered.
-        Updates confirmed_index to the latest confirmed word position.
+        Confirm a mark echoed by Twilio if it belongs to this turn.
+
+        Takes the furthest position confirmed, never simply the latest: marks
+        usually arrive in order, and on the one occasion they do not, the ear
+        does not travel backwards.
         """
-        if mark_name in self._registered_marks:
-            try:
-                index = int(mark_name.split("_")[-1])
-                self.confirmed_index = index
-            except (ValueError, IndexError):
-                pass
+        if mark_name not in self._registered_marks:
+            return
+        try:
+            turn, _, word = mark_name.removeprefix("mark_t").partition("_w")
+            if int(turn) != self.generation:
+                return
+            self.confirmed_index = max(self.confirmed_index, int(word))
+        except (ValueError, IndexError):
+            pass
 
     def reset(self) -> None:
         """
-        Clear registrations and reset confirmed index to 0 for a new turn.
+        Start a new turn: drop this turn's registrations and its index, and
+        move the generation on so nothing echoed late can reach the new one.
         """
         self._registered_marks.clear()
         self.confirmed_index = 0
+        self.generation += 1
 
 
 def slice_to_confirmed_word(text: str, confirmed_word_index: int) -> str:
