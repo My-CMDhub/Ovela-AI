@@ -43,6 +43,21 @@ REAL_INTERRUPTIONS = [
     "And reference number again, please?",
 ]
 
+# A backchannel is a known vocabulary, not a short sentence. `is_backchannel_word`
+# used to end in `len(words) <= 3`, so every one of these was DISCARDED while the
+# agent was speaking — logged as "letting the agent finish" and never passed to
+# the model. A caller asking to cancel their booking was thrown away.
+#
+# It is reachable only when the state is still AGENT_SPEAKING when the words
+# land, which today's 500ms acoustic cut usually prevents — so fixing the cut to
+# wait for the words, which is where the turn-taking work is going, would have
+# turned this from an annoyance into silently dropped instructions.
+SHORT_BUT_MEANT_IT = [
+    "and the price?", "how much total?", "what about parking?",
+    "cancel my booking", "change my dates", "is it available?",
+    "send it again", "make it two nights", "any rooms tonight?",
+]
+
 
 @pytest.fixture
 def speaking():
@@ -53,6 +68,15 @@ def speaking():
     agent._agent_audio_started = True
     agent.is_running = True
     return agent
+
+
+class TestShortIsNotMeaningless:
+    @pytest.mark.parametrize("said", SHORT_BUT_MEANT_IT)
+    def test_a_short_question_is_not_a_backchannel(self, said):
+        assert not is_backchannel_word(said), (
+            f"{said!r} was classified as a backchannel and would be discarded "
+            f"while the agent spoke — the caller's words never reach the model"
+        )
 
 
 class TestTheWords:

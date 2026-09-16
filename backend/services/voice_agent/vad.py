@@ -198,16 +198,37 @@ _CONTINUER_WORDS = {
     "go", "on", "continue", "carry", "keep", "going", "i", "see", "got", "it",
     "of", "course", "fine", "good", "great", "cool", "nice", "true", "indeed",
     "understood", "makes", "sense", "please", "and", "so", "then",
+    # Heard cutting the agent off on real calls (3-5 September): "Thanks.",
+    # "Alright.", "Should be fine.", "No. All good."
+    "thanks", "thank", "you", "alright", "lovely", "perfect", "brilliant",
+    "should", "be", "all", "well", "mm-hmm", "aha", "okey", "dokey",
 }
 
 
 def is_backchannel_word(utterance: str) -> bool:
     """
-    Determine if an utterance is a short affirmation backchannel (≤3 words)
-    that should be ignored while the AI is speaking, or a genuine correction/interruption.
-    
-    Trigger override words ('wait', 'stop', 'no', 'actually') are never treated
-    as backchannels even if <=3 words.
+    Determine if an utterance is an affirmation backchannel that should be
+    ignored while the AI is speaking, or a genuine correction/interruption.
+
+    **A backchannel is a known vocabulary, not a short sentence.** This used
+    to end in `len(words) <= 3`, which discarded any three-word utterance the
+    caller made while the agent was talking — logged as "letting the agent
+    finish" and never passed to the model:
+
+        "cancel my booking"   DISCARDED
+        "and the price?"      DISCARDED
+        "is it available?"    DISCARDED
+        "change my dates"     DISCARDED
+
+    Nothing caught it because the acoustic barge-in at 500ms of voice usually
+    flips the state out of AGENT_SPEAKING before the words arrive, so this
+    filter is not reached. Fixing the acoustic cut to wait for the words —
+    which is what the turn-taking work is heading towards — would have turned
+    an annoyance into silently dropped instructions about a caller's booking.
+
+    An utterance is a backchannel only when every distinct word in it is one
+    of the known continuers. Trigger override words ('wait', 'stop', 'no',
+    'actually') are never backchannels.
     
     Args:
         utterance: Transcribed text snippet or user utterance.
@@ -242,4 +263,6 @@ def is_backchannel_word(utterance: str) -> bool:
     if distinct and distinct <= _CONTINUER_WORDS:
         return True
 
-    return len(words) <= 3
+    # Anything carrying a word we do not recognise as a continuer is the
+    # caller saying something. Short is not the same as meaningless.
+    return False
