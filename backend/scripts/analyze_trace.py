@@ -9,13 +9,20 @@ Usage (from backend/):
     python -m scripts.analyze_trace                # last 14d
     python -m scripts.analyze_trace --period 24h
     python -m scripts.analyze_trace --save         # write to benchmarks/
+
+Read the WINDOW line, not the --period label. Sentry pages at 100 rows; this
+pages until the period is exhausted or --max-spans is hit, and prints the
+timestamps actually covered. A busy hour can fill the cap on its own, and a
+period that reports a narrower window than it asked for was truncated.
 """
 
 import argparse
 import json
+import logging
 import os
 import sys
 from datetime import datetime
+from statistics import median
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -28,10 +35,36 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 SENTRY_API = "https://sentry.io/api/0"
 TRANSACTION = "user_voice_turn_transaction"
 TARGET_MS = 800
+PAGE_SIZE = 100      # Sentry's maximum per page on the events endpoint
+MAX_SPANS = 2000     # safety valve; one 70-minute call alone produced 130 turns
+
+# A stage that reports under this is reporting instrumentation, not work:
+# Span 3 has come back at 0.8ms, which is not a synthesis time.
+IMPLAUSIBLE_MS = 10.0
+
+logger = logging.getLogger(__name__)
+
+# What the last fetch actually covered. Sentry's scan budget makes a long
+# period return a SAMPLE and then report no further pages, so the row count
+# is not the turn count unless dataScanned == "full".
+LAST_FETCH: dict = {}
 
 
-def fetch_spans(period: str) -> list[dict]:
-    """Fetch voice-turn spans from Sentry's Discover API."""
+def window_of(spans: list[dict]) -> tuple[str, str]:
+    """Oldest and newest timestamp actually returned, '' when unknown."""
+    stamps = sorted(s["timestamp"] for s in spans if s.get("timestamp"))
+    return (stamps[0], stamps[-1]) if stamps else ("", "")
+
+
+def fetch_spans(period: str, max_spans: int = MAX_SPANS) -> list[dict]:
+    """
+    Fetch voice-turn spans from Sentry's Discover API, following pagination.
+
+    One page is 100 rows sorted newest-first. Returning a single page silently
+    turns any --period into "the most recent 100 turns": a `--period 14d` read
+    here once covered a 7-minute window and reported it as two weeks, which
+    read as a 3x regression that had not happened. Always page.
+    """
     token = os.getenv("SENTRY_AUTH_TOKEN", "")
     org = os.getenv("SENTRY_ORG", "")
     project = os.getenv("SENTRY_PROJECT", "")
@@ -50,19 +83,69 @@ def fetch_spans(period: str) -> list[dict]:
         ("statsPeriod", period),
         ("dataset", "spans"),
         ("sort", "-timestamp"),
-        ("per_page", "100"),
+        ("per_page", str(PAGE_SIZE)),
     ]
     if project:
         params.append(("project", project))
 
-    r = httpx.get(
-        f"{SENTRY_API}/organizations/{org}/events/",
-        params=params,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30.0,
+    spans: list[dict] = []
+    cursor: str | None = None
+    scanned = "unknown"
+    pages = 0
+    with httpx.Client(timeout=30.0, headers={"Authorization": f"Bearer {token}"}) as client:
+        while True:
+            page_params = params + ([("cursor", cursor)] if cursor else [])
+            r = client.get(f"{SENTRY_API}/organizations/{org}/events/", params=page_params)
+            r.raise_for_status()
+            body = r.json()
+            spans.extend(body.get("data", []))
+            pages += 1
+            # "full" = every matching row was read. "partial" = the query hit
+            # Sentry's scan budget and sampled: 90d returned 200 rows and
+            # claimed the end, while 30d over the same calls returned 1530.
+            if body.get("meta", {}).get("dataScanned") == "partial":
+                scanned = "partial"
+            elif scanned != "partial":
+                scanned = body.get("meta", {}).get("dataScanned", "unknown")
+
+            nxt = r.links.get("next") or {}
+            cursor = nxt.get("cursor")
+            # Sentry always emits rel="next"; results="false" is the real end.
+            if nxt.get("results") != "true" or not cursor or len(spans) >= max_spans:
+                break
+
+    oldest, newest = window_of(spans)
+    LAST_FETCH.clear()
+    LAST_FETCH.update(
+        period=period, rows=len(spans), pages=pages, data_scanned=scanned,
+        capped=len(spans) >= max_spans, oldest=oldest, newest=newest,
     )
-    r.raise_for_status()
-    return r.json().get("data", [])
+    if scanned == "partial":
+        logger.warning(
+            "Sentry sampled this query (dataScanned=partial) over %s — %s rows are a "
+            "SUBSET, not the turn count. Ask for a shorter period.", period, len(spans)
+        )
+    return spans
+
+
+def by_day(spans: list[dict], name: str) -> dict[str, dict]:
+    """Per-day stats for one span, because a period median hides the story."""
+    days: dict[str, list[float]] = {}
+    for s in spans:
+        if (s.get("span.description") or "(unnamed)") != name:
+            continue
+        if s.get("span.duration") is None or not s.get("timestamp"):
+            continue
+        days.setdefault(s["timestamp"][:10], []).append(float(s["span.duration"]))
+    out = {}
+    for day, values in sorted(days.items()):
+        values.sort()
+        out[day] = {
+            "samples": len(values),
+            "median_ms": round(median(values), 2),
+            "max_ms": round(values[-1], 2),
+        }
+    return out
 
 
 def summarise(spans: list[dict]) -> dict:
@@ -80,9 +163,48 @@ def summarise(spans: list[dict]) -> dict:
         stats[name] = {
             "samples": len(values),
             "min_ms": round(values[0], 2),
-            "median_ms": round(values[len(values) // 2], 2),
+            "median_ms": round(median(values), 2),
             "max_ms": round(values[-1], 2),
             "mean_ms": round(sum(values) / len(values), 2),
+        }
+    return stats
+
+
+def by_kind(spans: list[dict]) -> dict[str, dict]:
+    """
+    Split whole turns into plain and tool turns, per day.
+
+    Pooling the two is the trap that produced a 27% improvement headline out of
+    a change in turn mix: a plain turn runs ~600ms, a turn that calls a tool
+    runs 1.7-2.2s, and the two samples being compared were 36% and 16% tool
+    turns. A trace with one `LLM round` child is a plain turn; two or more is a
+    tool turn, because each tool call costs another round.
+    """
+    traces: dict[str, list[dict]] = {}
+    for s in spans:
+        traces.setdefault(s.get("trace") or "", []).append(s)
+
+    out: dict[str, dict] = {}
+    for rows in traces.values():
+        turn = next(
+            (r for r in rows if (r.get("span.description") or "") == TRANSACTION), None
+        )
+        if not turn or turn.get("span.duration") is None:
+            continue
+        rounds = sum(
+            1 for r in rows if (r.get("span.description") or "").startswith("LLM round")
+        )
+        kind = "plain (no tool)" if rounds <= 1 else "tool  (2+ rounds)"
+        key = f"{turn['timestamp'][:10]}  {kind}"
+        out.setdefault(key, []).append(float(turn["span.duration"]))
+
+    stats = {}
+    for key, values in sorted(out.items()):
+        values.sort()
+        stats[key] = {
+            "samples": len(values),
+            "median_ms": round(median(values), 2),
+            "max_ms": round(values[-1], 2),
         }
     return stats
 
@@ -154,8 +276,11 @@ def analyze(period: str = "1h", spans: list[dict] | None = None) -> dict:
     """
     spans = fetch_spans(period) if spans is None else spans
     stats = summarise(spans)
+    oldest, newest = window_of(spans)
     return {
         "period": period,
+        "window": {"oldest": oldest, "newest": newest},
+        "coverage": dict(LAST_FETCH),
         "span_count": len(spans),
         "stats": stats,
         "gemini_analysis": ask_gemini(stats, spans) if spans else "",
@@ -165,6 +290,14 @@ def analyze(period: str = "1h", spans: list[dict] | None = None) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--period", default="14d", help="Sentry statsPeriod, e.g. 24h / 7d / 14d")
+    ap.add_argument("--max-spans", type=int, default=MAX_SPANS,
+                    help=f"stop paging after this many spans (default {MAX_SPANS})")
+    ap.add_argument("--by-day", action="store_true",
+                    help="break the whole-turn span down per day instead of one median")
+    ap.add_argument("--by-kind", action="store_true",
+                    help="split each day's turns into plain and tool turns — never pool them")
+    ap.add_argument("--no-gemini", action="store_true",
+                    help="numbers only — skip the Vertex call")
     ap.add_argument("--save", action="store_true", help="write result under benchmarks/")
     ap.add_argument(
         "--input",
@@ -178,23 +311,48 @@ def main() -> None:
             spans = json.load(f)
         print(f"📥 Loaded {len(spans)} spans from {args.input}")
     else:
-        spans = fetch_spans(args.period)
+        spans = fetch_spans(args.period, max_spans=args.max_spans)
     if not spans:
         sys.exit(f"No '{TRANSACTION}' spans found in the last {args.period}. Place a call first.")
 
     stats = summarise(spans)
-    print(f"\n📊 {len(spans)} spans over {args.period}\n")
-    for name, s in sorted(stats.items(), key=lambda kv: -kv[1]["mean_ms"]):
-        print(f"  {name[:58]:60s} n={s['samples']:<3} median={s['median_ms']:>9.2f}ms  max={s['max_ms']:>9.2f}ms")
+    oldest, newest = window_of(spans)
+    print(f"\n📊 {len(spans)} spans, --period {args.period}")
+    print(f"   WINDOW {oldest or '?'} → {newest or '?'}  (this, not the period, is what you measured)")
+    if LAST_FETCH.get("data_scanned") == "partial":
+        print(f"   ⚠️  SAMPLED: Sentry reported dataScanned=partial for {args.period}. "
+              f"These {len(spans)} rows are a subset — re-run with a shorter --period "
+              f"before quoting any of it.")
+    if len(spans) >= args.max_spans:
+        print(f"   ⚠️  CAPPED at --max-spans {args.max_spans}: the window above is "
+              f"newest-first and does NOT cover the full {args.period}.")
+    print()
+    for name, st in sorted(stats.items(), key=lambda kv: -kv[1]["mean_ms"]):
+        flag = "  ⚠️ implausible — instrumentation, do not quote" if st["median_ms"] < IMPLAUSIBLE_MS else ""
+        print(f"  {name[:58]:60s} n={st['samples']:<4} median={st['median_ms']:>9.2f}ms  max={st['max_ms']:>9.2f}ms{flag}")
 
-    print("\n🤖 Asking Gemini 2.5 Flash to diagnose...\n")
-    verdict = ask_gemini(stats, spans)
-    print(verdict)
+    if args.by_day:
+        print(f"\n📅 {TRANSACTION} per day (a period median mixes releases):")
+        for day, st in by_day(spans, TRANSACTION).items():
+            print(f"  {day}  n={st['samples']:<4} median={st['median_ms']:>9.2f}ms  max={st['max_ms']:>9.2f}ms")
+
+    if args.by_kind:
+        print("\n🔧 whole turns split by kind (a plain turn and a tool turn are not comparable):")
+        for key, st in by_kind(spans).items():
+            print(f"  {key:34s} n={st['samples']:<4} median={st['median_ms']:>9.2f}ms  max={st['max_ms']:>9.2f}ms")
+
+    verdict = ""
+    if not args.no_gemini:
+        print("\n🤖 Asking Gemini 2.5 Flash to diagnose...\n")
+        verdict = ask_gemini(stats, spans)
+        print(verdict)
 
     if args.save:
         out = {
             "generated_at": datetime.now(ZoneInfo("Australia/Melbourne")).isoformat(),
             "period": args.period,
+            "window": {"oldest": oldest, "newest": newest},
+            "coverage": dict(LAST_FETCH),
             "span_count": len(spans),
             "stats": stats,
             "gemini_analysis": verdict,
