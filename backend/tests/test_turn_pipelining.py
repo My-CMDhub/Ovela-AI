@@ -31,6 +31,8 @@ against the current code — that is the point of them.
 import asyncio
 import time
 
+import pytest
+
 from unittest.mock import AsyncMock, MagicMock
 
 from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestrator
@@ -91,7 +93,8 @@ def _agent(pipeline):
 async def test_a_new_question_is_read_while_the_last_answer_is_still_playing():
     """
     The caller's words must reach `handle_user_turn_complete` when Deepgram
-    sends them, not when the previous answer finishes playing.
+    sends them, not when the previous answer finishes playing. End to end now:
+    the read loop enqueues, `_turn_worker` reads ahead and takes the floor.
 
     Fails today by roughly one reply's length, every time, and the size of
     the delay depends on how long the last answer was — which is why it feels
@@ -123,9 +126,11 @@ async def test_a_new_question_is_read_while_the_last_answer_is_still_playing():
 
     producer = asyncio.create_task(dg.produce())
     reader = asyncio.create_task(agent.process_deepgram_events())
+    worker = asyncio.create_task(agent._turn_worker())
     await producer
     await asyncio.sleep(REPLY_PLAYOUT_S * 3)
     reader.cancel()
+    worker.cancel()
 
     second = "and what about the price?"
     waited = handled_at[second] - dg.available_at[second]
@@ -173,9 +178,11 @@ async def test_turn_resumed_does_not_cancel_the_reply_being_spoken():
 
     producer = asyncio.create_task(dg.produce())
     reader = asyncio.create_task(agent.process_deepgram_events())
+    worker = asyncio.create_task(agent._turn_worker())
     await producer
     await asyncio.sleep(REPLY_PLAYOUT_S * 3)
     reader.cancel()
+    worker.cancel()
 
     spoken = [m for m in agent.history if m["role"] == "assistant"]
     assert spoken, (
@@ -580,3 +587,195 @@ async def test_a_promise_from_an_earlier_turn_is_not_kept_by_a_later_one():
 
     agent._transfer_call.assert_not_called()
     assert agent._pending_transfer is None, "the abandoned promise is still armed"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A second review found that making turns concurrent was the mistake: all the
+# per-turn state lives on the orchestrator, which is correct for exactly one
+# live turn. The read loop now enqueues and `_turn_worker` answers one turn at
+# a time, so the invariant the class was written for is back.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_only_one_turn_is_ever_live():
+    """
+    Two turns sharing one orchestrator cost a silenced Cartesia socket, a
+    transfer dialled by the wrong turn, and an answer the caller heard
+    vanishing from history. The worker must take the floor from a turn before
+    the next one starts, and wait for it to let go.
+
+    **Two independent things enforce this, so reverting either one leaves it
+    green** — worth knowing before trusting it. `await self._turn_task` means
+    cancelling the handler cancels the pipeline with it (awaiting a Task
+    targets that Task's cancellation), and `_abandon_current_turn` cancels and
+    joins it explicitly. Removing both — which is the fire-and-forget model of
+    948a54d — turns this red at peak == 2. Defence in depth by accident rather
+    than design, but the redundancy is worth keeping.
+    """
+    live = 0
+    peak = 0
+
+    async def pipeline(*_a, **_kw):
+        nonlocal live, peak
+        live += 1
+        peak = max(peak, live)
+        agent.state = ConversationState.AGENT_SPEAKING
+        try:
+            await asyncio.sleep(REPLY_PLAYOUT_S)
+            agent.state = ConversationState.AWAITING_INPUT
+        finally:
+            live -= 1
+
+    agent = _agent(pipeline)
+    dg = FakeDeepgram([
+        (0.00, {"type": "TurnInfo", "event": "EndOfTurn", "transcript": "what rooms do you have?"}),
+        (0.05, {"type": "TurnInfo", "event": "EndOfTurn", "transcript": "and the price?"}),
+        (0.05, {"type": "TurnInfo", "event": "EndOfTurn", "transcript": "what about breakfast?"}),
+    ])
+    agent.deepgram = dg
+
+    producer = asyncio.create_task(dg.produce())
+    reader = asyncio.create_task(agent.process_deepgram_events())
+    worker = asyncio.create_task(agent._turn_worker())
+    await producer
+    await asyncio.sleep(REPLY_PLAYOUT_S * 3)
+    reader.cancel()
+    worker.cancel()
+
+    assert peak == 1, f"{peak} turns were live at once"
+
+
+async def test_abandoning_a_turn_does_not_absorb_our_own_cancellation():
+    """
+    `_abandon_current_turn` awaits the turn it cancelled, so it has to tell
+    the turn's CancelledError from its own. Swallowing both made `stop()` fail
+    to stop anything: the turn ran its whole teardown after the caller had
+    hung up and the bridges were closed, and dialled a transfer it had
+    promised.
+    """
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+
+    async def stubborn():
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.2)      # slow to let go, like a real teardown
+            raise
+
+    agent._turn_task = asyncio.create_task(stubborn())
+    await asyncio.sleep(0.05)
+
+    abandoning = asyncio.create_task(agent._abandon_current_turn())
+    await asyncio.sleep(0.05)
+    abandoning.cancel()                    # this is `stop()`
+
+    with pytest.raises(asyncio.CancelledError):
+        await abandoning
+
+
+async def test_first_audio_latency_is_recorded_before_the_transaction_closes():
+    """
+    The span sweep in the teardown ran BEFORE the producer and receiver were
+    joined. On a short uninterrupted turn the text is fully streamed before
+    Cartesia's first audio arrives, so the transaction was finished at ~0ms
+    and the receiver then wrote first_audio_latency_ms onto a closed
+    transaction. The number existed and meant nothing.
+    """
+    order = []
+
+    class Txn:
+        # Named, because a child span's finish is not the transaction's and
+        # conflating them is how this assertion first passed for the wrong
+        # reason.
+        def __init__(self, name):
+            self.name = name
+            self.timestamp = None
+
+        def start_child(self, **kw):
+            return Txn("child")
+
+        def set_data(self, key, value):
+            order.append(("set_data", key))
+
+        def finish(self):
+            order.append(("finish", self.name))
+            self.timestamp = "done"
+
+    txn = Txn("transaction")
+
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.cartesia = MagicMock()
+    agent.cartesia.cancel_stream = AsyncMock()
+    agent.cartesia.send_transcript_chunk = AsyncMock()
+
+    async def audio():
+        await asyncio.sleep(0.15)          # audio arrives after the text is done
+        yield {"type": "chunk", "context_id": "ctx_one", "data": "QUJDRA=="}
+        yield {"type": "done", "context_id": "ctx_one"}
+
+    agent.cartesia.receive_audio_events = audio
+    agent.is_running = True
+    agent.state = ConversationState.AGENT_SPEAKING
+
+    async def llm(history):
+        yield "Check-in is from two p.m."
+
+    agent.llm_callback = llm
+    agent._turn_id += 1
+    await agent._run_parallel_streaming_pipeline(
+        agent._turn_id, context_id="ctx_one", transaction=txn, span_1=None)
+
+    assert ("set_data", "first_audio_latency_ms") in order, "the latency was never recorded"
+    assert order.index(("set_data", "first_audio_latency_ms")) < order.index(("finish", "transaction")), (
+        f"first_audio_latency_ms was written after the transaction closed: {order}"
+    )
+
+
+async def test_the_greeting_falls_back_to_synthesis_when_the_clip_fails():
+    """
+    The cached-clip path's `finally` stood the agent down on the FAILURE path
+    too, and the synthesis fallback below it starts by checking
+    `state != AGENT_SPEAKING` — so a clip that exists but cannot be played
+    opened the call in total silence, which is the one thing the fallback
+    exists to prevent. The fallback also shipped with no test at all, on a
+    path whose previous version had never once run.
+    """
+    import json as _json
+
+    media = []
+
+    ws = AsyncMock()
+    fail_at = {"n": 0}
+
+    async def record(payload):
+        if _json.loads(payload).get("event") != "media":
+            return
+        fail_at["n"] += 1
+        if fail_at["n"] == 1:
+            # The clip starts playing and the socket rejects it — a truncated
+            # clip, a closed connection, anything.
+            raise RuntimeError("clip playback failed")
+        media.append(payload)
+
+    ws.send_text = AsyncMock(side_effect=record)
+
+    agent = CascadedPipelineOrchestrator(twilio_ws=ws, stream_sid="MZtest")
+    agent.cartesia = MagicMock()
+    agent.cartesia.cancel_stream = AsyncMock()
+    agent.cartesia.send_transcript_chunk = AsyncMock()
+
+    async def audio():
+        yield {"type": "chunk", "context_id": None, "data": "QUJDRA=="}
+        yield {"type": "done", "context_id": None}
+
+    agent.cartesia.receive_audio_events = audio
+    agent.is_running = True
+
+    await agent.trigger_initial_greeting()
+
+    assert media, (
+        "the call opened in total silence: the cached clip failed and the "
+        "synthesis fallback was dead on arrival because the state had already "
+        "been stood down"
+    )
+    assert agent.state == ConversationState.AWAITING_INPUT
