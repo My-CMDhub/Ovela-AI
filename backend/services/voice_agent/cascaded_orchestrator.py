@@ -63,6 +63,16 @@ BARGE_IN_COMMIT_FRAMES = 25          # 25 x 20ms = 500ms
 # audio that actually exists rather than by a flat guess.
 MULAW_BYTES_PER_SECOND = 8000.0
 
+# Words per second of synthesised speech, used to place Twilio marks against
+# audio actually played. The marks used to advance by a flat 3 words per audio
+# chunk, which at 200ms chunks credits 900 words a minute against a real rate
+# nearer 150 — a 6x overcount. `_current_turn_word_count` therefore hit its
+# ceiling after about a sixth of the audio, every later mark carried the same
+# maximum index, and the first of those echoed back made playback look
+# finished. Calibration knob: measure a recording and adjust, do not guess it
+# away. Cartesia at "normal" speed sits around 2.5.
+SPOKEN_WORDS_PER_SECOND = 2.5
+
 # Slack on top of the audio's own duration before giving up on Twilio's marks.
 # The wait exists so a long reply stays interruptible while it plays; the cap
 # exists so a dropped mark cannot leave the agent permanently deaf.
@@ -174,6 +184,13 @@ class CascadedPipelineOrchestrator:
         # the agent after we have finished sending.
         self._audio_bytes_sent: int = 0
         self._playback_started_at: float = 0.0
+
+        # Which agent turn is current. A turn that waits for its audio to
+        # finish playing can be overtaken by the next one, and its teardown
+        # would then set AWAITING_INPUT on a turn that is still speaking —
+        # cutting the new reply off mid-sentence. Teardown only touches shared
+        # state while it is still the current turn.
+        self._turn_id: int = 0
 
         # The call's own record, written once at teardown. Nothing was saved
         # for a live call before this: save_call_transcript only ever fired on
@@ -558,6 +575,8 @@ class CascadedPipelineOrchestrator:
         self._total_words_sent = 0
         self._audio_bytes_sent = 0
         self._playback_started_at = 0.0
+        self._turn_id += 1
+        my_turn = self._turn_id
 
         async def audio_receiver():
             first_chunk_ingested = False
@@ -609,10 +628,17 @@ class CascadedPipelineOrchestrator:
                             # base64 -> 3 bytes of audio per 4 characters.
                             self._audio_bytes_sent += (len(base64_data) * 3) // 4
 
-                            # Send milestone marks every ~3 words to keep Twilio sync tight
-                            self._current_turn_word_count += 3
-                            if self._current_turn_word_count > self._total_words_sent:
-                                self._current_turn_word_count = self._total_words_sent
+                            # Where the caller's ear has reached, derived from
+                            # the audio actually sent rather than from a flat
+                            # per-chunk guess. This index is what barge-in
+                            # prunes history against, so an overcount makes the
+                            # agent believe the caller heard words it never
+                            # played.
+                            self._current_turn_word_count = min(
+                                int((self._audio_bytes_sent / MULAW_BYTES_PER_SECOND)
+                                    * SPOKEN_WORDS_PER_SECOND),
+                                self._total_words_sent,
+                            )
                             mark_name = self.mark_tracker.register_word(self._current_turn_word_count)
                             mark_payload = {
                                 "event": "mark",
@@ -746,7 +772,15 @@ class CascadedPipelineOrchestrator:
             # the last one before standing down. Bounded, because a dropped
             # mark must not strand the call in a state where the agent will
             # never listen again.
-            await self._await_playback(interrupted=self.state != ConversationState.AGENT_SPEAKING)
+            await self._await_playback(
+                interrupted=self.state != ConversationState.AGENT_SPEAKING,
+                turn_id=my_turn,
+            )
+
+            # Overtaken while waiting for playback: another turn is speaking
+            # now and this one must not touch the state it is using.
+            if self._turn_id != my_turn:
+                return
 
             interrupted = self.state != ConversationState.AGENT_SPEAKING
             if not interrupted:
@@ -884,7 +918,7 @@ class CascadedPipelineOrchestrator:
             logger.error(f"🔴 [CascadedOrchestrator] Transfer failed: {e}")
             sentry_sdk.capture_exception(e)
 
-    async def _await_playback(self, interrupted: bool) -> None:
+    async def _await_playback(self, interrupted: bool, turn_id: int = 0) -> None:
         """
         Stay AGENT_SPEAKING until Twilio says the caller has actually heard it.
 
@@ -898,23 +932,29 @@ class CascadedPipelineOrchestrator:
         timeout matters more than the wait: a mark that never comes back must
         not leave the agent permanently deaf.
         """
-        if interrupted or not self._total_words_sent or not self.stream_sid:
+        if interrupted or not self._audio_bytes_sent or not self._playback_started_at:
             return
-        # Bounded by the audio itself: however long what we sent takes to play,
-        # plus a little. A flat timeout is either too short for a long answer
-        # or leaves the agent hanging on a short one.
-        expected_s = self._audio_bytes_sent / MULAW_BYTES_PER_SECOND
-        deadline = self._playback_started_at + expected_s + PLAYBACK_DRAIN_GRACE_S
-        while self.mark_tracker.confirmed_index < self._total_words_sent:
-            if time.time() > deadline:
-                logger.warning(
-                    "🟡 [CascadedOrchestrator] Playback marks never completed "
-                    "(%d/%d confirmed) — standing down anyway",
-                    self.mark_tracker.confirmed_index, self._total_words_sent,
-                )
-                break
+
+        # Waits on the AUDIO, not on the marks. Gating this on
+        # mark_tracker.confirmed_index reaching _total_words_sent looked right
+        # and stood down after roughly a sixth of a long answer, because the
+        # word estimate feeding those marks ran 6x fast and pinned itself to
+        # the maximum early. The caller then talked into an agent that had
+        # already stopped listening — reported as "interruption goes dead about
+        # three or four seconds in", which is exactly a sixth of a twenty-second
+        # reply.
+        #
+        # Bytes of mu-law at 8kHz are an exact duration, so this needs no
+        # estimate at all. Marks keep their real job: saying WHERE in the text
+        # to cut when a barge-in does land.
+        finishes_at = (self._playback_started_at
+                       + self._audio_bytes_sent / MULAW_BYTES_PER_SECOND
+                       + PLAYBACK_DRAIN_GRACE_S)
+        while time.time() < finishes_at:
             if self.state != ConversationState.AGENT_SPEAKING:
                 return          # barge-in committed while we waited; that is the point
+            if turn_id and self._turn_id != turn_id:
+                return          # a newer turn is speaking; this audio is history
             await asyncio.sleep(0.05)
 
     def _note_refusal(self, tool: str):
