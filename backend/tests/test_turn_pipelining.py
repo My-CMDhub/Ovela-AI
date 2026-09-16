@@ -99,7 +99,7 @@ async def test_a_new_question_is_read_while_the_last_answer_is_still_playing():
     """
     handled_at: dict = {}
 
-    async def pipeline():
+    async def pipeline(*_a, **_kw):
         # Stands in for LLM + TTS + audio send + playback drain.
         agent.state = ConversationState.AGENT_SPEAKING
         await asyncio.sleep(REPLY_PLAYOUT_S)
@@ -138,18 +138,25 @@ async def test_a_new_question_is_read_while_the_last_answer_is_still_playing():
 
 async def test_turn_resumed_does_not_cancel_the_reply_being_spoken():
     """
-    `_pending_llm_task` means two different things: the eager pre-warm task
-    that TurnResumed is supposed to cancel, and the live turn's streaming
-    pipeline. They are the same attribute, so a TurnResumed drained from the
-    backlog cancels the answer the caller is listening to.
+    `_pending_llm_task` meant two things: the eager pre-warm task TurnResumed
+    is supposed to cancel, and the live turn's streaming pipeline. Same
+    attribute, so a TurnResumed can cancel the answer the caller is listening
+    to — and the reply is appended to history only after its playback drain,
+    so the agent keeps no record of an answer the caller heard and gives it
+    again.
 
-    The visible damage is not the audio — it is the history. The assistant's
-    reply is appended only after the playback drain returns, so a cancel
-    mid-flight means the agent has no record of an answer the caller heard,
-    and answers the same question again. On call 2 the caller had to ask
-    "about my previous question?" twice.
+    **This is a guard, not a regression test, and the difference matters.**
+    A review established that the cancel was unreachable before the turn
+    stopped being awaited in the read loop: this loop is the only reader of
+    Deepgram events, it was blocked inside the turn, so a TurnResumed was not
+    read until the turn was done and `.done()` made the cancel a no-op.
+    Reverting the TurnResumed change alone turns this test red; reverting it
+    together with the non-blocking change — the real parent commit — and it
+    passes. So the hazard is one the non-blocking change created, and the
+    earlier claim that it explains the caller repeating "about my previous
+    question?" on call 2 was wrong. That was the event backlog.
     """
-    async def pipeline():
+    async def pipeline(*_a, **_kw):
         agent.state = ConversationState.AGENT_SPEAKING
         await asyncio.sleep(REPLY_PLAYOUT_S)
         # Where the real pipeline appends: after the drain, so a cancel
@@ -280,7 +287,9 @@ async def test_the_old_turns_audio_stops_when_a_new_turn_takes_the_floor():
 
     agent.llm_callback = lambda history: llm()
 
-    turn = asyncio.create_task(agent._run_parallel_streaming_pipeline())
+    agent._turn_id += 1
+    turn = asyncio.create_task(agent._run_parallel_streaming_pipeline(
+        agent._turn_id, context_id="ctx_old"))
 
     # Let the reply get under way, then hand the floor to a new turn.
     await asyncio.sleep(0.12)
@@ -297,3 +306,277 @@ async def test_the_old_turns_audio_stops_when_a_new_turn_takes_the_floor():
         f"written to Twilio after the new turn took the floor — that is the overlap "
         f"the caller hears"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Four faults a review found in the commit above. Making turns concurrent was
+# right; leaving the things a turn owns on `self` was not. An overtaken turn
+# winds down while its successor speaks, so anything read off `self` at use
+# time belongs to whichever turn wrote it last.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_two_turns_never_put_two_readers_on_the_cartesia_socket():
+    """
+    The call-killer. Cartesia multiplexes every context over ONE websocket,
+    and each turn was starting its own reader. `websockets` refuses the
+    second: "cannot call recv while another coroutine is already running
+    recv". That ConcurrencyError lands in `receive_audio_events`' bare
+    `except Exception`, which sets `is_connected = False` — and from then on
+    `send_transcript_chunk` returns at its first line, silently. One
+    interruption and the caller hears dead air until they hang up.
+
+    Run against a real `websockets` server and the real bridge, because a
+    mock at a provider boundary tests our assumption instead of their
+    contract — and the contract here IS the failure.
+    """
+    import json as _json
+
+    import websockets
+
+    from services.voice_agent.bridges.cartesia_standalone import (
+        CartesiaStandaloneBridge,
+    )
+
+    received = []
+
+    async def cartesia(ws):
+        # Answers each transcript with one chunk and then goes quiet, which is
+        # what leaves a reader parked in recv() with nothing to wake it — the
+        # state a cancelled context leaves behind.
+        async for raw in ws:
+            msg = _json.loads(raw)
+            received.append(msg)
+            if msg.get("transcript"):
+                await ws.send(_json.dumps({
+                    "type": "chunk", "context_id": msg["context_id"], "data": "QUJDRA==",
+                }))
+
+    server = await websockets.serve(cartesia, "127.0.0.1", 8797)
+    bridge = CartesiaStandaloneBridge()
+    bridge.ws = await websockets.connect("ws://127.0.0.1:8797")
+    bridge.is_connected = True
+
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.cartesia = bridge
+    agent.is_running = True
+
+    async def llm(text):
+        for token in text.split(" "):
+            yield token + " "
+
+    try:
+        # Turn 1 starts speaking.
+        agent.state = ConversationState.AGENT_SPEAKING
+        agent.current_context_id = "ctx_one"
+        agent._turn_id += 1
+        first = asyncio.create_task(agent._run_parallel_streaming_pipeline(
+            agent._turn_id, context_id="ctx_one"))
+        agent.llm_callback = lambda h: llm("We have queen and twin rooms.")
+        await asyncio.sleep(0.2)
+
+        # The caller interrupts and turn 2 takes the floor.
+        agent.state = ConversationState.AWAITING_INPUT
+        agent.current_context_id = "ctx_two"
+        agent.state = ConversationState.AGENT_SPEAKING
+        agent.llm_callback = lambda h: llm("Breakfast is included.")
+        agent._turn_id += 1
+        second = asyncio.create_task(agent._run_parallel_streaming_pipeline(
+            agent._turn_id, context_id="ctx_two"))
+        await asyncio.sleep(0.4)
+
+        assert bridge.is_connected, (
+            "the second turn's reader killed the Cartesia socket — every phrase "
+            "of every later turn is now dropped before it reaches the provider, "
+            "silently, for the rest of the call"
+        )
+        spoken_second = [m for m in received if m.get("context_id") == "ctx_two"]
+        assert spoken_second, "turn 2 reached the caller's ear not at all"
+    finally:
+        for t in (first, second):
+            t.cancel()
+        await bridge.ws.close()
+        server.close()
+        await server.wait_closed()
+
+
+async def test_the_old_turn_does_not_synthesise_into_the_new_turns_context():
+    """
+    `context_id=self.current_context_id` was read at SEND time — and the
+    cognitive-pacing delay sits between the turn check and that send with no
+    re-check. So the floor can change mid-sleep and the tail of the previous
+    answer is synthesised inside the NEW turn's context. The caller hears the
+    old reply stutter into the new one, and the context_id filter cannot
+    reject it because the id it carries is genuinely current.
+
+    The handover is timed to land inside that delay, because that is the only
+    window where it happens — a test that flips the floor anywhere else is
+    stopped by the turn guard and proves nothing.
+    """
+    from unittest.mock import patch
+
+    sent = []
+
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.cartesia = MagicMock()
+    agent.cartesia.cancel_stream = AsyncMock()
+
+    async def record(context_id, transcript, continue_stream=True):
+        sent.append((context_id, transcript))
+
+    agent.cartesia.send_transcript_chunk = AsyncMock(side_effect=record)
+
+    async def audio():
+        while True:
+            await asyncio.sleep(0.05)
+            yield {"type": "chunk", "context_id": "ctx_one", "data": "QUJDRA=="}
+
+    agent.cartesia.receive_audio_events = audio
+    agent.is_running = True
+    agent.state = ConversationState.AGENT_SPEAKING
+
+    async def llm(history):
+        yield "Check-in is from two p.m."
+
+    agent.llm_callback = llm
+    agent.current_context_id = "ctx_one"
+    agent._turn_id += 1
+
+    # A long, deterministic pacing delay: the real one is 0-300ms depending on
+    # how fast the model answered, and the race needs the window open.
+    with patch("services.voice_agent.cascaded_orchestrator.cognitive_delay",
+               return_value=300):
+        turn = asyncio.create_task(agent._run_parallel_streaming_pipeline(
+            agent._turn_id, context_id="ctx_one"))
+        await asyncio.sleep(0.1)          # inside the pacing delay now
+
+        # Barge-in, then turn 2 arms itself with a new context — mid-sleep.
+        agent.state = ConversationState.AWAITING_INPUT
+        agent.current_context_id = "ctx_two"
+        agent._turn_id += 1
+        agent.state = ConversationState.AGENT_SPEAKING
+        await asyncio.sleep(0.4)
+        turn.cancel()
+
+    leaked = [t for ctx, t in sent if ctx == "ctx_two"]
+    assert not leaked, (
+        f"the previous turn synthesised {leaked!r} into the new turn's context — "
+        f"the caller hears the old answer inside the new one"
+    )
+
+
+async def test_an_overtaken_turn_does_not_finish_the_new_turns_transaction():
+    """
+    The teardown read `self._sentry_transaction` and `self._span_1` by name,
+    so an overtaken turn finished the transaction its successor had just
+    opened. Span 1 for that turn then reads ~0ms, `first_audio_latency_ms` is
+    set on a closed transaction, and the overtaken turn's own transaction
+    leaks unfinished.
+
+    Which makes this the finding that quietly poisons the evidence for every
+    other fix: after the first interruption, the latency numbers are fiction.
+    """
+    class Span:
+        def __init__(self):
+            self.finishes = 0
+            self.timestamp = None
+
+        def start_child(self, **kw):
+            return Span()
+
+        def set_data(self, *a):
+            pass
+
+        def finish(self):
+            self.finishes += 1
+            self.timestamp = "done"
+
+    old_txn, old_span1 = Span(), Span()
+    new_txn, new_span1 = Span(), Span()
+
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.cartesia = MagicMock()
+    agent.cartesia.cancel_stream = AsyncMock()
+    agent.cartesia.send_transcript_chunk = AsyncMock()
+
+    async def audio():
+        while True:
+            await asyncio.sleep(0.05)
+            yield {"type": "chunk", "context_id": "ctx_one", "data": "QUJDRA=="}
+
+    agent.cartesia.receive_audio_events = audio
+    agent.is_running = True
+    agent.state = ConversationState.AGENT_SPEAKING
+
+    # The old turn must still be mid-reply when the new turn installs its
+    # transaction, and must reach its teardown afterwards — otherwise the
+    # teardown runs before there is anything of the new turn's to damage and
+    # the test passes whatever the code does.
+    overtaken = asyncio.Event()
+
+    async def llm(history):
+        yield "Check-in is from two p.m."
+        await overtaken.wait()
+        yield " And checkout is ten."
+
+    agent.llm_callback = llm
+    agent._turn_id += 1
+    turn = asyncio.create_task(agent._run_parallel_streaming_pipeline(
+        agent._turn_id, context_id="ctx_one",
+        transaction=old_txn, span_1=old_span1))
+    await asyncio.sleep(0.15)
+
+    # Turn 2 takes the floor and installs its own transaction.
+    agent.state = ConversationState.AWAITING_INPUT
+    agent._turn_id += 1
+    agent._sentry_transaction = new_txn
+    agent._span_1 = new_span1
+    agent.state = ConversationState.AGENT_SPEAKING
+    overtaken.set()                     # the old turn now runs its teardown
+    await asyncio.sleep(0.3)
+    turn.cancel()
+
+    assert new_txn.finishes == 0, "the overtaken turn finished the new turn's transaction"
+    assert new_span1.finishes == 0, "the overtaken turn finished the new turn's Span 1"
+
+
+async def test_a_promise_from_an_earlier_turn_is_not_kept_by_a_later_one():
+    """
+    `_pending_hangup` / `_pending_transfer` were consumed by whichever
+    teardown ran first. Demonstrated by the review: a transfer promised in
+    turn 1 was dialled by turn 2's teardown, after turn 2 had answered a
+    different question. The mirror case is worse — a hangup promised in turn 1
+    drops the line at the end of turn 2's answer, so the caller asks a
+    follow-up, gets it answered, and the call ends.
+    """
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.cartesia = MagicMock()
+    agent.cartesia.cancel_stream = AsyncMock()
+    agent.cartesia.send_transcript_chunk = AsyncMock()
+    agent._transfer_call = AsyncMock()
+    agent._hangup_call = AsyncMock()
+
+    async def audio():
+        yield {"type": "chunk", "context_id": "ctx_two", "data": "QUJDRA=="}
+        yield {"type": "done", "context_id": "ctx_two"}
+
+    agent.cartesia.receive_audio_events = audio
+    agent.is_running = True
+    agent.state = ConversationState.AGENT_SPEAKING
+
+    async def llm(history):
+        yield "Breakfast is included."
+
+    agent.llm_callback = llm
+
+    # Turn 1 promised a transfer and was then interrupted.
+    agent._turn_id = 1
+    agent._pending_transfer = "+61300000000"
+    agent._pending_turn = 1
+
+    # Turn 2 answers something else and runs its teardown.
+    agent._turn_id = 2
+    await agent._run_parallel_streaming_pipeline(2, context_id="ctx_two")
+
+    agent._transfer_call.assert_not_called()
+    assert agent._pending_transfer is None, "the abandoned promise is still armed"

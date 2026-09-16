@@ -365,7 +365,15 @@ class TestCascadedPipelineOrchestrator:
         with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])) as mock_prep, \
              patch("asyncio.sleep", AsyncMock()):
 
-            await orchestrator._run_parallel_streaming_pipeline()
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
 
             # The history should have the full aggregated content appended
             assert len(orchestrator.history) == 1
@@ -420,7 +428,15 @@ class TestCascadedPipelineOrchestrator:
 
         with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
              patch("asyncio.sleep", AsyncMock()):
-            await orchestrator._run_parallel_streaming_pipeline()
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
 
         # The current turn's audio reached Twilio despite the stale `done`.
         assert any("YXVkaW8=" in p for p in sent_media), "current turn audio was dropped"
@@ -677,7 +693,15 @@ class TestCascadedPipelineOrchestrator:
         with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
              patch("asyncio.sleep", AsyncMock()), \
              patch.object(orchestrator, "_hangup_call", AsyncMock()) as mock_hangup:
-            await orchestrator._run_parallel_streaming_pipeline()
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
 
         mock_hangup.assert_awaited_once()
 
@@ -707,7 +731,15 @@ class TestCascadedPipelineOrchestrator:
         with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
              patch("asyncio.sleep", AsyncMock()), \
              patch.object(orchestrator, "_hangup_call", AsyncMock()) as mock_hangup:
-            await orchestrator._run_parallel_streaming_pipeline()
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
 
         mock_hangup.assert_not_awaited()
         assert orchestrator._pending_hangup is False
@@ -826,7 +858,15 @@ class TestCascadedPipelineOrchestrator:
         with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
              patch("asyncio.sleep", AsyncMock()), \
              patch.object(orchestrator, "_transfer_call", AsyncMock()) as mock_transfer:
-            await orchestrator._run_parallel_streaming_pipeline()
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
 
         mock_transfer.assert_awaited_once_with("+61399990000")
 

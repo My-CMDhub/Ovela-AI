@@ -223,8 +223,19 @@ class CascadedPipelineOrchestrator:
         # Control-flow tool actions. The dispatcher signals call termination by
         # returning {"action": "hangup"}; it is executed after the farewell has
         # finished streaming, not at dispatch time.
+        # A one-way action promised during a turn, and the turn that promised
+        # it. Without the turn, whichever teardown ran first consumed it: a
+        # transfer promised in turn 1 was dialled by turn 2's teardown after
+        # turn 2 had answered something else, and a hangup promised in turn 1
+        # dropped the line at the end of turn 2's answer — the caller asks a
+        # follow-up, gets it answered, and the call ends.
         self._pending_hangup: bool = False
         self._pending_transfer: Optional[str] = None
+        self._pending_turn: int = 0
+
+        # The single Cartesia reader. One socket, one consumer — see
+        # `_stop_audio_reader`.
+        self._audio_reader: Optional[asyncio.Task] = None
         self._hangup_triggered: bool = False
 
         # Sentry transaction and span tracking
@@ -381,41 +392,44 @@ class CascadedPipelineOrchestrator:
                 if self.state == ConversationState.AGENT_SPEAKING:
                     self.state = ConversationState.AWAITING_INPUT
 
-        # Fallback: Stream initial greeting via Cartesia TTS
+        # Fallback: synthesise the greeting, for a call that would otherwise
+        # open in silence if the cached clip is missing.
+        #
+        # This block used to call `self.cartesia.stream_speech(...)`, which is
+        # not a method on CartesiaStandaloneBridge and never has been. The
+        # `async for` raised AttributeError before a single byte existed,
+        # straight into the handler below, so the log read "Failed streaming
+        # initial greeting" and the caller heard nothing at all. The bridge's
+        # real surface is send_transcript_chunk + receive_audio_events.
         try:
             self.current_context_id = f"greeting_{int(time.time()*1000)}"
-            word_count = 0
-            async for audio_chunk, marks in self.cartesia.stream_speech(
-                text=greeting,
+            await self._stop_audio_reader()          # one reader on that socket
+            await self.cartesia.send_transcript_chunk(
                 context_id=self.current_context_id,
-                continue_stream=False
-            ):
+                transcript=greeting,
+                continue_stream=False,
+            )
+            async for audio_evt in self.cartesia.receive_audio_events():
                 if not self.is_running or self.state != ConversationState.AGENT_SPEAKING:
                     break
-                payload_b64 = base64.b64encode(audio_chunk).decode("utf-8")
-                media_event = {
-                    "event": "media",
-                    "streamSid": self.stream_sid,
-                    "media": {"payload": payload_b64}
-                }
-                if self.twilio_ws:
-                    await self.twilio_ws.send_text(json.dumps(media_event))
-
-                for mark in marks:
-                    mark_event = {
-                        "event": "mark",
-                        "streamSid": self.stream_sid,
-                        "mark": {"name": mark}
-                    }
-                    if self.twilio_ws:
-                        await self.twilio_ws.send_text(json.dumps(mark_event))
-                    word_count += 1
-            # `mark_tracker.set_total_words(word_count)` used to sit here.
-            # MarkTracker has no such method and never did, so this line
-            # raised AttributeError straight into the `except` below and every
-            # fallback greeting logged "Failed streaming initial greeting"
-            # after streaming it perfectly well. Nothing reads a total from
-            # the tracker — `confirmed_index` is the only thing barge-in needs.
+                evt_ctx = audio_evt.get("context_id")
+                if evt_ctx and evt_ctx != self.current_context_id:
+                    continue
+                if audio_evt.get("type") == "chunk":
+                    payload_b64 = audio_evt.get("data")
+                    if payload_b64 and self.twilio_ws:
+                        await self.twilio_ws.send_text(json.dumps({
+                            "event": "media",
+                            "streamSid": self.stream_sid,
+                            "media": {"payload": payload_b64},
+                        }))
+                elif audio_evt.get("type") in ("done", "error"):
+                    if audio_evt.get("type") == "error":
+                        logger.error(
+                            "🔴 [CascadedOrchestrator] Cartesia rejected the greeting: %s",
+                            audio_evt,
+                        )
+                    break
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] Failed streaming initial greeting: {e}")
         finally:
@@ -469,13 +483,19 @@ class CascadedPipelineOrchestrator:
                 # the EagerEndOfTurn branch above only logs, so no speculative
                 # work was ever started.
                 #
-                # This branch used to cancel `_pending_llm_task` — which,
-                # because the same attribute held the live turn, meant a
-                # TurnResumed cancelled the answer being spoken. The reply is
-                # appended to history only after its playback drains, so the
-                # agent lost all record of an answer the caller had heard and
-                # then gave it again. On call 2 the caller asked "about my
-                # previous question?" twice.
+                # This branch used to cancel `_pending_llm_task`, which was
+                # also the handle for the live turn — so it could cancel the
+                # answer being spoken, losing all record of it from history
+                # (the reply is appended only after its playback drains).
+                #
+                # Correction to the claim in commit 948a54d: that cancel was
+                # NOT reachable before the turn stopped being awaited here.
+                # This loop is the only reader of Deepgram events, and it was
+                # blocked inside the turn, so a TurnResumed was not read until
+                # the turn was already done and `.done()` made the cancel a
+                # no-op. It is a hazard that fix created, not one it found —
+                # and the repeated question on call 2 is explained by the
+                # backlog, not by this.
                 logger.info("🔄 [CascadedOrchestrator] TurnResumed — caller is still talking.")
 
             elif turn_state in ("EndOfTurn", "SpeechEnded", "Results"):
@@ -521,6 +541,16 @@ class CascadedPipelineOrchestrator:
         self._current_turn_word_count = 0
         self.current_context_id = f"ctx_{uuid.uuid4().hex[:8]}"
 
+        # The floor changes HERE, not inside the task below.
+        #
+        # This increment used to live at the top of the pipeline, which runs a
+        # tick later — so between this method returning and the new task's
+        # first step, the previous turn's `mine()` was still true while the
+        # context id and the mark generation had already moved on. Every
+        # per-turn guard had that window built into it.
+        self._turn_id += 1
+        my_turn = self._turn_id
+
         # Start Sentry transaction and Span 1
         self._sentry_transaction = sentry_sdk.start_transaction(name="user_voice_turn_transaction")
         self._span_1 = self._sentry_transaction.start_child(
@@ -552,7 +582,14 @@ class CascadedPipelineOrchestrator:
         # is guarded on its own turn id and winds itself down, and whatever
         # the caller actually heard was already appended to history by
         # `trigger_barge_in` above. Cancelling here would throw that away.
-        self._turn_task = asyncio.create_task(self._run_parallel_streaming_pipeline())
+        self._turn_task = asyncio.create_task(
+            self._run_parallel_streaming_pipeline(
+                my_turn,
+                context_id=self.current_context_id,
+                transaction=self._sentry_transaction,
+                span_1=self._span_1,
+            )
+        )
         self._turn_task.add_done_callback(self._turn_task_finished)
 
     @staticmethod
@@ -570,28 +607,36 @@ class CascadedPipelineOrchestrator:
             logger.error("🔴 [CascadedOrchestrator] Turn failed: %s", exc, exc_info=exc)
             sentry_sdk.capture_exception(exc)
 
-    async def _run_parallel_streaming_pipeline(self) -> None:
+    async def _run_parallel_streaming_pipeline(
+        self,
+        my_turn: int,
+        context_id: str,
+        transaction=None,
+        span_1=None,
+    ) -> None:
         """
         Coordinates parallel LLM token generation, phrase extraction,
         TTS synthesis, and Twilio audio streaming.
+
+        Everything this turn owns arrives as an argument and stays in a local.
+        Turns overlap in time now — an overtaken one is still winding down
+        while its successor speaks — so anything read off `self` at use time
+        belongs to whichever turn wrote it last, which is not necessarily this
+        one. Three faults came from exactly that: the old turn synthesised its
+        trailing phrase into the NEW turn's Cartesia context, the old turn's
+        teardown finished the NEW turn's Sentry transaction (making every
+        latency figure after an interruption fiction), and a transfer promised
+        in one turn was dialled by another turn's teardown.
+
+        `self.state` alone cannot say whose turn it is either: barge-in sets
+        AWAITING_INPUT and `handle_user_turn_complete` sets AGENT_SPEAKING
+        straight back for the new turn, so a loop watching only that flag
+        wakes up, sees "speaking", and keeps working for a turn that is over.
         """
         start_time = time.time()
         llm_queue = asyncio.Queue()
-
-        # Claimed before any task is created, so every loop below can ask
-        # whether it is still the turn that started it.
-        #
-        # `self.state` alone cannot answer that. Barge-in sets AWAITING_INPUT
-        # and `handle_user_turn_complete` sets AGENT_SPEAKING back three lines
-        # later for the new turn, so a loop that only watches the shared flag
-        # wakes up, sees "speaking", and keeps writing the OLD reply's audio
-        # into the same Twilio socket the new reply is using. The caller hears
-        # both answers at once — reported as "the new answer overlaps the
-        # previous one". The context_id filter does not catch it either: a
-        # stale receiver compares events against the context it captured
-        # itself, so its own trailing chunks match and pass.
-        self._turn_id += 1
-        my_turn = self._turn_id
+        span_3 = None
+        total_words_sent = 0
 
         def mine() -> bool:
             return (self.state == ConversationState.AGENT_SPEAKING
@@ -610,10 +655,11 @@ class CascadedPipelineOrchestrator:
                             # "Span 2" was opened and closed on this same line,
                             # so it always measured 0.01ms — the real detail now
                             # lives in the llm.stream / tool.execute children.
-                            if self._span_1:
-                                self._span_1.finish()
-                            if self._sentry_transaction:
-                                self._span_3 = self._sentry_transaction.start_child(
+                            nonlocal span_3
+                            if span_1:
+                                span_1.finish()
+                            if transaction:
+                                span_3 = transaction.start_child(
                                     op="pipeline.span3",
                                     name="Span 3: First Token Yielded -> Cartesia First Audio Chunk Ingestion"
                                 )
@@ -624,10 +670,10 @@ class CascadedPipelineOrchestrator:
                     text = await res
                     if first_token:
                         first_token = False
-                        if self._span_1:
-                            self._span_1.finish()
-                        if self._sentry_transaction:
-                            self._span_3 = self._sentry_transaction.start_child(
+                        if span_1:
+                            span_1.finish()
+                        if transaction:
+                            span_3 = transaction.start_child(
                                 op="pipeline.span3",
                                 name="Span 3: First Token Yielded -> Cartesia First Audio Chunk Ingestion"
                             )
@@ -642,19 +688,35 @@ class CascadedPipelineOrchestrator:
         producer_task = asyncio.create_task(llm_producer())
 
         # 2. Run Text Chunk Sender and Audio Playout concurrently
+        #
+        # The previous turn's reader is stopped BEFORE this turn's counters are
+        # reset and its own reader starts, because Cartesia multiplexes every
+        # context over ONE websocket and `websockets` refuses a second
+        # concurrent read: "cannot call recv while another coroutine is already
+        # running recv". That ConcurrencyError lands in receive_audio_events'
+        # bare `except Exception`, which sets is_connected = False — after
+        # which send_transcript_chunk returns at its first line, silently, for
+        # the rest of the call. One interruption and the caller hears dead air
+        # until they hang up. An overtaken reader is parked in recv() and
+        # cannot notice it has been overtaken, because after a barge-in cancel
+        # there is no next event to wake it.
+        #
+        # Cancelling a reader parked in recv() is safe: the socket stays OPEN
+        # and the next reader receives everything (verified against a real
+        # websockets 15.0.1 server, not a mock).
+        await self._stop_audio_reader()
+
         self._current_turn_parts = []
         full_response_parts = self._current_turn_parts
-        self._total_words_sent = 0
         self._audio_bytes_sent = 0
         self._playback_started_at = 0.0
 
         async def audio_receiver():
             first_chunk_ingested = False
-            # Cartesia multiplexes every context over one socket. After a
-            # barge-in cancel, the killed context still emits trailing chunks
-            # and a `done`; without this filter that stale `done` breaks the
-            # NEXT turn's receiver and the caller hears silence.
-            turn_context_id = self.current_context_id
+            # After a barge-in cancel the killed context still emits trailing
+            # chunks and a `done`; without this filter that stale `done` breaks
+            # the next turn's receiver and the caller hears silence.
+            turn_context_id = context_id
             try:
                 async for audio_evt in self.cartesia.receive_audio_events():
                     if not mine():
@@ -680,12 +742,12 @@ class CascadedPipelineOrchestrator:
                             self._playback_started_at = time.time()
                             self.vad.arm_immunity(duration_s=0.5)
                             # End Span 3
-                            if self._span_3:
-                                self._span_3.finish()
-                            if self._sentry_transaction:
+                            if span_3:
+                                span_3.finish()
+                            if transaction:
                                 total_latency_ms = (time.time() - start_time) * 1000.0
-                                self._sentry_transaction.set_data("first_audio_latency_ms", total_latency_ms)
-                                self._sentry_transaction.finish()
+                                transaction.set_data("first_audio_latency_ms", total_latency_ms)
+                                transaction.finish()
 
                         base64_data = audio_evt.get("data")
                         if base64_data and self.stream_sid:
@@ -707,7 +769,7 @@ class CascadedPipelineOrchestrator:
                             self._current_turn_word_count = min(
                                 int((self._audio_bytes_sent / MULAW_BYTES_PER_SECOND)
                                     * SPOKEN_WORDS_PER_SECOND),
-                                self._total_words_sent,
+                                total_words_sent,
                             )
                             mark_name = self.mark_tracker.register_word(self._current_turn_word_count)
                             mark_payload = {
@@ -734,6 +796,7 @@ class CascadedPipelineOrchestrator:
                 sentry_sdk.capture_exception(e)
 
         receiver_task = asyncio.create_task(audio_receiver())
+        self._audio_reader = receiver_task
 
         text_buffer = ""
         is_first_phrase = True
@@ -774,7 +837,11 @@ class CascadedPipelineOrchestrator:
                     if not clean_phrase_stripped:
                         continue
 
-                    self._total_words_sent += len(clean_phrase_stripped.split())
+                    # Local, not an attribute: an overtaken turn kept adding
+                    # its words onto the successor's freshly-zeroed count,
+                    # raising the new turn's mark ceiling above the real ear
+                    # position. Nothing outside this pipeline reads it.
+                    total_words_sent += len(clean_phrase_stripped.split())
 
                     # Apply cognitive delay if it is the first phrase
                     if is_first_phrase:
@@ -786,8 +853,15 @@ class CascadedPipelineOrchestrator:
 
                     is_last_phrase = is_last_chunk and (not text_buffer) and (phrases.index(phrase) == len(phrases) - 1)
 
+                    # This turn's context, captured before it could move. Read
+                    # off `self` here, after the 120ms cognitive delay below
+                    # and with no re-check, it synthesised the tail of the
+                    # previous answer into the NEW turn's context — the caller
+                    # heard the old reply stutter into the new one, and the
+                    # context_id filter could not reject it because the id was
+                    # genuinely current.
                     await self.cartesia.send_transcript_chunk(
-                        context_id=self.current_context_id,
+                        context_id=context_id,
                         transcript=clean_phrase_stripped,
                         continue_stream=not is_last_phrase,
                     )
@@ -798,21 +872,17 @@ class CascadedPipelineOrchestrator:
             logger.error(f"🔴 [CascadedOrchestrator] Phrase streaming error: {e}", exc_info=True)
         finally:
             # Cleanup any active Sentry spans
-            if self._span_1 and getattr(self._span_1, 'timestamp', None) is None:
-                try:
-                    self._span_1.finish()
-                except Exception:
-                    pass
-            if self._span_3 and getattr(self._span_3, 'timestamp', None) is None:
-                try:
-                    self._span_3.finish()
-                except Exception:
-                    pass
-            if self._sentry_transaction and getattr(self._sentry_transaction, 'timestamp', None) is None:
-                try:
-                    self._sentry_transaction.finish()
-                except Exception:
-                    pass
+            # Only this turn's spans. Reading them off `self` here meant an
+            # overtaken turn finished its successor's transaction and Span 1
+            # before that turn had produced a token — Span 1 read ~0ms,
+            # first_audio_latency_ms was set on a closed transaction, and the
+            # overtaken turn's own transaction leaked, never finished.
+            for span in (span_1, span_3, transaction):
+                if span is not None and getattr(span, 'timestamp', None) is None:
+                    try:
+                        span.finish()
+                    except Exception:
+                        pass
 
             # These awaits are bounded. If Cartesia never emits `done` (e.g.
             # after a cancelled context) an unbounded await here would block the
@@ -892,8 +962,31 @@ class CascadedPipelineOrchestrator:
             # Farewell has finished streaming — now end the call. A caller who
             # spoke over the goodbye is still talking, so the hangup is dropped
             # rather than deferred.
+            # Only the turn that made the promise may keep it. A promise from
+            # an earlier turn is void here, and saying so out loud matters
+            # more than the drop: the agent's own offer is still in the
+            # history, so the model can make it again.
+            if self._pending_turn and self._pending_turn != my_turn:
+                if self._pending_hangup or self._pending_transfer:
+                    logger.warning(
+                        "🟡 [CascadedOrchestrator] promise from turn %s abandoned at "
+                        "turn %s (hangup=%s transfer=%s) — the caller interrupted the "
+                        "turn that made it",
+                        self._pending_turn, my_turn,
+                        self._pending_hangup, bool(self._pending_transfer),
+                    )
+                    sentry_sdk.capture_message(
+                        "One-way action abandoned: promised in turn "
+                        f"{self._pending_turn}, reached turn {my_turn}",
+                        level="warning",
+                    )
+                self._pending_hangup = False
+                self._pending_transfer = None
+                self._pending_turn = 0
+
             if self._pending_hangup:
                 self._pending_hangup = False
+                self._pending_turn = 0
                 if interrupted:
                     logger.info(
                         "🛑 [CascadedOrchestrator] Hangup aborted — user spoke during farewell"
@@ -901,11 +994,40 @@ class CascadedPipelineOrchestrator:
                 else:
                     await self._hangup_call()
 
-            # A transfer is never aborted by barge-in: the caller asking again
-            # while the handoff line plays still wants the human.
+            # A transfer is never aborted by barge-in WITHIN its own turn: the
+            # caller asking again while the handoff line plays still wants the
+            # human. Across turns it is abandoned above.
             if self._pending_transfer:
                 transfer_to, self._pending_transfer = self._pending_transfer, None
+                self._pending_turn = 0
                 await self._transfer_call(transfer_to)
+
+    async def _stop_audio_reader(self) -> None:
+        """
+        Leave exactly one consumer on the Cartesia websocket.
+
+        Cartesia multiplexes every context over one connection, and
+        `websockets` raises ConcurrencyError on a second concurrent read. That
+        error is caught by `receive_audio_events`' bare `except Exception`,
+        which sets `is_connected = False`, after which `send_transcript_chunk`
+        returns at its first line for the rest of the call — silent dead air
+        from the first interruption onwards. The bridge already carries a
+        comment warning about that failure; this is a second door into it.
+
+        An overtaken reader cannot stand down by itself: it is parked in
+        `recv()`, and after a barge-in cancel its context produces no further
+        event to wake it on.
+        """
+        reader, self._audio_reader = self._audio_reader, None
+        if reader is None or reader.done():
+            return
+        reader.cancel()
+        try:
+            await reader
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
 
     async def _hangup_call(self) -> None:
         """
@@ -1544,8 +1666,10 @@ class CascadedPipelineOrchestrator:
                     if isinstance(result, dict):
                         if result.get("action") == "hangup":
                             self._pending_hangup = True
+                            self._pending_turn = self._turn_id
                         elif result.get("action") == "transfer" and result.get("transfer_to"):
                             self._pending_transfer = result["transfer_to"]
+                            self._pending_turn = self._turn_id
                     messages.append({
                         "role": "tool",
                         "tool_call_id": call["id"],
