@@ -1013,3 +1013,64 @@ class TestTheCallWritesItselfDown:
                    AsyncMock(return_value={})) as saved:
             await orchestrator.stop()
         saved.assert_awaited_once()
+
+
+class TestGreetingWarmup:
+    """
+    Turn 1 was the slowest turn of every call: the model's first token took
+    1.7-2.5 s on turn 1 of three calls against ~0.5 s afterwards. The fix sends
+    turn 1's request once while the greeting plays. It is worth nothing unless
+    it sends what turn 1 will send, so that is what these pin down.
+    """
+
+    @staticmethod
+    def _wire(orchestrator, reservations):
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.caller_reservation = AsyncMock(return_value=reservations)
+        orchestrator._openai = MagicMock()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reservations", [[], [{"booking_reference": "CC-1", "status": "confirmed"}]])
+    async def test_warmup_sends_the_same_prefix_and_tools_as_turn_one(self, orchestrator, reservations):
+        self._wire(orchestrator, reservations)
+        warm = MagicMock()
+        warm.usage.prompt_tokens = 9000
+        warm.usage.prompt_tokens_details.cached_tokens = 0
+
+        async def one_round(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Hi.")
+
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=[warm, one_round()])
+
+        await orchestrator._warm_llm()
+        _ = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "I'm calling about my booking."}])]
+
+        warm_kw, turn_kw = (c.kwargs for c in orchestrator._openai.chat.completions.create.await_args_list)
+        prefix = warm_kw["messages"][:-1]            # everything but the throwaway "Hello?"
+        assert turn_kw["messages"][:len(prefix)] == prefix, "warm-up warmed a different prompt"
+        assert warm_kw["tools"] == turn_kw["tools"]
+        assert warm_kw["model"] == turn_kw["model"]
+        assert warm_kw["max_tokens"] == 1 and not warm_kw.get("stream")
+
+    @pytest.mark.asyncio
+    async def test_a_failed_warmup_is_logged_not_raised(self, orchestrator):
+        self._wire(orchestrator, [])
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=RuntimeError("429"))
+        await orchestrator._warm_llm()   # must not raise: turn 1 just keeps its old latency
+
+    @pytest.mark.asyncio
+    async def test_building_the_call_context_starts_the_warmup(self, orchestrator):
+        orchestrator.twilio_ws = MagicMock()
+        started = []
+        orchestrator._warm_llm = AsyncMock(side_effect=lambda: started.append(True))
+        with patch("services.appwrite.db_service") as db, \
+             patch("services.voice_agent.functions.CoalCreekFunctionDispatcher"), \
+             patch.object(orchestrator, "_apply_voice_settings", AsyncMock()):
+            db.get_tenant_config = AsyncMock(return_value={})
+            await orchestrator._build_call_context()
+            await orchestrator._warm_task
+        assert started == [True]
+
