@@ -126,7 +126,7 @@ Return Schema: This tool returns concise, high-signal context (status, dates, se
                 "type": "object",
                 "properties": {
                     "guest_name": {"type": "string", "description": "Guest name as spoken — pass whatever the user said, system does fuzzy matching"},
-                    "phone": {"type": "string", "description": "Only provide if guest explicitly gives a DIFFERENT phone number. Leave empty to auto-use caller's number."},
+                    "phone": {"type": "string", "description": "Leave empty — the system already uses the number they are calling from. Only fill this with a phone number the caller has said aloud on this call. Never the motel's number, never a placeholder, never a guess."},
                     "email": {"type": "string", "description": "Only provide if previous lookup returned found=false"},
                     "reference": {"type": "string", "description": "Booking reference as spoken (e.g. 'CC 7 6 8 1 8') — system normalizes format automatically"}
                 },

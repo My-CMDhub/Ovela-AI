@@ -79,6 +79,28 @@ SPOKEN_WORDS_PER_SECOND = 2.5
 PLAYBACK_DRAIN_GRACE_S = 2.0
 
 
+# What the agent says, in code, when the model reaches for a tool without
+# having said anything: the same move as Pipecat's on_function_calls_started
+# speaking "Let me check on that." Each line promises effort, never an outcome
+# — the gates may still refuse the tool. Hang-up and transfer get nothing: the
+# model's own goodbye or hand-off line is what the caller should hear.
+_TOOL_ACKS = {
+    "check_availability": ("Let me check that for you.", "Let me have a look at those dates."),
+    "lookup_booking": ("Let me have a look.", "One moment, let me look that up."),
+}
+_DEFAULT_ACKS = ("One moment.", "Just a moment.")
+_NO_ACK_TOOLS = {"hang_up_call", "transfer_to_staff"}
+
+
+def tool_acknowledgement(tool_name: Optional[str], already_spoken: int) -> Optional[str]:
+    """The line to say before `tool_name` runs, or None. Rotates so a call
+    with several lookups does not repeat itself word for word."""
+    if not tool_name or tool_name in _NO_ACK_TOOLS:
+        return None
+    options = _TOOL_ACKS.get(tool_name, _DEFAULT_ACKS)
+    return options[already_spoken % len(options)] + " "
+
+
 def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[str], str]:
     """
     Split text_buffer into phrases based on punctuation or length (>= 6 words).
@@ -151,6 +173,11 @@ class CascadedPipelineOrchestrator:
         self.tenant_config: Dict[str, Any] = {}
         self.dispatcher = None
         self._openai = None
+        # Send turn 1's request once during the greeting (see _warm_llm).
+        # Off in tests that build a call context without meaning to reach OpenAI.
+        self.warm_llm_on_start: bool = True
+        self._acks_spoken: int = 0
+        self._warm_task: Optional[asyncio.Task] = None
 
         # Core state & history
         self.state = ConversationState.AWAITING_INPUT
@@ -1554,10 +1581,69 @@ class CascadedPipelineOrchestrator:
         self._openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
         await self._apply_voice_settings()
         self._context_ready = True
+        if self.warm_llm_on_start:
+            self._warm_task = asyncio.create_task(self._warm_llm())
         logger.info(
             f"🧩 [CascadedOrchestrator] Call context ready | tenant={self.tenant_id} "
             f"| adk_singleton={'yes' if adk_orchestrator else 'no'}"
         )
+
+    async def _request_prefix(self):
+        """
+        The model, the opening messages and the tools every request of this
+        call starts with. One builder, because the greeting warm-up is only
+        worth anything if it sends exactly what turn 1 will.
+        """
+        voice_settings = (self.tenant_config or {}).get("voice_settings", {})
+        model = voice_settings.get("llm_model") or "gpt-4.1-nano"
+        now = datetime.now(ZoneInfo("Australia/Melbourne"))
+        messages: List[Dict[str, Any]] = [{
+            "role": "system",
+            "content": get_coalcreek_prompt(
+                now.strftime("%Y-%m-%d"), now.strftime("%I:%M %p")
+            ),
+        }]
+        # Who this number belongs to, looked up while the greeting played.
+        # It goes in a message of its own AFTER the prompt: the prompt is
+        # the cached prefix, and a per-call note in front of it would change
+        # the first bytes on every call and throw that cache away.
+        caller_note = build_caller_context_note(
+            await self.dispatcher.caller_reservation() if self.dispatcher else []
+        )
+        if caller_note:
+            messages.append({"role": "system", "content": caller_note})
+        tools = [{"type": "function", "function": fn} for fn in get_coalcreek_functions()]
+        return model, messages, tools
+
+    async def _warm_llm(self) -> None:
+        """
+        Send turn 1's request once while the greeting plays, and throw the
+        answer away.
+
+        The first turn of every call was the slowest by far: the model's first
+        token took 1.7-2.5 s on turn 1 of three calls against ~0.5 s on every
+        later turn, and a fresh process measured ~1.0 s on its first request
+        (scripts/bench_llm.py, on a Heroku dyno). The greeting leaves ~5-7 s of
+        nobody waiting on anything; this spends ~1 s of it so the caller does
+        not. One token of output; costs about a tenth of a cent.
+        """
+        started = time.perf_counter()
+        try:
+            model, messages, tools = await self._request_prefix()
+            reply = await self._openai.chat.completions.create(
+                model=model, tools=tools, max_tokens=1,
+                messages=messages + [{"role": "user", "content": "Hello?"}],
+            )
+            details = getattr(reply.usage, "prompt_tokens_details", None)
+            logger.info(
+                f"🔥 [CascadedOrchestrator] LLM warmed in "
+                f"{(time.perf_counter() - started) * 1000:.0f} ms "
+                f"| cached {getattr(details, 'cached_tokens', 0) or 0}/"
+                f"{reply.usage.prompt_tokens} prompt tokens"
+            )
+        except Exception as e:
+            # A failed warm-up costs turn 1 its old latency and nothing else.
+            logger.warning(f"🟡 [CascadedOrchestrator] LLM warm-up failed: {e}")
 
     async def _execute_tool(self, name: str, args: dict, history: list = None) -> dict:
         """
@@ -1724,25 +1810,7 @@ class CascadedPipelineOrchestrator:
 
         try:
             await self._ensure_call_context()
-            voice_settings = (self.tenant_config or {}).get("voice_settings", {})
-            model = voice_settings.get("llm_model") or "gpt-4.1-nano"
-
-            now = datetime.now(ZoneInfo("Australia/Melbourne"))
-            messages: List[Dict[str, Any]] = [{
-                "role": "system",
-                "content": get_coalcreek_prompt(
-                    now.strftime("%Y-%m-%d"), now.strftime("%I:%M %p")
-                ),
-            }]
-            # Who this number belongs to, looked up while the greeting played.
-            # It goes in a message of its own AFTER the prompt: the prompt is
-            # the cached prefix, and a per-call note in front of it would change
-            # the first bytes on every call and throw that cache away.
-            caller_note = build_caller_context_note(
-                await self.dispatcher.caller_reservation() if self.dispatcher else []
-            )
-            if caller_note:
-                messages.append({"role": "system", "content": caller_note})
+            model, messages, tools = await self._request_prefix()
             # Only the recent transcript goes in verbatim; what the older
             # turns *established* is in the call-state note, which is placed
             # immediately before the caller's latest words because that is
@@ -1752,12 +1820,11 @@ class CascadedPipelineOrchestrator:
             state_note = self.call_state.as_note()
             if state_note and len(messages) > 1:
                 messages.insert(len(messages) - 1, {"role": "system", "content": state_note})
-            tools = [
-                {"type": "function", "function": fn}
-                for fn in get_coalcreek_functions()
-            ]
-
             # Bounded so a tool-calling loop can never stall the voice turn.
+            # Whether the caller has heard anything this turn. A tool round
+            # with nothing said first is dead air for as long as the tool and
+            # the next model round take — about a second at best.
+            said_this_turn = False
             for _round in range(3):
                 # Time the model wait separately from tool execution. Span 1
                 # is ~86% of a turn; without this split neither a human nor
@@ -1809,8 +1876,20 @@ class CascadedPipelineOrchestrator:
                     delta = event.choices[0].delta
                     if delta.content:
                         assistant_text += delta.content
+                        said_this_turn = True
                         yield delta.content
                     for tc in (delta.tool_calls or []):
+                        # Acknowledge the moment the model reaches for a tool,
+                        # not when it has finished writing the call. Done in
+                        # code: the prompt asks for this and the model rarely
+                        # does it before a tool call.
+                        name = tc.function.name if tc.function else None
+                        ack = tool_acknowledgement(name, self._acks_spoken) if not said_this_turn else None
+                        if ack:
+                            said_this_turn = True
+                            self._acks_spoken += 1
+                            assistant_text += ack
+                            yield ack
                         slot = pending.setdefault(tc.index, {"id": "", "name": "", "args": ""})
                         if tc.id:
                             slot["id"] = tc.id
