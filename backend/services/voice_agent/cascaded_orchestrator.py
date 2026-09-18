@@ -1563,7 +1563,9 @@ class CascadedPipelineOrchestrator:
         """
         Every tool the model asks for passes through here.
 
-        Only one is gated today. Handing the caller to a person ends everything
+        Four are gated: transfer_to_staff, create_booking_request, spelled-name
+        writes, and update_guest_info before identity. Transfer came first:
+        handing the caller to a person ends everything
         the agent can do for them, and on a live call the model dialled a human
         straight after the caller said "Actually, I am calling for Sarah" — which
         agrees to nothing. The prompt already said to dial only on an explicit

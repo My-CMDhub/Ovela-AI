@@ -103,8 +103,9 @@ configuration record, not from code.
    once.
 4. **The model gets the recent transcript plus the call state** — what's settled,
    what was only heard, and what may have changed since.
-5. **Every tool call passes through code gates** before it can touch a booking,
-   money or a person.
+5. **Four actions are gated in code**: transferring to a person, creating a
+   booking, writing a spelled name, and changing a reservation before the caller
+   is identified. Read-only lookups are not gated.
 6. **The reply streams to Cartesia phrase by phrase**, so the caller hears the
    first words while the rest is still being written.
 7. **If the caller talks over the agent**, audio stops, the part they heard is
@@ -158,7 +159,8 @@ sustained speech or words that aren't continuers.
 
 **The model was chosen on the real workload.**
 Candidates were benchmarked under the production prompt (~9,500 tokens,
-12 tools), not a bare "hello". The ranking reversed between the two.
+12 tools), not a bare "hello". `gpt-4o-mini` won on the bare "hello" and was
+2.7× slower than `gpt-4.1-nano` under the real prompt.
 
 ## What works today
 
@@ -182,8 +184,8 @@ Medians, with sample sizes; updated after significant changes, not continuously.
 | Reply time, no tool: turn end detected → first audio sent | **0.55–0.71 s** | 6 days, 12–51 turns each |
 | Reply time when a tool runs (e.g. availability) | **1.5–2.7 s** | 7 days, 2–22 turns each |
 | Repeat booking lookup within a call | **1,073 ms → 0.4 ms** (per-call cache) | 15 → 21 lookups |
-| Finding a guest from misheard details | **24 of 28** found, **0** wrong guest | 36 transcription-style queries |
-| Guest name volunteered before identification | **4 of 5 → 0 of 5** | scripted replays |
+| Finding a guest from misheard details | **24 of 28** real guests found; **0** of 8 non-guests invented; **0** wrong guest | 36 transcription-style queries ([`eval_identity.py`](backend/scripts/eval_identity.py)) |
+| Guest name volunteered before identification | **4 of 5 → 0 of 5** | scripted replays ([`replay_conversation.py`](backend/scripts/replay_conversation.py)) |
 | Interrupting a long reply | caught up to **6.5 s** into an answer | 6 interruptions |
 | Automated tests | **1,922** passing | tracked backend suite |
 
@@ -191,6 +193,17 @@ Reply time starts when Deepgram reports the end of turn, so it excludes
 Deepgram's own end-of-turn decision. Replies without a tool are under a second;
 replies with a tool aren't yet — the remaining latency is the tool round trip,
 not the model.
+
+## Known limits
+
+- **Identity is confirmed on one matching word of the name.** A relative on the
+  same phone who shares the surname passes.
+- **The gates judge agreement from word patterns in the transcript**, not full
+  understanding, so an unusual way of saying yes can be refused.
+- **Reply time is measured to audio sent**, and excludes Deepgram's own
+  end-of-turn decision.
+- **One tenant, and every call is my own** — nothing here has met a real
+  customer yet.
 
 ## Try it
 
