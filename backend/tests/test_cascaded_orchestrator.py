@@ -1,0 +1,1015 @@
+"""
+tests/test_cascaded_orchestrator.py
+=====================================
+Phase 12.3 — Unit tests for the CascadedPipelineOrchestrator.
+Verifies bridge initialization, acoustic barge-in handling, Twilio mark tracking,
+and Deepgram Flux v2 event orchestration.
+"""
+
+import asyncio
+import json
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestrator
+from services.voice_agent.vad import ConversationState
+
+
+@pytest.fixture
+def mock_twilio_ws():
+    ws = AsyncMock()
+    return ws
+
+
+@pytest.fixture
+def orchestrator(mock_twilio_ws):
+    agent = CascadedPipelineOrchestrator(
+        twilio_ws=mock_twilio_ws,
+        stream_sid="MZ123456789",
+    )
+    # A live call. The pipeline's `mine()` and its one-way-action block both
+    # require it: a turn that outlives `stop()` must stop working, and a call
+    # that has ended keeps no promises — a transfer was being dialled about
+    # thirty seconds after the caller hung up.
+    agent.is_running = True
+    return agent
+
+
+class TestCascadedPipelineOrchestrator:
+    @pytest.mark.asyncio
+    async def test_start_success(self, orchestrator):
+        """
+        Verify start connects both Deepgram and Cartesia standalone bridges.
+        """
+        with patch.object(orchestrator.deepgram, "connect", AsyncMock(return_value=True)) as mock_dg, \
+             patch.object(orchestrator.cartesia, "connect", AsyncMock(return_value=True)) as mock_tts:
+            success = await orchestrator.start()
+            assert success is True
+            assert orchestrator.is_running is True
+            mock_dg.assert_called_once()
+            mock_tts.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_start_failure_when_bridge_fails(self, orchestrator):
+        """
+        If Deepgram or Cartesia fails to connect, orchestrator must shut down safely.
+        """
+        with patch.object(orchestrator.deepgram, "connect", AsyncMock(return_value=False)), \
+             patch.object(orchestrator.cartesia, "connect", AsyncMock(return_value=True)), \
+             patch.object(orchestrator, "stop", AsyncMock()) as mock_stop:
+            success = await orchestrator.start()
+            assert success is False
+            mock_stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_handle_twilio_audio_forwards_to_deepgram(self, orchestrator):
+        """
+        All incoming audio packets from Twilio must be forwarded to Deepgram STT stream.
+        """
+        orchestrator.is_running = True
+        with patch.object(orchestrator.deepgram, "send_audio", AsyncMock()) as mock_send:
+            audio_bytes = b"\x00\x01\x02\x03" * 40  # 160 bytes
+            await orchestrator.handle_twilio_audio(audio_bytes)
+            mock_send.assert_called_once_with(audio_bytes)
+
+    @pytest.mark.asyncio
+    async def test_sustained_speech_triggers_barge_in(self, orchestrator):
+        """
+        Speech has to add up before anything is cancelled.
+
+        This asserted a cut on the FIRST voiced frame, and that is exactly what
+        made the agent uninterruptible-by-words: a continuer and a bid for the
+        floor look identical to a VAD, so "mhmm" stopped it dead. On one real
+        call thirteen backchannels cut the agent off and not one was recognised
+        as a backchannel, because the cut had already flipped the state the
+        recogniser needed. Below the threshold the decision now waits for Flux.
+        """
+        from services.voice_agent.cascaded_orchestrator import BARGE_IN_COMMIT_FRAMES
+
+        orchestrator.is_running = True
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator._agent_audio_started = True
+        frame = b"\x00\x01\x02\x03" * 40          # 160 bytes = one 20ms frame
+
+        with patch.object(orchestrator.deepgram, "send_audio", AsyncMock()), \
+             patch.object(orchestrator.vad, "process_mulaw", return_value=True), \
+             patch.object(orchestrator.vad, "is_immune", return_value=False), \
+             patch.object(orchestrator, "trigger_barge_in", AsyncMock()) as mock_barge:
+
+            for _ in range(BARGE_IN_COMMIT_FRAMES - 1):
+                await orchestrator.handle_twilio_audio(frame)
+            mock_barge.assert_not_called()          # half a second of "mhmm" is not a cut
+
+            await orchestrator.handle_twilio_audio(frame)
+            mock_barge.assert_called_once_with(reason="sustained_speech")
+
+    @pytest.mark.asyncio
+    async def test_a_gap_in_the_speech_resets_the_count(self, orchestrator):
+        """Two short backchannels with a breath between them are two short
+        backchannels, not one long interruption."""
+        from services.voice_agent.cascaded_orchestrator import BARGE_IN_COMMIT_FRAMES
+
+        orchestrator.is_running = True
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator._agent_audio_started = True
+        frame = b"\x00\x01\x02\x03" * 40
+        speech = [True] * (BARGE_IN_COMMIT_FRAMES - 1) + [False] \
+            + [True] * (BARGE_IN_COMMIT_FRAMES - 1)
+
+        with patch.object(orchestrator.deepgram, "send_audio", AsyncMock()), \
+             patch.object(orchestrator.vad, "process_mulaw", side_effect=speech), \
+             patch.object(orchestrator.vad, "is_immune", return_value=False), \
+             patch.object(orchestrator, "trigger_barge_in", AsyncMock()) as mock_barge:
+            for _ in speech:
+                await orchestrator.handle_twilio_audio(frame)
+            mock_barge.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_trigger_barge_in_sends_clear_and_cancels_cartesia(self, orchestrator):
+        """
+        Verify barge-in cuts Cartesia TTS stream, sends clear event to Twilio,
+        and prunes conversation history per confirmed mark index.
+        """
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_test_999"
+        orchestrator.history = [
+            {"role": "user", "content": "I want a room"},
+            {"role": "assistant", "content": "We have rooms available on Monday and Tuesday"},
+        ]
+        # Simulate Twilio confirming word index 3 ("We have rooms")
+        mark_name = orchestrator.mark_tracker.register_word(3)
+        orchestrator.mark_tracker.confirm_mark(mark_name)
+
+        with patch.object(orchestrator.cartesia, "cancel_stream", AsyncMock()) as mock_cancel:
+            await orchestrator.trigger_barge_in(reason="test")
+            assert orchestrator.state == ConversationState.AWAITING_INPUT
+            mock_cancel.assert_called_once_with("ctx_test_999")
+            orchestrator.twilio_ws.send_text.assert_called_once()
+            clear_payload = json.loads(orchestrator.twilio_ws.send_text.call_args[0][0])
+            assert clear_payload["event"] == "clear"
+            assert clear_payload["streamSid"] == "MZ123456789"
+            assert orchestrator.history[-1]["content"] == "We have rooms"
+
+    @pytest.mark.asyncio
+    async def test_handle_user_turn_complete_with_cognitive_delay(self, orchestrator):
+        """
+        Verify turn completion routes transcript, applies cognitive delay for fast LLM,
+        and streams resulting TTS to Twilio.
+        """
+        async def fake_llm(history):
+            return "Sure I can check that for you right now."
+
+        orchestrator.llm_callback = fake_llm
+        orchestrator.state = ConversationState.AWAITING_INPUT
+
+        # Mock Cartesia methods
+        mock_send = AsyncMock()
+        orchestrator.cartesia.send_transcript_chunk = mock_send
+        async def fake_audio_events():
+            yield {"type": "chunk", "data": "YXVkaW8="}
+            yield {"type": "done"}
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        with patch("asyncio.sleep", AsyncMock()) as mock_sleep:
+            await orchestrator.handle_user_turn_complete("Do you have availability?")
+            # The turn is its own task now and is deliberately not awaited by
+            # the handler: awaiting it there blocked the Deepgram read loop for
+            # the whole reply, so nothing the caller said was read until the
+            # answer had finished playing. The turn still has to finish before
+            # its effects can be asserted — it just no longer holds the socket.
+            await orchestrator._turn_task
+            assert len(orchestrator.history) == 2
+            assert orchestrator.history[0]["content"] == "Do you have availability?"
+            assert orchestrator.history[1]["content"] == "Sure I can check that for you right now."
+            mock_sleep.assert_any_call(0.12)  # Fast tool call triggered 120ms cue
+            assert orchestrator.state == ConversationState.AWAITING_INPUT
+            mock_send.assert_called_once_with(
+                context_id=orchestrator.current_context_id,
+                transcript="Sure I can check that for you right now.",
+                continue_stream=False
+            )
+
+    @pytest.mark.asyncio
+    async def test_no_barge_in_while_agent_is_thinking(self, orchestrator):
+        """
+        Regression: LLM think-time is 2-3s. Barge-in must stay disarmed until
+        the first audio chunk actually reaches Twilio, or the caller saying
+        "hello?" while waiting cancels the reply they are waiting for.
+        """
+        orchestrator.is_running = True
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator._agent_audio_started = False   # thinking, not yet audible
+        orchestrator.vad.process_mulaw = MagicMock(return_value=True)  # caller speaks
+        orchestrator.vad.arm_immunity(duration_s=0.0)  # immunity expired
+        orchestrator.trigger_barge_in = AsyncMock()
+
+        await orchestrator.handle_twilio_audio(b"\xff" * 160)
+        orchestrator.trigger_barge_in.assert_not_awaited()
+
+        # Once audio is genuinely flowing, sustained speech must cut through.
+        from services.voice_agent.cascaded_orchestrator import BARGE_IN_COMMIT_FRAMES
+        orchestrator._agent_audio_started = True
+        for _ in range(BARGE_IN_COMMIT_FRAMES):
+            await orchestrator.handle_twilio_audio(b"\xff" * 160)
+        orchestrator.trigger_barge_in.assert_awaited_once()
+
+    @staticmethod
+    def _delta(content=None, tool_calls=None):
+        """Build a minimal OpenAI streaming chunk."""
+        ev = MagicMock()
+        ev.choices = [MagicMock()]
+        ev.choices[0].delta.content = content
+        ev.choices[0].delta.tool_calls = tool_calls
+        return ev
+
+    @pytest.mark.asyncio
+    async def test_default_llm_callback_streams_gpt_text(self, orchestrator):
+        """
+        The conversational driver is GPT (never ADK) and yields streamed text.
+        """
+        async def fake_stream(*_a, **_kw):
+            for part in ("Hello! ", "How can I help today?"):
+                yield TestCascadedPipelineOrchestrator._delta(content=part)
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            return_value=fake_stream()
+        )
+
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "Hello Ovela"}]
+        )]
+        assert chunks == ["Hello! ", "How can I help today?"]
+
+        # The DB-configured model must be the one actually requested.
+        assert orchestrator._openai.chat.completions.create.call_args.kwargs["model"] == "gpt-4.1-nano"
+
+    @pytest.mark.asyncio
+    async def test_default_llm_callback_executes_tool_calls(self, orchestrator):
+        """
+        Streamed tool-call deltas are reassembled and dispatched, then the
+        follow-up round streams the spoken answer.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_1"
+        tc.function.name = "check_availability"
+        tc.function.arguments = '{"room_type": "any"}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="We have a Queen available.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
+        orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "any rooms free?"}]
+        )]
+
+        # Asserted on name and arguments rather than the exact signature: the
+        # orchestrator also threads a per-call context through, which is how
+        # the availability memo reaches the handler, and pinning the arity here
+        # would make that a test failure rather than a feature.
+        orchestrator.dispatcher.execute.assert_awaited_once()
+        name, sent_args = orchestrator.dispatcher.execute.await_args.args[:2]
+        assert name == "check_availability"
+        # Underscore-prefixed keys are threaded in by the orchestrator, not
+        # chosen by the model — the caller's own words go to the date handlers
+        # this way. Asserting the exact dict would make every such addition a
+        # test failure rather than a feature.
+        assert {k: v for k, v in sent_args.items() if not k.startswith("_")} \
+            == {"room_type": "any"}
+        assert chunks == ["We have a Queen available."]
+
+    @pytest.mark.asyncio
+    async def test_run_loop_processes_twilio_events(self, orchestrator):
+        """
+        Verify run_loop iterates through Twilio messages and dispatches start, media, mark, stop.
+        """
+        async def fake_iter_text():
+            yield json.dumps({"event": "start", "start": {"streamSid": "STREAM_777"}})
+            yield json.dumps({"event": "mark", "mark": {"name": "mark_word_2"}})
+            yield json.dumps({"event": "stop"})
+
+        orchestrator.twilio_ws.iter_text = fake_iter_text
+        with patch.object(orchestrator.deepgram, "connect", AsyncMock(return_value=True)), \
+             patch.object(orchestrator.cartesia, "connect", AsyncMock(return_value=True)), \
+             patch.object(orchestrator, "process_deepgram_events", AsyncMock()), \
+             patch.object(orchestrator, "handle_twilio_mark", AsyncMock()) as mock_mark, \
+             patch.object(orchestrator, "stop", AsyncMock()) as mock_stop:
+            await orchestrator.run_loop()
+            assert orchestrator.stream_sid == "STREAM_777"
+            mock_mark.assert_called_once_with("mark_word_2")
+            mock_stop.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_split_buffer_into_phrases(self):
+        """
+        Verify that text buffer is correctly split on punctuation or length (>= 6 words).
+        """
+        from services.voice_agent.cascaded_orchestrator import split_buffer_into_phrases
+
+        # Test punctuation split (without ending punctuation to leave remainder)
+        phrases, rest = split_buffer_into_phrases("Hello, how are you today", is_final=False)
+        assert phrases == ["Hello,"]
+        assert rest == " how are you today"
+
+        # Test word count split (>= 6 words)
+        phrases, rest = split_buffer_into_phrases("one two three four five six seven", is_final=False)
+        assert phrases == ["one two three four five six"]
+        assert rest == " seven"
+
+        # Test final flush
+        phrases, rest = split_buffer_into_phrases("final words left", is_final=True)
+        assert phrases == ["final words left"]
+        assert rest == ""
+
+    @pytest.mark.asyncio
+    async def test_run_parallel_streaming_pipeline(self, orchestrator):
+        """
+        Verify parallel streaming pipeline collects tokens, sends them, and plays audio.
+        """
+        # Let's mock llm_callback to be an async generator yielding chunks
+        async def fake_llm_stream(history):
+            yield "Hello, "
+            yield "this is a test "
+            yield "of the parallel queue."
+
+        orchestrator.llm_callback = fake_llm_stream
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_parallel_test"
+
+        # Mock Cartesia send_transcript_chunk
+        mock_send = AsyncMock()
+        orchestrator.cartesia.send_transcript_chunk = mock_send
+
+        # Mock Cartesia receive_audio_events
+        async def fake_audio_events():
+            yield {"type": "chunk", "data": "YXVkaW8="} # "audio" in base64
+            yield {"type": "done"}
+
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        # Mock prepare_for_tts to return the text unchanged
+        with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])) as mock_prep, \
+             patch("asyncio.sleep", AsyncMock()):
+
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
+
+            # The history should have the full aggregated content appended
+            assert len(orchestrator.history) == 1
+            assert orchestrator.history[0]["content"] == "Hello, this is a test of the parallel queue."
+
+            # Verify send_transcript_chunk calls (without leading/trailing spaces because of stripping):
+            assert mock_send.call_count == 2
+            mock_send.assert_any_call(
+                context_id="ctx_parallel_test",
+                transcript="Hello,",
+                continue_stream=True
+            )
+            mock_send.assert_any_call(
+                context_id="ctx_parallel_test",
+                transcript="this is a test of the parallel queue.",
+                continue_stream=False
+            )
+
+    @pytest.mark.asyncio
+    async def test_stale_cartesia_context_does_not_kill_current_turn(self, orchestrator):
+        """
+        Regression: Cartesia multiplexes all contexts on one socket. After a
+        barge-in cancel, the cancelled context still emits trailing chunks and a
+        `done`. That stale `done` must NOT terminate the next turn's receiver —
+        it previously did, and the caller heard silence on every turn following
+        an interruption.
+        """
+        async def fake_llm_stream(history):
+            yield "Here is your answer."
+
+        orchestrator.llm_callback = fake_llm_stream
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_current"
+        orchestrator.stream_sid = "MZtest"
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+
+        sent_media = []
+        async def capture(payload):
+            if '"media"' in payload:
+                sent_media.append(payload)
+        orchestrator.twilio_ws.send_text = AsyncMock(side_effect=capture)
+
+        async def fake_audio_events():
+            # Leftovers from the cancelled previous turn arrive first.
+            yield {"type": "chunk", "context_id": "ctx_cancelled", "data": "c3RhbGU="}
+            yield {"type": "done",  "context_id": "ctx_cancelled"}
+            # This turn's real audio follows and must still be delivered.
+            yield {"type": "chunk", "context_id": "ctx_current", "data": "YXVkaW8="}
+            yield {"type": "done",  "context_id": "ctx_current"}
+
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
+             patch("asyncio.sleep", AsyncMock()):
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
+
+        # The current turn's audio reached Twilio despite the stale `done`.
+        assert any("YXVkaW8=" in p for p in sent_media), "current turn audio was dropped"
+        assert not any("c3RhbGU=" in p for p in sent_media), "stale audio was forwarded"
+
+    # ------------------------------------------------------------------
+    # Sentry agent tracing (gen_ai conventions)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_call_start_groups_the_turns_into_one_conversation(self, orchestrator):
+        """
+        Sentry groups multi-turn AI activity by `gen_ai.conversation.id`. A phone
+        call already has a stable, unique identifier for exactly that scope — the
+        Twilio CallSid — so every turn of one call collapses into one
+        conversation instead of N unrelated LLM calls.
+        """
+        async def fake_iter_text():
+            yield json.dumps({
+                "event": "start",
+                "start": {
+                    "streamSid": "MZ1",
+                    "callSid": "CAtest123",
+                    "customParameters": {"user_phone": "+61400000001", "tenant_id": "coalcreek"},
+                },
+            })
+            yield json.dumps({"event": "stop"})
+
+        orchestrator.twilio_ws.iter_text = fake_iter_text
+        with patch.object(orchestrator.deepgram, "connect", AsyncMock(return_value=True)), \
+             patch.object(orchestrator.cartesia, "connect", AsyncMock(return_value=True)), \
+             patch.object(orchestrator, "process_deepgram_events", AsyncMock()), \
+             patch.object(orchestrator, "trigger_initial_greeting", AsyncMock()), \
+             patch.object(orchestrator, "_ensure_call_context", AsyncMock()), \
+             patch.object(orchestrator, "stop", AsyncMock()), \
+             patch("services.voice_agent.cascaded_orchestrator.set_conversation_id") as mock_conv, \
+             patch("services.voice_agent.cascaded_orchestrator.sentry_sdk.set_user") as mock_user:
+            await orchestrator.run_loop()
+
+        mock_conv.assert_called_once_with("CAtest123")
+        # The caller's number identifies the conversation, but is never sent raw.
+        sent = mock_user.call_args[0][0]
+        assert "+61400000001" not in str(sent)
+        assert sent["id"].startswith("+6140")
+
+    @pytest.mark.asyncio
+    async def test_tool_calls_use_sentry_agent_conventions(self, orchestrator):
+        """
+        A tool span has to be op `gen_ai.execute_tool` with `gen_ai.tool.name`
+        or it lands outside Sentry's agent views and the Tool Errors widget.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_1"
+        tc.function.name = "check_availability"
+        tc.function.arguments = '{"room_type": "any"}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="We have a Queen.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
+        orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+        # A MagicMock accepts any kwarg, so it certified a call the real SDK
+        # rejects with `Span.__init__() got an unexpected keyword argument`.
+        # This drives a real Transaction, so a bad signature raises here.
+        from sentry_sdk.tracing import Transaction
+
+        created = []
+
+        class RecordingTransaction(Transaction):
+            """Real Transaction — a bad start_child signature still raises."""
+            def start_child(self, **kwargs):
+                span = super().start_child(**kwargs)
+                created.append(span)
+                return span
+
+        transaction = RecordingTransaction(name="test_turn")
+        orchestrator._sentry_transaction = transaction
+
+        [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "any rooms free?"}]
+        )]
+
+        tool_spans = [sp for sp in created if sp.op == "gen_ai.execute_tool"]
+        assert tool_spans, f"no gen_ai.execute_tool span; ops were {[sp.op for sp in created]}"
+        sp = tool_spans[0]
+        assert sp.description == "execute_tool check_availability"
+        assert sp._data.get("gen_ai.operation.name") == "execute_tool"
+        assert sp._data.get("gen_ai.tool.name") == "check_availability"
+
+    # ------------------------------------------------------------------
+    # Span instrumentation inside the LLM stage
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_llm_stage_is_broken_into_child_spans(self, orchestrator):
+        """
+        "Span 1" covers 86% of a voice turn but had no internal detail, so
+        neither a human nor the Gemini analyzer could say WHAT inside it was
+        slow. Model wait and tool execution are now timed separately.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_1"
+        tc.function.name = "check_availability"
+        tc.function.arguments = '{"room_type": "any"}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="We have a Queen.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
+        orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+        orchestrator._sentry_transaction = MagicMock()
+
+        [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "any rooms free?"}]
+        )]
+
+        ops = [c.kwargs.get("op") for c in orchestrator._sentry_transaction.start_child.call_args_list]
+        names = [c.kwargs.get("name", "") for c in orchestrator._sentry_transaction.start_child.call_args_list]
+
+        assert "llm.stream" in ops, f"model wait not timed; got {ops}"
+        assert "gen_ai.execute_tool" in ops, f"tool execution not timed; got {ops}"
+        assert any("check_availability" in n for n in names), \
+            f"tool span must name the tool so a slow tool is identifiable; got {names}"
+
+    @pytest.mark.asyncio
+    async def test_prompt_cache_hit_is_recorded_on_the_transaction(self, orchestrator):
+        """
+        The first turn of a call is ~2x slower than later turns and the leading
+        hypothesis is a cold prompt cache — unprovable while `cached_tokens`
+        exists nowhere in the telemetry.
+        """
+        usage_chunk = MagicMock()
+        usage_chunk.choices = []
+        usage_chunk.usage.prompt_tokens = 9545
+        usage_chunk.usage.prompt_tokens_details.cached_tokens = 4864
+
+        async def one_round(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Sure.")
+            yield usage_chunk
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=[one_round()])
+        orchestrator._sentry_transaction = MagicMock()
+
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "hi"}]
+        )]
+
+        assert chunks == ["Sure."], "the usage chunk must not leak into spoken audio"
+
+        kwargs = orchestrator._openai.chat.completions.create.await_args.kwargs
+        assert kwargs.get("stream_options") == {"include_usage": True}
+
+        recorded = {
+            c.args[0]: c.args[1]
+            for c in orchestrator._sentry_transaction.set_data.call_args_list
+        }
+        assert recorded.get("llm.cached_tokens") == 4864
+        assert recorded.get("llm.prompt_tokens") == 9545
+
+    # ------------------------------------------------------------------
+    # Control-flow tool actions (hang_up_call)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_hangup_action_from_dispatcher_is_recorded(self, orchestrator):
+        """
+        Regression: the dispatcher returns {"action": "hangup"} for hang_up_call,
+        but the cascaded tool loop only forwarded the dict back to the LLM and
+        never read `action`. The model then narrated a goodbye while the call
+        stayed open — verified live, hang_up_call fired 3x on a 566s call.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_hangup"
+        tc.function.name = "hang_up_call"
+        tc.function.arguments = '{"farewell_message": "Thanks for calling, goodbye."}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Thanks for calling, goodbye.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
+        orchestrator.dispatcher.execute = AsyncMock(return_value={
+            "action": "hangup", "message": "Thanks for calling, goodbye."
+        })
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+
+        [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "that's all, bye"}]
+        )]
+
+        assert orchestrator._pending_hangup is True, "hangup action was dropped by the tool loop"
+
+    @pytest.mark.asyncio
+    async def test_pending_hangup_terminates_call_after_farewell(self, orchestrator):
+        """
+        A recorded hangup must fire only once the farewell has finished
+        streaming — never mid-phrase.
+        """
+        async def fake_llm_stream(history):
+            orchestrator._pending_hangup = True
+            yield "Thanks for calling, goodbye."
+
+        orchestrator.llm_callback = fake_llm_stream
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_bye"
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+
+        async def fake_audio_events():
+            yield {"type": "chunk", "data": "YXVkaW8="}
+            yield {"type": "done"}
+
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
+             patch("asyncio.sleep", AsyncMock()), \
+             patch.object(orchestrator, "_hangup_call", AsyncMock()) as mock_hangup:
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
+
+        mock_hangup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_pending_hangup_aborted_when_user_interrupts_farewell(self, orchestrator):
+        """
+        If the caller speaks during the farewell they are not done talking.
+        Hanging up on them is worse than the bug this fixes.
+        """
+        async def fake_llm_stream(history):
+            orchestrator._pending_hangup = True
+            yield "Thanks for calling, goodbye."
+            # trigger_barge_in() drops the state back to AWAITING_INPUT.
+            orchestrator.state = ConversationState.AWAITING_INPUT
+
+        orchestrator.llm_callback = fake_llm_stream
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_bye"
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+
+        async def fake_audio_events():
+            yield {"type": "chunk", "data": "YXVkaW8="}
+            yield {"type": "done"}
+
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
+             patch("asyncio.sleep", AsyncMock()), \
+             patch.object(orchestrator, "_hangup_call", AsyncMock()) as mock_hangup:
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
+
+        mock_hangup.assert_not_awaited()
+        assert orchestrator._pending_hangup is False
+
+    @pytest.mark.asyncio
+    async def test_hangup_call_posts_completed_status_to_twilio(self, orchestrator):
+        """
+        The actual termination is a Twilio REST status update — the only thing
+        that ends a live PSTN call.
+        """
+        orchestrator.call_sid = "CA_test_sid"
+        orchestrator.is_running = True
+
+        mock_response = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("services.voice_agent.cascaded_orchestrator.httpx.AsyncClient", return_value=mock_ctx):
+            await orchestrator._hangup_call()
+
+        assert mock_client.post.await_count == 1
+        assert mock_client.post.await_args.kwargs["data"] == {"Status": "completed"}
+        assert "CA_test_sid" in mock_client.post.await_args.args[0]
+        assert orchestrator.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_transfer_action_from_dispatcher_is_recorded(self, orchestrator):
+        """
+        Regression: same dropped-`action` root cause as hang_up_call. The agent
+        told the caller "I'll transfer you to reception now" and then kept
+        talking — the transfer never happened.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_transfer"
+        tc.function.name = "transfer_to_staff"
+        tc.function.arguments = '{}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Sure, transferring you now.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock(
+            # Awaited once per turn for the caller's own booking.
+            caller_reservation=AsyncMock(return_value=[])
+        )
+        orchestrator.dispatcher.execute = AsyncMock(return_value={
+            "action": "transfer",
+            "transfer_to": "+61399990000",
+            "message": "Sure, I'll transfer you to reception now.",
+        })
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+
+        [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "can I speak to a human"}]
+        )]
+
+        assert orchestrator._pending_transfer == "+61399990000", \
+            "transfer action was dropped by the tool loop"
+
+    @pytest.mark.asyncio
+    async def test_pending_transfer_updates_call_with_dial_twiml(self, orchestrator):
+        """
+        A transfer is a TwiML update on the live call — <Dial> to staff, with a
+        fallback back to the AI if nobody answers.
+        """
+        orchestrator.call_sid = "CA_test_sid"
+        orchestrator.is_running = True
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=MagicMock())
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("services.voice_agent.cascaded_orchestrator.httpx.AsyncClient", return_value=mock_ctx):
+            await orchestrator._transfer_call("+61399990000")
+
+        twiml = mock_client.post.await_args.kwargs["data"]["Twiml"]
+        assert "<Dial" in twiml
+        assert "+61399990000" in twiml
+        assert "CA_test_sid" in mock_client.post.await_args.args[0]
+        assert orchestrator.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_pending_transfer_fires_after_the_spoken_handoff(self, orchestrator):
+        """
+        The transfer must land after "I'll transfer you now" has been streamed,
+        otherwise the caller is moved in silence.
+        """
+        async def fake_llm_stream(history):
+            orchestrator._pending_transfer = "+61399990000"
+            yield "Sure, transferring you now."
+
+        orchestrator.llm_callback = fake_llm_stream
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_transfer"
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+
+        async def fake_audio_events():
+            yield {"type": "chunk", "data": "YXVkaW8="}
+            yield {"type": "done"}
+
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
+             patch("asyncio.sleep", AsyncMock()), \
+             patch.object(orchestrator, "_transfer_call", AsyncMock()) as mock_transfer:
+            orchestrator._turn_id += 1
+            # A promise belongs to the turn that made it, so these tests
+            # attribute theirs to the turn they are about to run.
+            if orchestrator._pending_hangup or orchestrator._pending_transfer:
+                orchestrator._pending_turn = orchestrator._turn_id
+            await orchestrator._run_parallel_streaming_pipeline(
+                orchestrator._turn_id,
+                context_id=orchestrator.current_context_id or "ctx_test",
+            )
+
+        mock_transfer.assert_awaited_once_with("+61399990000")
+
+    @pytest.mark.asyncio
+    async def test_transfer_without_call_sid_does_not_crash(self, orchestrator):
+        """
+        No Call SID means no transfer is possible; the call must survive it.
+        """
+        orchestrator.call_sid = ""
+        orchestrator.is_running = True
+
+        await orchestrator._transfer_call("+61399990000")
+
+        assert orchestrator.is_running is True
+
+    @pytest.mark.asyncio
+    async def test_hangup_call_is_idempotent(self, orchestrator):
+        """
+        The model called hang_up_call three times on one call. A second
+        termination must not fire a second Twilio request.
+        """
+        orchestrator.call_sid = "CA_test_sid"
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=MagicMock())
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("services.voice_agent.cascaded_orchestrator.httpx.AsyncClient", return_value=mock_ctx):
+            await orchestrator._hangup_call()
+            await orchestrator._hangup_call()
+
+        assert mock_client.post.await_count == 1
+
+
+
+
+class TestCallStateWiring:
+    """
+    CallState is only worth anything if something actually feeds it. This repo
+    has already shipped a tool that returned {"action": "hangup"} to nobody, so
+    a value with no consumer gets its own test: `_execute_tool` is the single
+    place every tool result passes through, and it must record there.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_tool_result_reaches_the_call_state(self, orchestrator):
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock(return_value={
+            "found": True, "found_by": "caller_phone",
+            "booking_reference": "CC-76818", "guest_name": "Dhruv Patel",
+            "room_type": "queen", "check_in_date": "2026-09-04",
+            "check_out_date": "2026-09-06",
+        })
+
+        await orchestrator._execute_tool("lookup_booking", {"guest_name": "Dhruv Patel"}, [])
+
+        assert orchestrator.call_state.identity_confirmed
+        assert "CC-76818" in orchestrator.call_state.as_note()
+
+    @pytest.mark.asyncio
+    async def test_a_refused_tool_records_nothing(self, orchestrator):
+        """transfer_to_staff is gated before dispatch. The gate's refusal is not
+        a tool result and must not be logged as a promise the caller was made."""
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock()
+
+        result = await orchestrator._execute_tool("transfer_to_staff", {}, [])
+
+        assert result["transferred"] is False
+        orchestrator.dispatcher.execute.assert_not_called()
+        assert orchestrator.call_state.promises == []
+
+
+class TestTheCallWritesItselfDown:
+    """
+    Nothing was saved for a live call before this: save_call_transcript only
+    ever fired on the rate-limit-blocked path. Diagnosing the four test calls
+    on 3 September meant fetching each Twilio recording and running it through
+    Whisper — and half the findings came out of the metadata below rather than
+    the words. Seventeen barge-ins in one 186-second call was the number that
+    led to the interrupted-reply bug.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_finished_call_is_written_down(self, orchestrator):
+        orchestrator.call_sid = "CAtest"
+        orchestrator.user_phone = "+61400000000"
+        orchestrator.history = [
+            {"role": "user", "content": "what time is check-in?"},
+            {"role": "assistant", "content": "Check-in is from 2 p.m."},
+        ]
+        orchestrator._tools_called = ["lookup_booking", "lookup_booking", "check_availability"]
+        orchestrator._barge_ins = 17
+
+        saved = AsyncMock(return_value={"ok": True})
+        with patch("services.appwrite.db_service.save_call_transcript", saved):
+            await orchestrator._save_transcript()
+
+        saved.assert_awaited_once()
+        kw = saved.await_args.kwargs
+        assert "Caller: what time is check-in?" in kw["transcript"]
+        assert "Agent: Check-in is from 2 p.m." in kw["transcript"]
+        assert kw["metadata"]["barge_ins"] == 17
+        assert kw["metadata"]["tools"] == {"lookup_booking": 2, "check_availability": 1}
+
+    @pytest.mark.asyncio
+    async def test_it_is_written_once_even_if_teardown_runs_twice(self, orchestrator):
+        orchestrator.history = [{"role": "user", "content": "hello"}]
+        saved = AsyncMock(return_value={"ok": True})
+        with patch("services.appwrite.db_service.save_call_transcript", saved):
+            await orchestrator._save_transcript()
+            await orchestrator._save_transcript()
+        assert saved.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_call_where_nobody_spoke_writes_nothing(self, orchestrator):
+        orchestrator.history = []
+        saved = AsyncMock(return_value={"ok": True})
+        with patch("services.appwrite.db_service.save_call_transcript", saved):
+            await orchestrator._save_transcript()
+        saved.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_failed_write_cannot_break_the_call_tearing_down(self, orchestrator):
+        """A transcript is worth nothing if it can break the thing it describes."""
+        orchestrator.history = [{"role": "user", "content": "hello"}]
+        with patch("services.appwrite.db_service.save_call_transcript",
+                   AsyncMock(side_effect=RuntimeError("Appwrite is down"))):
+            await orchestrator._save_transcript()   # must not raise
+
+    @pytest.mark.asyncio
+    async def test_stopping_the_orchestrator_saves_the_call(self, orchestrator):
+        orchestrator.history = [{"role": "user", "content": "hello"}]
+        with patch.object(orchestrator.deepgram, "close", AsyncMock()), \
+             patch.object(orchestrator.cartesia, "close", AsyncMock()), \
+             patch("services.appwrite.db_service.save_call_transcript",
+                   AsyncMock(return_value={})) as saved:
+            await orchestrator.stop()
+        saved.assert_awaited_once()

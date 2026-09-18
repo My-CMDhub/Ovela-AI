@@ -12,8 +12,8 @@ const features: FeatureCardData[] = [
   },
   {
     icon: Database,
-    title: "Works With Your Existing Software",
-    description: "Plugs directly into ServiceM8, Tradify, RMS Cloud, Cliniko and more. Your software stays your source of truth.",
+    title: "Booking Data Behind an Adapter",
+    description: "Availability and bookings go through one adapter interface, so a property-management system can be swapped in without touching the call logic. Today it runs on its own booking store — no third-party system is connected.",
   },
   {
     icon: Clock,

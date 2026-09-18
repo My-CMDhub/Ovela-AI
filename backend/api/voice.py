@@ -11,6 +11,7 @@ from twilio.twiml.voice_response import VoiceResponse, Connect
 from twilio.rest import Client
 from core.config import settings
 from services.voice_agent import VoiceAgentHandler
+from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestrator
 from services.appwrite import db_service
 from services.email import email_service
 from services.magic_links import generate_demo_approval_url, verify_action_token
@@ -422,15 +423,44 @@ async def get_twiml(request: Request, background_tasks: BackgroundTasks):
 async def websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for Twilio Media Stream.
-    Bridges audio to Deepgram Voice Agent API.
+    Bridges audio based on configured VOICE_PIPELINE_MODE setting (`cascaded` or `monolithic`).
     """
     await websocket.accept()
-    handler = VoiceAgentHandler(websocket)
-    
+    if getattr(settings, "VOICE_PIPELINE_MODE", "cascaded").lower() == "cascaded":
+        logger.info("⚡ [VoiceRoute] Routing Twilio stream to CascadedPipelineOrchestrator")
+        orchestrator = CascadedPipelineOrchestrator(websocket)
+        try:
+            await orchestrator.run_loop()
+        except WebSocketDisconnect:
+            logger.info("WebSocket disconnected")
+        except Exception as e:
+            logger.error(f"WebSocket error in cascaded orchestrator: {e}")
+            await websocket.close()
+    else:
+        logger.info("🏛️ [VoiceRoute] Routing Twilio stream to monolithic VoiceAgentHandler")
+        handler = VoiceAgentHandler(websocket)
+        try:
+            await handler.start()
+        except WebSocketDisconnect:
+            logger.info("WebSocket disconnected")
+        except Exception as e:
+            logger.error(f"WebSocket error: {e}")
+            await websocket.close()
+
+
+@router.websocket("/stream/cascaded")
+async def cascaded_websocket_endpoint(websocket: WebSocket):
+    """
+    Dedicated WebSocket endpoint forcing the Phase 12 CascadedPipelineOrchestrator.
+    """
+    await websocket.accept()
+    logger.info("⚡ [VoiceRoute] Dedicated /stream/cascaded connection accepted")
+    orchestrator = CascadedPipelineOrchestrator(websocket)
     try:
-        await handler.start()
+        await orchestrator.run_loop()
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error in dedicated cascaded orchestrator: {e}")
         await websocket.close()
+

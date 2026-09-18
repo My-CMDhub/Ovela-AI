@@ -6,7 +6,6 @@ import { AnimatePresence, motion } from "framer-motion"
 import { Header } from "@/components/header"
 import { Hero } from "@/components/hero"
 import { Preloader } from "@/components/preloader"
-import { ExitPopup } from "@/components/ui/ExitPopup"
 import { Footer } from "@/components/footer"
 
 // Lazy load heavy components to improve initial load time
@@ -30,16 +29,6 @@ const LivePreview = dynamic(() => import("@/components/live-preview").then(mod =
   ssr: false,
 })
 
-const Testimonials = dynamic(() => import("@/components/testimonials").then(mod => ({ default: mod.Testimonials })), {
-  loading: () => <div className="min-h-[400px]" />,
-  ssr: false,
-})
-
-const Pricing = dynamic(() => import("@/components/pricing").then(mod => ({ default: mod.Pricing })), {
-  loading: () => <div className="min-h-screen" />,
-  ssr: false,
-})
-
 const Contact = dynamic(() => import("@/components/contact").then(mod => ({ default: mod.Contact })), {
   loading: () => <div className="min-h-screen" />,
   ssr: false,
@@ -49,25 +38,6 @@ const FAQ = dynamic(() => import("@/components/faq").then(mod => ({ default: mod
   loading: () => <div className="min-h-[400px]" />,
   ssr: false,
 })
-
-const LogoLoop = dynamic(() => import("@/components/logo-loop").then(mod => ({ default: mod.LogoLoop })), {
-  loading: () => <div className="h-20" />,
-  ssr: false,
-})
-
-const partnerLogos = [
-  { src: "/logo/servicem8-logo.png", alt: "ServiceM8", width: 150, height: 40, className: "!h-[60px]" },
-  { src: "/logo/RMS logo .webp", alt: "RMS Cloud", width: 120, height: 40, className: "!h-[55px]" },
-  { src: "/logo/Tradify-Logo.png", alt: "Tradify", width: 140, height: 40, className: "!h-[60px]" },
-  { src: "/logo/cliniko-logo.png", alt: "Cliniko", width: 130, height: 40, className: "!h-[50px]" },
-  { src: "/logo/Fergus-logo-black.png", srcDark: "/logo/Fergus-logo.png", alt: "Fergus", width: 140, height: 40, className: "!h-[75px] dark:!h-[100px]" },
-  { src: "/logo/xero-logo.png", alt: "Xero", width: 100, height: 40, className: "!h-[65px]" },
-  { src: "/logo/Halaxy-logo.png", alt: "Halaxy", width: 120, height: 40, className: "!h-[60px]" },
-  { src: "/logo/apaleo-logo-dark.webp", srcDark: "/logo/apaleo-logo-white.png", alt: "Apaleo", width: 120, height: 40, className: "!h-[50px]" },
-  { src: "/logo/zoho-logo.png", alt: "Zoho CRM", width: 150, height: 40, className: "!h-[55px]" },
-  { src: "/logo/Vagaro-Logo.png", alt: "Vagaro", width: 130, height: 40, className: "!h-[50px]" },
-  { src: "/logo/cloudbeds-logo.avif", alt: "CloudBeds", width: 130, height: 40, className: "!h-[70px] dark:brightness-0 dark:invert" }
-]
 
 export default function Home() {
   const [isLoading, setIsLoading] = useState(true)
@@ -137,30 +107,6 @@ export default function Home() {
           </motion.div>
         </div>
 
-        {/* Logo Loop - Social Proof */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 1, duration: 1 }}
-          className="py-16 border-b border-white/5 bg-background/50 backdrop-blur-sm"
-        >
-          <div className="container mx-auto px-6 mb-10 text-center">
-            <p className="text-sm font-medium text-muted-foreground">Reads and writes directly to the software you already use</p>
-          </div>
-          <LogoLoop
-            logos={partnerLogos}
-            speed={30}
-            direction="left"
-            logoHeight={50}
-            gap={80}
-            pauseOnHover={true}
-            scaleOnHover={true}
-            fadeOut={true}
-            fadeOutColor="var(--background)"
-            className="opacity-80 hover:opacity-100 transition-opacity duration-300"
-          />
-        </motion.div>
-
         <StudioImagery />
 
         {/* Other sections fade in normally as you scroll */}
@@ -168,14 +114,11 @@ export default function Home() {
           <ProblemSolution />
           <Features />
           <LivePreview />
-          <Testimonials />
           <FAQ />
-          <Pricing />
           <Contact />
           <Footer />
         </div>
       </div>
-      <ExitPopup />
     </main>
   )
 }

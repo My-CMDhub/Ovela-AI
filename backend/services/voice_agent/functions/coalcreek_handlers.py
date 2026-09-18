@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 # Import knowledge base services
 from services.motel_knowledge_base import set_tenant_context
+from services.voice_agent.text_utils import normalize_phone_number
 from services.knowledge_base.coalcreek import COALCREEK_DATA
 from core.config import settings
 
@@ -58,6 +59,55 @@ def phone_numbers_match(p1: str, p2: str) -> bool:
         return d1[-9:] == d2[-9:]
     return d1 == d2
 
+
+
+def caller_owns(doc: dict, caller_phone: str) -> bool:
+    """
+    Is this booking the one belonging to the number that rang us?
+
+    Every tool that acts on a booking asks this FIRST — before it says anything
+    about that booking, including whether it has been paid. The ordering is the
+    whole point. `resend_payment_confirmation` used to run its payment-status
+    guard ahead of this check and refuse with "payment_status='pending'", which
+    told anyone who merely named an email address whether that guest had paid.
+    `resend_payment_link` did not ask at all: it took `user_phone` as an
+    argument and never read it, so naming a stranger's email re-sent a Stripe
+    checkout against their booking.
+
+    An absent caller ID or an absent number on the booking is a NO. There is no
+    reading of "we cannot tell" that should end in acting on somebody's money.
+    """
+    if not caller_phone:
+        return False
+    doc_phone = doc.get("guest_phone", "")
+    if not doc_phone:
+        return False
+    try:
+        doc_phone = normalize_phone_number(doc_phone)
+    except Exception:
+        pass
+    return phone_numbers_match(doc_phone, caller_phone)
+
+
+def not_your_booking(tool: str, doc: dict, caller_phone: str, what: str) -> dict:
+    """The refusal. It says what the caller can do instead, so a legitimate
+    guest ringing from a different handset is not simply stopped dead."""
+    logger.warning(
+        "🔒 Privacy boundary: %s refused — caller '%s' owns none of the bookings "
+        "found%s.",
+        tool, caller_phone,
+        f" (nearest: {doc.get('booking_reference')})" if doc.get("booking_reference") else "",
+    )
+    return {
+        "success": False,
+        "found": False,
+        "privacy_refusal": True,
+        "message": (
+            f"For security reasons I can only {what} for bookings that match the "
+            "number you are calling from. If you are calling from a different "
+            "phone, I can take a message for reception instead."
+        ),
+    }
 
 
 # Common STT mishearings for email domains
@@ -174,28 +224,54 @@ def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utteranc
     - ISO dates (YYYY-MM-DD)
     """
     today = _today_melbourne_date()
-    text = f"{check_in_raw or ''} {check_out_raw or ''} {user_utterance or ''}".lower().strip()
 
     resolved_check_in = _parse_iso_date(check_in_raw)
     resolved_check_out = _parse_iso_date(check_out_raw)
 
+    # An explicit date the model already resolved WINS over a phrase in the
+    # utterance. This used to be the other way round, with the phrase branches
+    # first and the ISO branch last — so "the 10th to the 12th, oh and can I
+    # check in tomorrow if I'm early?" booked tomorrow. The caller mentioning a
+    # relative day is not the caller changing their dates.
+    if resolved_check_in:
+        if not resolved_check_out or resolved_check_out <= resolved_check_in:
+            resolved_check_out = resolved_check_in + timedelta(days=1)
+        return resolved_check_in, resolved_check_out, "iso"
+
+    # Only the utterance is consulted from here: check_in_raw and check_out_raw
+    # did not parse, so anything in them is not a date.
+    text = (user_utterance or "").lower().strip()
+
+    # "this X" is the next X, counting today. "next X" is that one, plus a week.
+    #
+    # Both used to collapse to the same answer: "this weekend" and "next
+    # weekend" BOTH returned the coming Saturday, and so did "this Friday" and
+    # "next Friday". A caller asking about next weekend was given this one,
+    # confidently, with no way to notice.
+    def _from_qualifier(qualifier: str, weekday: int):
+        target = _next_weekday(today, weekday, include_today=True)
+        if qualifier == "next":
+            target += timedelta(days=7)
+        return target
+
     # Weekend phrases: Saturday check-in, Sunday check-out (AU motel convention)
-    if re.search(r"\b(upcoming|next|this)\s+weekend\b", text) or re.search(r"\bupcoming\s+weekand\b", text):
-        saturday = _next_weekday(today, 5, include_today=False)
-        sunday = saturday + timedelta(days=1)
-        return saturday, sunday, "weekend_phrase"
+    weekend = re.search(r"\b(upcoming|next|this)\s+week(?:end|and)\b", text)
+    if weekend:
+        saturday = _from_qualifier(weekend.group(1), 5)
+        return saturday, saturday + timedelta(days=1), "weekend_phrase"
 
     # upcoming/next/this weekday
     weekday_match = re.search(r"\b(upcoming|next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", text)
     if weekday_match:
-        qualifier = weekday_match.group(1)
-        weekday_word = weekday_match.group(2)
-        target = WEEKDAY_INDEX[weekday_word]
-        include_today = qualifier == "this"
-        target_date = _next_weekday(today, target, include_today=include_today)
-        if qualifier in {"upcoming", "next"} and target_date <= today:
-            target_date = target_date + timedelta(days=7)
-        return target_date, target_date + timedelta(days=1), "weekday_phrase"
+        qualifier, weekday_word = weekday_match.groups()
+        target_date = _from_qualifier(qualifier, WEEKDAY_INDEX[weekday_word])
+        # "next Friday" said on a Wednesday means different things to different
+        # people, and the cost of guessing is a guest arriving a week out. The
+        # suffix tells the handler to read the date back before acting on it.
+        source = "weekday_phrase"
+        if qualifier == "next" and today.weekday() != WEEKDAY_INDEX[weekday_word]:
+            source = "weekday_phrase_ambiguous"
+        return target_date, target_date + timedelta(days=1), source
 
     # after/in N days
     days_match = re.search(r"\b(?:after|in)\s+(\d{1,3})\s+days?\b", text)
@@ -214,11 +290,6 @@ def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utteranc
 
     if re.search(r"\btoday\b", text):
         return today, today + timedelta(days=1), "today"
-
-    if resolved_check_in:
-        if not resolved_check_out or resolved_check_out <= resolved_check_in:
-            resolved_check_out = resolved_check_in + timedelta(days=1)
-        return resolved_check_in, resolved_check_out, "iso"
 
     return None, None, "unresolved"
 
@@ -1075,9 +1146,12 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
         return result
 
     def _name_matches(doc, name: str) -> bool:
-        n = name.lower()
-        db_name = doc.get("guest_name", "").lower()
-        return n in db_name or db_name in n
+        # Was a substring test, which called "Drew Patel" a mismatch for
+        # "Dhruv Patel" — the single most common thing the recogniser does to
+        # this guest's name. name_confirms() asks the right question: is this
+        # name compatible with the guest the phone number already identified?
+        from services.db.guest_match import name_confirms
+        return name_confirms(name, doc.get("guest_name", ""))
 
     try:
         # ── Step 0: Caller's own phone (Twilio) — always try first ──────────
@@ -1091,12 +1165,49 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                     matched = [d for d in docs if _name_matches(d, guest_name)]
                     if matched:
                         return _format_doc(matched[0], len(matched), found_by="caller_phone", name_already_provided=True)
-                    # If python's strict string check fails, pass the doc to the LLM anyway
-                    # so the LLM can evaluate if it's a fuzzy match (e.g. 'B H R U V' vs 'Drew Patel')
-                    return _format_doc(docs[0], len(docs), found_by="caller_phone", name_mismatch=True)
-                # No name given — return booking, let AI confirm with user
-                else:
+                    # Nothing about this name fits the booking on this number, so
+                    # somebody else is holding the guest's phone. Handing the
+                    # record to the model "so it can judge" is how the guest's
+                    # name gets read out to a stranger — the model repeats what
+                    # it is shown. Withhold the record, not just the answer.
+                    logger.info(
+                        "🔒 Caller-phone booking withheld: stated name does not fit the reservation"
+                    )
+                    return {
+                        "success": True,
+                        "found": False,
+                        "name_mismatch": True,
+                        "needs_reference": True,
+                        "message": (
+                            "No reservation found under that name. Do NOT say whether any "
+                            "booking exists on this phone number, and do NOT read out any "
+                            "other guest's name. Ask for their booking reference, or the "
+                            "exact name the reservation is under."
+                        ),
+                    }
+                # No name given yet. Hand over the stay so the agent can be
+                # useful, and withhold the three fields that identify a person.
+                # Instructing the model not to say the name is weaker than not
+                # showing it: under a degraded transcript it said the name back
+                # to a stranger despite the prompt forbidding it. The fields
+                # return the moment a matching name is given.
+                # A booking reference read off a confirmation email identifies
+                # the caller just as well as a name does.
+                elif raw_ref:
                     return _format_doc(docs[0], len(docs), found_by="caller_phone")
+                else:
+                    result = _format_doc(docs[0], len(docs), found_by="caller_phone")
+                    for field in ("guest_name", "guest_email", "guest_phone",
+                                  "confirmation_prompt"):
+                        result.pop(field, None)
+                    result["identity_unconfirmed"] = True
+                    result["message"] = (
+                        "A reservation is on file for this phone number, and its dates "
+                        "and payment status are above. You have NOT been told the "
+                        "guest's name and must not guess it. Ask who is calling, then "
+                        "call lookup_booking again with the name they give."
+                    )
+                    return result
 
         # ── Step 1: Reference lookup (normalized) ───────────────────────────
         if reference:
@@ -1148,9 +1259,20 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 return _format_doc(docs[0], len(docs), found_by="email")
 
         # ── Nothing found ────────────────────────────────────────────────────
+        # This message used to end "want me to put you through to reception?",
+        # which handed the agent an exit on the caller's very first miss and
+        # nothing else to try. On a real call the caller's name missed three
+        # times and the agent then dialled a human. A spoken name that the
+        # matcher cannot place is usually recoverable — spelling it out resolves
+        # it, and the caller had simply never been asked.
         return {
             "found": False,
-            "message": "I couldn't find a booking linked to your number or the details I have here - want me to put you through to reception?"
+            "message": (
+                "No booking matched that. Speech recognition mangles names, so ask "
+                "them to spell the surname out letter by letter and call this again "
+                "with the spelling — that usually finds it. If spelling fails too, "
+                "ask for their booking reference. Do not escalate to a human yet."
+            ),
         }
 
     except Exception as e:
@@ -1240,6 +1362,7 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
 
     # ── Correction path: patch reservation + resend Stripe link ──
     email_resent = False
+    patched_reservation = False
     if (guest_email or guest_name) and guest_phone and db_service:
         try:
             docs = await db_service.lookup_motel_reservation(
@@ -1280,6 +1403,7 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
                     booking_id=active_doc["$id"],
                     data=patch_data,
                 )
+                patched_reservation = True
                 logger.info("📝 Details corrected in Appwrite for %s", active_doc.get("booking_reference"))
                 final_email = guest_email or active_doc.get("guest_email")
                 if final_email:
@@ -1324,14 +1448,25 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
             f"I've updated your details and resent the payment link. "
             "Could you check your inbox now to make sure it has arrived?"
         )
+    elif patched_reservation:
+        message = "I've successfully updated the details on your booking."
     else:
-        if guest_name and not guest_email:
-            message = "I've successfully updated the name on your booking."
-        else:
-            message = "Details safely stored in my temporary memory for this call."
-        
+        # No reservation on this number, so nothing was written anywhere. This
+        # used to answer "Details safely stored in my temporary memory for this
+        # call" — there was no such memory, nothing was stored, and the model
+        # repeated the claim to the caller. The details ARE now held, by
+        # CallState.heard() in the orchestrator, but they are held as something
+        # the caller said and not as a record, and the wording has to match
+        # that or the agent will treat them as confirmed.
+        message = (
+            "Noted for this call. Nothing is saved anywhere yet — there is no "
+            "booking to attach it to — so read it back to confirm before you "
+            "use it for anything."
+        )
+
     return {
         "success": True,
+        "stored": bool(patched_reservation),
         "message": message,
         "ai_should_say": message
     }
@@ -1371,12 +1506,23 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
             tenant_id="coalcreek"
         )
         
+        # Ownership first, and before a booking is even chosen. This check used
+        # to sit BELOW the N6 payment guard, so a caller who named somebody
+        # else's email address was refused with "payment_status='pending'" —
+        # which answered the question they were really asking. Nothing about a
+        # booking may be said before we know whose it is.
+        found_any = bool(docs)
+        docs = [d for d in (docs or []) if caller_owns(d, caller_phone)]
+        if found_any and not docs:
+            return not_your_booking("resend_payment_confirmation", {},
+                                    caller_phone, "resend a confirmation")
+
         active_doc = None
-        for doc in (docs or []):
+        for doc in docs:
             if doc.get("status") in ("paid", "confirmed", "link_sent", "pending_payment", "pending"):
                 active_doc = doc
                 break
-                
+
         if not active_doc:
             return {
                 "success": False,
@@ -1402,26 +1548,6 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
                 ),
             }
 
-        # Strict Caller-Phone Lock verification (Approach 1)
-        doc_phone = active_doc.get("guest_phone", "")
-        normalized_doc_phone = None
-        if doc_phone:
-            try:
-                normalized_doc_phone = normalize_phone_number(doc_phone)
-            except Exception:
-                normalized_doc_phone = doc_phone
-
-        if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
-            logger.warning("ARGS DUMP: %s", args); logger.warning(
-                "🔒 Privacy boundary triggered: Caller phone '%s' attempted to resend receipt for '%s' (phone: '%s'). Refusing access.",
-                caller_phone, active_doc.get("guest_name"), doc_phone
-            )
-            return {
-                "success": False,
-                "privacy_refusal": True,
-                "message": "For security reasons, I can only resend booking confirmations matching your calling phone number. Please contact reception for support."
-            }
-            
         # Resend Email (Fire and forget)
         if active_doc.get("status") in ("paid", "confirmed"):
             from services.email import email_service
@@ -1476,6 +1602,10 @@ async def handle_resend_payment_confirmation(args: dict, db_service, user_phone:
 async def handle_resend_payment_link(args: dict, db_service, user_phone: str) -> dict:
     """
     Resend payment link email for an unpaid/pending booking.
+
+    `user_phone` used to be accepted and never read, so any email address the
+    caller could name produced a Stripe checkout against that guest's booking
+    and told the caller its payment status and reference. It is read now.
     """
     guest_email = args.get("guest_email", "")
     
@@ -1484,13 +1614,29 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
             "success": False,
             "message": "I need your email address to resend the payment link."
         }
-        
+
+    try:
+        caller_phone = normalize_phone_number(user_phone) if user_phone else ""
+    except Exception:
+        caller_phone = user_phone or ""
+
     try:
         docs = await db_service.lookup_motel_reservation(
             email=guest_email,
             tenant_id="coalcreek"
         )
-        
+
+        # Before deciding anything — including whether the booking is already
+        # paid, which is itself an answer — narrow to the bookings that belong
+        # to this caller. Filtered rather than refused outright: one email can
+        # carry two stays, and a guest who booked a room for a friend should
+        # still be able to pay for their own.
+        found_any = bool(docs)
+        docs = [d for d in (docs or []) if caller_owns(d, caller_phone)]
+        if found_any and not docs:
+            return not_your_booking("resend_payment_link", {}, caller_phone,
+                                    "resend a payment link")
+
         active_doc = None
         for doc in (docs or []):
             _ps = doc.get("payment_status") or ""
@@ -1756,6 +1902,70 @@ async def _handle_stripe_and_guest_email(
 # COAL CREEK DISPATCHER
 # =============================================================================
 
+# Tools that cannot change a reservation row. Anything not listed here
+# invalidates the per-call lookup memo — a new tool defaults to safe, not fast.
+_RESERVATION_READ_ONLY_TOOLS = frozenset({
+    "lookup_booking",
+    "check_availability",
+    "perform_live_search",
+    "hang_up_call",
+    "transfer_to_staff",
+    "wait_on_request",
+    "report_user_behavior",
+})
+
+
+class _CachedReservationLookup:
+    """
+    Per-call memo in front of `lookup_motel_reservation`.
+
+    A single call asks the same question over and over: trace
+    CA591f56d4f5055bd64cb598b2de7a58cd shows `lookup_booking` firing 8 times
+    in 204 seconds, and each miss on the caller's phone falls through to a
+    name query and then a 100-document scan — three sequential Appwrite round
+    trips at ~250ms apiece, inside a turn budgeted at 800ms end to end.
+
+    The caller's reservation cannot change mid-call unless we change it, so
+    `invalidate()` is called after any tool that writes. Every other attribute
+    delegates to the real service untouched.
+    """
+
+    def __init__(self, db_service):
+        self._db = db_service
+        self._cache: dict[tuple, "asyncio.Future"] = {}
+
+    def __getattr__(self, name):
+        # Only reached for attributes this proxy does not define itself.
+        return getattr(self._db, name)
+
+    async def lookup_motel_reservation(self, *args, **kwargs):
+        if args:
+            # Positional callers bypass the memo rather than risk a key that
+            # does not match the keyword form of the same query.
+            return await self._db.lookup_motel_reservation(*args, **kwargs)
+
+        # Same function the query layer uses, so the key and the question agree.
+        from services.db.bookings import normalise_lookup_value
+        kwargs = {k: normalise_lookup_value(k, v) for k, v in kwargs.items()}
+        key = tuple(sorted(kwargs.items()))
+        task = self._cache.get(key)
+        if task is None:
+            # Cache the task, not the result: the startup prefetch and the
+            # first tool call race for the same row, and the loser must join
+            # the in-flight request instead of issuing a second one.
+            task = asyncio.ensure_future(self._db.lookup_motel_reservation(**kwargs))
+            self._cache[key] = task
+        try:
+            return await task
+        except Exception:
+            # A transient Appwrite error must not poison the rest of the call.
+            self._cache.pop(key, None)
+            raise
+
+    def invalidate(self) -> None:
+        self._cache.clear()
+
+
 class CoalCreekFunctionDispatcher:
     """
     Dispatches Coal Creek specific function calls.
@@ -1763,7 +1973,9 @@ class CoalCreekFunctionDispatcher:
     """
     
     def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, caller_memory_bank=None, call_sid: str = "", adk_orchestrator=None):
-        self.db_service = db_service
+        # Wrap reads in a per-call memo. Repeated `lookup_booking` calls in one
+        # call were re-issuing the same Appwrite queries at ~250ms each.
+        self.db_service = _CachedReservationLookup(db_service)
         self.user_phone = user_phone
         self.save_reservation_fn = save_reservation_fn
         self.abuse_protection = abuse_protection
@@ -1772,6 +1984,50 @@ class CoalCreekFunctionDispatcher:
         self.adk_orchestrator = adk_orchestrator  # In-process ADKOrchestrator (avoids HTTP loopback)
         # Always set context on init
         set_tenant_context("coalcreek")
+
+    def prefetch_caller_reservation(self) -> None:
+        """
+        Warm the caller's own booking while the greeting is still playing.
+
+        Deepgram, the model and Cartesia all get a head start at call setup;
+        the first `lookup_booking` did not, and paid ~250ms of Appwrite round
+        trip inside the turn instead. The memo means the tool call joins this
+        request rather than repeating it.
+        """
+        if not self.user_phone:
+            return
+        try:
+            from services.voice_agent.text_utils import normalize_phone_number
+            phone = normalize_phone_number(self.user_phone)
+        except Exception:
+            phone = self.user_phone
+        try:
+            self._caller_reservation_task = asyncio.ensure_future(
+                self.db_service.lookup_motel_reservation(phone=phone, tenant_id="coalcreek")
+            )
+        except RuntimeError:
+            # No running loop (test context) — a cold first lookup is slow, not broken.
+            logger.debug("📇 Reservation prefetch skipped (no event loop)")
+
+    async def caller_reservation(self, timeout: float = 0.25) -> list:
+        """
+        The booking this number belongs to, if the prefetch has landed.
+
+        Fired while the greeting was still playing, so it is normally finished
+        long before this is read. The timeout exists so a slow Appwrite cannot
+        push dead air into the first turn: no note is better than a late one.
+        """
+        task = getattr(self, "_caller_reservation_task", None)
+        if task is None:
+            return []
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout) or []
+        except asyncio.TimeoutError:
+            logger.warning("📇 Caller reservation prefetch missed the first turn")
+            return []
+        except Exception as e:
+            logger.warning(f"📇 Caller reservation prefetch failed: {e}")
+            return []
 
     def fire_adk_cold_path(self, query: str, session_state: dict | None = None) -> None:
         """
@@ -1878,6 +2134,9 @@ class CoalCreekFunctionDispatcher:
                 self._dispatch(function_name, args, context),
                 timeout=TIMEOUT
              )
+             if function_name not in _RESERVATION_READ_ONLY_TOOLS:
+                 # Unknown or writing tool: assume the reservation moved.
+                 self.db_service.invalidate()
              return result
         except asyncio.TimeoutError:
              logger.error(f"Function {function_name} timed out after {TIMEOUT}s")
@@ -1903,11 +2162,13 @@ class CoalCreekFunctionDispatcher:
             return await handle_check_availability(args, self.db_service, context=context)
 
         elif function_name == "create_booking_request":
-            # P11-F: Thread availability_cache into the handler so it can skip re-check
-            if isinstance(context, dict) and "availability_cache" in context:
-                args = dict(args)  # shallow copy — don't mutate caller's dict
-                args["_availability_cache"] = context["availability_cache"]
-
+            # The per-call availability memo is deliberately NOT threaded in
+            # here. It used to be, and the handler skips its write-time
+            # re-check whenever the memo says the room was free — so a room
+            # confirmed at the start of a call could be booked at the end of it
+            # having been taken by somebody else in between. The memo makes a
+            # caller asking twice cheap; it must never stand in for looking at
+            # the live state before writing.
             result = await handle_create_booking_request(args, self.user_phone, self.save_reservation_fn, self.db_service)
 
             if result.get("success"):

@@ -721,6 +721,35 @@ class ADKOrchestrator:
         logger.info("🤖 ADK: Response for %s (%d chars)", user_id[:8], len(result))
         return result
 
+    async def query_stream(
+        self, user_id: str, session_id: str, text: str
+    ) -> Any:
+        """
+        Send a user utterance through the ADK graph and yield response chunks.
+        """
+        from google.adk.agents.run_config import RunConfig, StreamingMode
+
+        message = types.Content(
+            role="user",
+            parts=[types.Part(text=text)],
+        )
+
+        try:
+            async for event in self.runner.run_async(
+                user_id=user_id,
+                session_id=session_id,
+                new_message=message,
+                run_config=RunConfig(streaming_mode=StreamingMode.SSE),
+            ):
+                if event.partial and event.content and event.content.parts:
+                    if any(part.text for part in event.content.parts):
+                        if not any(part.function_call for part in event.content.parts):
+                            chunk = "".join(part.text or "" for part in event.content.parts)
+                            if chunk:
+                                yield chunk
+        except Exception as exc:
+            logger.error("🤖 ADK: query_stream failed for user %s — %s", user_id[:8], exc)
+
     async def update_session_state(self, user_id: str, session_id: str, state: dict) -> None:
         """
         Merge state updates into the ADK session (e.g., caller name, booking dates).

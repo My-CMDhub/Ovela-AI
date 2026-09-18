@@ -18,3 +18,13 @@ stripe
 cartesia>=0.1.0
 google-adk>=2.0.0
 google-genai
+# --- Cascaded Pipeline (Phase 12) ---
+webrtcvad>=2.0.10          # C-ext Google WebRTC VAD, <1ms/frame, zero PyTorch
+audioop-lts>=0.2.1; python_version >= "3.13" # mu-law PCM decode for Python 3.13+
+
+# --- Observability / Hackathon ---
+sentry-sdk[fastapi]
+setuptools==69.5.1
+
+# --- Dev tooling ---
+ruff

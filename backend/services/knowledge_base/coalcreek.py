@@ -13,7 +13,7 @@ Used to dynamically generate system prompts and answer function queries.
 COALCREEK_DATA = {
     "info": {
         "name": "Coal Creek Motel",
-        "phone": "+61468088990",
+        "phone": "+61348236219",
         "email": "coalcreekmotel@gmail.com",
         "address": "8444 South Gippsland Highway, Korumburra VIC 3950",
         "website": "coalcreekmotel.com.au",

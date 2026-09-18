@@ -944,7 +944,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
                         _COALCREEK_DEFAULTS = {
                             "staff_email": "officialcoalcreek@gmail.com",
                             "business_name": "Coal Creek Motel",
-                            "business_phone": "+61468088990",
+                            "business_phone": "+61348236219",
                             "location": "8444 South Gippsland Highway, Korumburra VIC 3950",
                         }
                         if tenant_id == "coalcreek":

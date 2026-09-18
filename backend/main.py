@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -8,6 +9,15 @@ from fastapi.responses import HTMLResponse
 from core.config import settings
 from api import twilio, voice, notifications, actions, stripe, adk as adk_api, evaluations as evaluations_api
 
+
+import os
+
+# Heroku Google ADC injection
+if "GOOGLE_CREDENTIALS_JSON" in os.environ and "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
+    creds_path = "/tmp/google-credentials.json"
+    with open(creds_path, "w") as f:
+        f.write(os.environ["GOOGLE_CREDENTIALS_JSON"])
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = creds_path
 
 # Initialize New Relic BEFORE creating FastAPI app
 import newrelic.agent
@@ -42,6 +52,16 @@ logging.basicConfig(
     force=True,
 )
 
+import sentry_sdk
+
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.ENVIRONMENT,  # else every event is tagged "production"
+        send_default_pii=True,
+        traces_sample_rate=1.0,  # Capture 100% of traces for hackathon baseline
+    )
+
 # Create FastAPI app (New Relic auto-instruments ASGI apps)
 app = FastAPI(title=settings.PROJECT_NAME)
 
@@ -70,6 +90,30 @@ async def startup_event():
     except Exception as adk_err:
         logging.error(f"❌ ADKOrchestrator failed to initialise: {adk_err}")
         app.state.adk_orchestrator = None  # Graceful degradation
+
+    # =========================================================================
+    # FIRST-CALL WARM-UP
+    # `_build_call_context()` imports openai + the dispatcher chain and fetches
+    # the tenant row lazily, on the first turn of the first call. Measured on
+    # v406: 4,316ms to "Call context ready" on the first call after a boot vs
+    # 2ms on the second. Paying it here means the first caller does not.
+    # =========================================================================
+    try:
+        warm_start = time.monotonic()
+        from openai import AsyncOpenAI  # noqa: F401
+        from services.voice_agent.functions import CoalCreekFunctionDispatcher  # noqa: F401
+        from services.voice_agent.abuse_protection import AbuseProtection  # noqa: F401
+        from services.voice_agent.memory import CallerMemoryBank  # noqa: F401
+        from services.appwrite import db_service
+        from core.config import settings as _settings
+
+        await db_service.get_tenant_config(_settings.TENANT_ID)
+        logging.info(
+            f"🔥 Voice call context pre-warmed in {(time.monotonic() - warm_start) * 1000:.0f}ms"
+        )
+    except Exception as warm_err:
+        # A cold first call is slow, not broken — never block startup for this.
+        logging.warning(f"🟡 Voice warm-up skipped: {warm_err}")
 
     logging.info("✅ Application startup complete")
 

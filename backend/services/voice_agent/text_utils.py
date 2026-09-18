@@ -459,3 +459,346 @@ def prepare_for_tts(text: str) -> tuple[str, list[str]]:
     clean_text = make_speakable(clean_text)
     
     return clean_text, signals
+
+
+# Words a caller uses to agree, and the things they call a human being. Kept
+# separate because they answer different questions: the first only counts as
+# consent when the agent had just offered, the second stands on its own.
+_AGREEING = {
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "please", "alright",
+    "absolutely", "definitely", "correct", "right", "fine", "go ahead",
+    "do it", "yes please", "that would be great", "if you could",
+}
+_ASKED_FOR_A_PERSON = re.compile(
+    r"\b(transfer me|put me through|speak (?:to|with)|talk (?:to|with)|"
+    r"get me|connect me|human|real person|manager|receptionist|front desk|"
+    r"someone (?:else|there)|somebody (?:else|there))\b",
+    re.IGNORECASE,
+)
+_OFFERED_A_PERSON = re.compile(
+    r"\b(put you through|transfer you|reception|front desk|grab the front desk|"
+    r"connect you|speak to (?:someone|a person|staff))\b",
+    re.IGNORECASE,
+)
+
+
+def transfer_consent_given(history: list) -> bool:
+    """
+    Did the caller actually agree to be handed to a person?
+
+    Handing the call over ends everything the agent can do for them, and on a
+    real call the model dialled a human after the caller said "Actually, I am
+    calling for Sarah" — which is not agreement to anything. The prompt already
+    forbade that; a rule with a one-way consequence should not rest on the model
+    choosing to follow it.
+
+    Consent is either the caller asking for a person outright, or the caller
+    agreeing to an offer the agent has just made. A bare "yes" on its own is
+    agreement to whatever was last proposed, which is usually not this.
+    """
+    if not history:
+        return False
+
+    last_user = next(
+        (m.get("content") or "" for m in reversed(history) if m.get("role") == "user"),
+        "",
+    )
+    if not last_user.strip():
+        return False
+
+    if _ASKED_FOR_A_PERSON.search(last_user):
+        return True
+
+    stripped = last_user.strip().strip(".!,").lower()
+    agreeing = stripped in _AGREEING or any(
+        stripped.startswith(word + " ") or stripped == word for word in _AGREEING
+    )
+    if not agreeing:
+        return False
+
+    # A "yes" only transfers the call if a transfer is what was on the table.
+    for message in reversed(history):
+        if message.get("role") == "assistant":
+            return bool(_OFFERED_A_PERSON.search(message.get("content") or ""))
+    return False
+
+
+# A yes that carries a condition, a deferral or a counter-question is not a
+# yes. "Fine, I'll think about it and call you back", "Sure, but I'd need to
+# check with my wife first" and "Right, so how far is that from the beach?" all
+# opened with an agreeing word and all meant no.
+_NOT_REALLY_AGREEING = re.compile(
+    r"\b(but|however|though|think about|thinking about|call you back|ring back|"
+    r"call back|later|not (?:now|yet|sure)|check with|hold off|maybe|"
+    r"how (?:much|far|many|long)|what about|instead|cheaper|before i)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_agreement(stripped: str, raw: str) -> bool:
+    """Did the caller actually say yes to what was just put to them?"""
+    if stripped in _AGREEING:
+        return True
+    if not any(stripped.startswith(word + " ") for word in _AGREEING):
+        return False
+    # An opening "yes" followed by a question is a question.
+    if "?" in raw or _NOT_REALLY_AGREEING.search(raw):
+        return False
+    # "Yes, go ahead and book it" is agreement. A paragraph is a conversation.
+    return len(stripped.split()) <= 8
+
+
+_A_PRICE = re.compile(r"\$\s?\d|\b\d+\s?dollars\b", re.IGNORECASE)
+_A_DATE = re.compile(
+    r"\b(\d{1,2}(?:st|nd|rd|th)|january|february|march|april|may|june|july|"
+    r"august|september|october|november|december|tonight|tomorrow)\b",
+    re.IGNORECASE,
+)
+
+
+def booking_summary_confirmed(history: list) -> bool:
+    """
+    Did the caller actually hear their booking read back, and agree to it?
+
+    create_booking_request is guarded by `has_user_confirmed_summary`, which the
+    MODEL fills in — the gate asks the model whether the model did the thing. It
+    is the same shape as the transfer rule that a live call broke, and it holds
+    a room, sends an email and raises a Stripe checkout.
+
+    A summary is the caller's name, a price and a date, spoken by the agent; the
+    confirmation is the caller agreeing after that. Anything the agent said
+    earlier in the call does not count — the caller must have agreed to THIS
+    read-back, not to something four turns ago.
+
+    Deliberately not strict about phrasing. A false refusal costs a booking, and
+    the refusal is recoverable — the agent is told to read the summary and ask
+    again — so this checks that a summary plausibly happened, not that it was
+    word-perfect.
+    """
+    if not history:
+        return False
+
+    last_user = next(
+        (m.get("content") or "" for m in reversed(history) if m.get("role") == "user"), "")
+    # Punctuation between the words, not just around them: "Yes, confirmed, go
+    # ahead" is agreement, and stripping only the ends leaves "yes," which
+    # matches nothing. (transfer_consent_given has the same narrow parse. It is
+    # left alone on purpose — widening what counts as agreement loosens a
+    # safety gate, and that is a change to measure, not to slip in here.)
+    stripped = re.sub(r"[^\w\s]", " ", last_user).strip().lower()
+    stripped = re.sub(r"\s+", " ", stripped)
+    if not stripped:
+        return False
+    if not _is_agreement(stripped, last_user):
+        return False
+
+    # The summary has to be the reply IMMEDIATELY before the caller's answer.
+    # Scanning back for "the most recent assistant turn" reaches over anything
+    # in between — and a barge-in that lands before a single word is heard
+    # DELETES that turn, so the scan found an availability quote from two turns
+    # earlier, complete with a price and a date, and read it as a booking
+    # summary the caller had agreed to.
+    if len(history) < 2 or history[-1].get("role") != "user" \
+            or history[-2].get("role") != "assistant":
+        return False
+    said = history[-2].get("content") or ""
+    if not said:
+        return False
+
+    if not (_A_PRICE.search(said) and _A_DATE.search(said)):
+        return False
+
+    # The caller's name is NOT required here, and that is a measured decision
+    # rather than an oversight. The prompt asks for "[Name], checking in [date],
+    # checking out [date], [room] at $[price]", but across replays the model
+    # reads back the room, the dates and the rate and leaves the name out — so
+    # requiring it would refuse most legitimate bookings. Getting the name into
+    # the read-back is a prompt change, which is Track B and has to be measured
+    # as a rate before this gate can tighten. Until then the rate is reported by
+    # booking_summary_named_guest() and blocks nothing.
+    return True
+
+
+def booking_summary_named_guest(history: list, guest_name: str) -> bool:
+    """
+    Did the read-back the caller agreed to actually include their name?
+
+    Measured, not enforced. The name is the field speech recognition mangles
+    most and the field that ends up on the booking and the payment email, so
+    reading everything back except that one is precisely backwards. This counts
+    how often it happens; tightening the gate waits on the prompt change and its
+    own measurement.
+    """
+    if not booking_summary_confirmed(history):
+        return False
+    said = next(
+        (m.get("content") or "" for m in reversed(history) if m.get("role") == "assistant"), "")
+    first_name = (guest_name or "").strip().split(" ")[0]
+    return bool(first_name) and first_name.lower() in said.lower()
+
+
+_EMAIL_LITERAL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+# "my email is ...", "it's ...", "the address is ..." — the words a caller puts
+# in front of the address before they start spelling it.
+_EMAIL_LEAD_IN = re.compile(
+    r"\b(?:e-?mail(?:\s+address)?(?:\s+is)?|address\s+is|it'?s|that'?s|its)\s+",
+    re.IGNORECASE,
+)
+# The spoken shape: something, then "at", then something, then "dot", then a TLD.
+_EMAIL_SPOKEN = re.compile(r"\bat\b.{0,40}?\bdot\b\s*\w{2,}", re.IGNORECASE)
+
+
+def extract_spoken_email(text: str) -> str:
+    """
+    The email address inside something a caller said, or "".
+
+    Read off the CALLER's own words rather than out of a tool argument. The
+    difference decides whether it survives: an address captured from what the
+    model chose to pass to a tool is only kept when the model chose to pass it,
+    and measured over three replays of the new-caller scenario it did not — the
+    address was spelled out on turn 4 and gone by turn 17. What the caller said
+    is evidence the model did not author, which is the same reason the booking
+    gate reads the transcript.
+
+    Deliberately permissive. This feeds a note that says "read it back to
+    confirm", never a booking; a wrong guess costs one clarifying question,
+    and a miss costs the caller spelling it out twice.
+    """
+    if not text:
+        return ""
+
+    literal = _EMAIL_LITERAL.search(text)
+    if literal:
+        return literal.group(0).strip(".,").lower()
+
+    if not _EMAIL_SPOKEN.search(text):
+        return ""
+
+    # Drop the carrier phrase, keep everything from the address onwards.
+    lead = None
+    for lead in _EMAIL_LEAD_IN.finditer(text):
+        pass                       # the LAST one — "my email, it's ..." has two
+    candidate = text[lead.end():] if lead else text
+    # A sentence ends in a full stop and the normaliser turns "dot" into one
+    # too, so the address arrives with a stray dot glued to the TLD.
+    normalised = normalize_email_for_speech(candidate).strip(".,;:!? ")
+    return normalised if _EMAIL_LITERAL.fullmatch(normalised) else ""
+
+
+def normalize_email_for_speech(raw: str) -> str:
+    """Spoken email to written email. Thin wrapper so the handler's normaliser
+    has one caller-facing name and one home."""
+    from services.voice_agent.functions.coalcreek_handlers import _normalize_email
+    return _normalize_email(raw)
+
+
+# "apostrophe" is what a caller says; these are what the recogniser writes down
+# when they say it. "Epistroph" is verbatim from a real call.
+_APOSTROPHE_WORDS = {"apostrophe", "epistroph", "epistrophe", "apostrophy"}
+_SPELL_NOISE = {"then", "and", "that's", "thats", "it's", "its", "is", "a",
+                "capital", "uppercase", "lowercase", "as", "in", "for", "like",
+                "so", "um", "uh", "okay", "ok", "my", "name", "the", "letter",
+                "letters", "spelled", "spelt", "spelling", "again", "please"}
+_LETTER = re.compile(r"^[a-z]$")
+
+
+def extract_spelled_words(text: str) -> list:
+    """
+    The words a caller spelled out, assembled from their letters.
+
+    This is the difference between a booking under "Siobhan O'Connor" and one
+    under "Cyborn O'Connor". On a real call the recogniser produced:
+
+        "My name is Siban O'Connor. That's s i o b h a n, then o, then
+         apostrophe, c o n n o r."
+
+    Every spelled letter is correct. The phonetic guess beside it is not — and
+    the phonetic guess is what reached the database, three times, because
+    nothing in the system read the letters. A caller who spells their name is
+    telling you they expect the sound to be wrong; taking the sound anyway is
+    ignoring the one piece of evidence they went out of their way to give.
+
+    Returns assembled words in the order they were spelled, e.g.
+    ["Siobhan", "O'Connor"]. Runs shorter than three letters are ignored: "a"
+    and "I" are words, and two stray letters are more likely a false read than
+    a name.
+    """
+    if not text:
+        return []
+
+    # Hyphenated spelling — "S-I-O-B-H-A-N" — becomes separate letter tokens.
+    normalised = re.sub(r"(?<=\b[A-Za-z])-(?=[A-Za-z]\b)", " ", text)
+    tokens = re.findall(r"[A-Za-z']+", normalised)
+
+    lowered = [t.lower() for t in tokens]
+    words, run, pending_apostrophe = [], [], False
+
+    for i, token in enumerate(lowered):
+        if _LETTER.match(token):
+            if pending_apostrophe and run:
+                run.append("'")
+                pending_apostrophe = False
+            run.append(token)
+            continue
+
+        if token in _APOSTROPHE_WORDS:
+            # Only meaningful inside a spelling; a bare "apostrophe" is not.
+            pending_apostrophe = bool(run)
+            continue
+
+        if token in _SPELL_NOISE:
+            # "then" is a filler INSIDE a spelling ("o, then apostrophe, c o n
+            # n o r") and also the join BETWEEN two spelled words ("s i o b h a
+            # n, then o..."). The next meaningful token tells them apart: an
+            # apostrophe continues the word, anything else starts a new one.
+            nxt = next((t for t in lowered[i + 1:]
+                        if t not in _SPELL_NOISE), "")
+            if len(run) >= 3 and nxt not in _APOSTROPHE_WORDS:
+                words.append(_assemble(run))
+                run, pending_apostrophe = [], False
+            continue
+
+        # A real word ends the run.
+        if len(run) >= 3:
+            words.append(_assemble(run))
+        run, pending_apostrophe = [], False
+
+    if len(run) >= 3:
+        words.append(_assemble(run))
+    return words
+
+
+def _assemble(run: list) -> str:
+    """Letters to a word, capitalised the way a name is written."""
+    word = "".join(run)
+    parts = word.split("'")
+    return "'".join(p.capitalize() for p in parts) if len(parts) > 1 else word.capitalize()
+
+
+def spelling_honoured(spelled: str, written: str) -> bool:
+    """
+    Does `written` keep every word the caller spelled out?
+
+    The spelling is the authority. A caller spells their name precisely because
+    the sound is going to be wrong, so a value that drops or alters any spelled
+    word is a value that ignored the only reliable evidence on offer.
+
+    Deliberately one-directional: the written name may carry MORE than was
+    spelled — a caller often spells only the surname and says the first name
+    normally — but it may not carry less, and it may not carry a different
+    version of a word that was spelled.
+    """
+    if not spelled:
+        return True                       # nothing was spelled; nothing to honour
+    if not written:
+        return False
+
+    def _bare(value):
+        return re.sub(r"[^a-z]", "", value.lower())
+
+    # Compared as one run of letters, not word by word. Where a spelled name
+    # divides into words is guesswork — a caller who says "s i o b h a n o c o
+    # n n o r" without a filler between them assembles as one word, and a
+    # word-by-word check then refused "Siobhan O'Connor", the very name that
+    # had just been spelled. The letters are the evidence; the spaces are not.
+    return _bare(spelled) in _bare(written)

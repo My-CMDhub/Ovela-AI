@@ -3,9 +3,70 @@ from appwrite.id import ID
 from zoneinfo import ZoneInfo
 import logging
 import hashlib
+import re as _re
 from core.utils import mask_phone
+from services.db.guest_match import match_by_name, match_by_email
 
 logger = logging.getLogger(__name__)
+
+def normalise_lookup_value(field: str, value):
+    """
+    Put a lookup value into the one form the stored data uses.
+
+    Both the query and the per-call memo key have to agree on this, or the cache
+    answers a different question from the one the database is asked. The tenant
+    is Australian, so a bare national number is assumed to be +61.
+    """
+    if not isinstance(value, str):
+        return value
+
+    if field in ("guest_name", "name"):
+        # Collapse internal runs of whitespace as well as trimming the ends: a
+        # recogniser emits "Dhruv  Patel" and the stored name has one space.
+        return " ".join(value.split()).title()
+
+    if field == "booking_reference":
+        return value.strip().upper()
+
+    if field in ("email", "guest_email"):
+        return value.strip().lower()
+
+    if field in ("phone", "guest_phone"):
+        digits = _re.sub(r"[^\d+]", "", value.strip())
+        digits = ("+" if digits.startswith("+") else "") + digits.replace("+", "")
+        bare = digits.lstrip("+")
+        if not bare:
+            return value.strip()
+        if digits.startswith("+"):
+            return digits
+        if bare.startswith("0") and len(bare) == 10:      # 0481131771
+            return "+61" + bare[1:]
+        if bare.startswith("61") and len(bare) == 11:     # 61481131771
+            return "+" + bare
+        return "+" + bare
+
+    return value
+
+
+INACTIVE_STATUSES = {"cancelled", "rejected"}
+
+
+def _live_only(docs: list) -> list:
+    """Drop cancelled and rejected reservations.
+
+    A module-level function, not a method, on purpose: lookup_motel_reservation
+    wraps everything in a broad `except` that returns [] — so an attribute that
+    is not there becomes "no booking found" rather than a crash, and the first
+    version of this was exactly that, silently, in every test that hand-binds
+    the mixin. A free function cannot be unbound.
+
+    A missing status is treated as live. Appwrite stores absent values as None,
+    and refusing to find a booking because of a pipeline glitch is worse than
+    finding it.
+    """
+    return [d for d in (docs or [])
+            if (d.get("status") or "").lower() not in INACTIVE_STATUSES]
+
 
 class BookingsMixin:
     """
@@ -267,6 +328,37 @@ class BookingsMixin:
 
     # ==================== MOTEL RESERVATION UPDATES ====================
 
+    async def save_motel_reservation(self, data: dict, tenant_id: str = "coalcreek") -> dict:
+        """
+        Create a motel reservation document.
+
+        Shared by both the legacy monolithic handler and the cascaded pipeline
+        so booking persistence has exactly one implementation.
+
+        Returns ``{"success": True, "document": <doc>}`` or
+        ``{"success": False, "error": "<message>"}``. Never raises.
+        """
+        try:
+            doc_id = ID.unique()
+            payload = dict(data)
+            payload["tenant_id"] = tenant_id
+            doc = await self._motel_request(
+                "POST",
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                data={"documentId": doc_id, "data": payload},
+            )
+            if not doc:
+                return {"success": False, "error": "Appwrite returned no document"}
+            logger.info(
+                "✅ Reservation saved | doc_id=%s | booking_ref=%s",
+                doc.get("$id", doc_id),
+                payload.get("booking_reference", "?"),
+            )
+            return {"success": True, "document": doc}
+        except Exception as e:
+            logger.error(f"Error saving reservation: {e}")
+            return {"success": False, "error": str(e)}
+
     async def update_motel_reservation(self, booking_id: str, data: dict) -> dict:
         """
         Generic PATCH for a motel reservation document.
@@ -441,6 +533,21 @@ class BookingsMixin:
             logger.error("Error finding booking by stripe_session_id %s: %s", stripe_session_id, e)
             return None
 
+    # A cancelled booking is not a booking. get_motel_reservations already drops
+    # these before the availability check sees them; the identity lookups did
+    # not, so a cancelled row went on answering the phone — and being newest,
+    # it answered first. Found when a cancelled test booking started resolving
+    # ahead of the real reservation on the same number: identity eval went from
+    # 0 wrong-person to 3.
+    async def _recent_reservations(self, base_tenant, limit: int = 100) -> list:
+        """This tenant's recent reservations — the candidate set for fuzzy matching."""
+        result = await self._motel_request(
+            "GET",
+            f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+            params={"queries": [base_tenant, self.Query.order_desc("created_at"), self.Query.limit(limit)]}
+        )
+        return _live_only(result.get("documents", []) if result else [])
+
     async def lookup_motel_reservation(
         self,
         guest_name: str = None,
@@ -460,70 +567,69 @@ class BookingsMixin:
 
             # 1. Reference is most precise — try first
             if booking_reference:
-                ref_clean = booking_reference.strip().upper()
+                ref_clean = normalise_lookup_value("booking_reference", booking_reference)
                 queries = [base_tenant, self.Query.equal("booking_reference", ref_clean)]
                 result = await self._motel_request(
                     "GET",
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
                     params={"queries": queries}
                 )
-                docs = result.get("documents", []) if result else []
+                docs = _live_only(result.get("documents", []) if result else [])
                 if docs:
                     return docs
 
             # 2. Phone match
             if phone:
-                queries = [base_tenant, self.Query.equal("guest_phone", phone), self.Query.order_desc("created_at"), self.Query.limit(5)]
+                queries = [base_tenant, self.Query.equal("guest_phone", normalise_lookup_value("phone", phone)), self.Query.order_desc("created_at"), self.Query.limit(5)]
                 result = await self._motel_request(
                     "GET",
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
                     params={"queries": queries}
                 )
-                docs = result.get("documents", []) if result else []
+                docs = _live_only(result.get("documents", []) if result else [])
                 if docs:
                     return docs
 
-            # 3. Guest name — exact match (title-cased)
+            # The roster the fuzzy rungs score against. Fetched at most once,
+            # and only if an exact query has already come back empty.
+            roster = None
+
+            # 3. Guest name — always through the matcher, never a bare index hit.
+            #
+            # Reaching here means reference and phone both failed, so the name is
+            # the only evidence there is. That is exactly the case an exact query
+            # gets wrong: Flux transcribes a spoken "Katherine Smyth" as
+            # "Catherine Smith", which Query.equal matches perfectly — against a
+            # different guest. match_by_name refuses a name two guests answer to.
+            # ponytail: scans up to 100 rows in Python; needs narrowing by date
+            # or an index if a tenant's book ever outgrows that.
             if guest_name:
-                name_clean = guest_name.strip().title()
-                queries = [base_tenant, self.Query.equal("guest_name", name_clean), self.Query.order_desc("created_at"), self.Query.limit(5)]
-                result = await self._motel_request(
-                    "GET",
-                    f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
-                    params={"queries": queries}
-                )
-                docs = result.get("documents", []) if result else []
-                if docs:
-                    return docs
+                name_clean = normalise_lookup_value("guest_name", guest_name)
+                if roster is None:
+                    roster = await self._recent_reservations(base_tenant)
+                near = match_by_name(name_clean, roster)
+                if near:
+                    return near[:5]
 
-
-                queries = [base_tenant, self.Query.order_desc("created_at"), self.Query.limit(100)]
-                result = await self._motel_request(
-                    "GET",
-                    f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
-                    params={"queries": queries}
-                )
-                docs = result.get("documents", []) if result else []
-                name_folded = name_clean.casefold()
-                matches = [
-                    doc for doc in docs
-                    if doc.get("guest_name", "").strip().casefold() == name_folded
-                ]
-                if matches:
-                    return matches[:5]
-
-            # 4. Email match
+            # 4. Email — exact, then the same address said out loud
             if email:
-                email_clean = email.strip().lower()
+                email_clean = normalise_lookup_value("email", email)
                 queries = [base_tenant, self.Query.equal("guest_email", email_clean), self.Query.order_desc("created_at"), self.Query.limit(5)]
                 result = await self._motel_request(
                     "GET",
                     f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
                     params={"queries": queries}
                 )
-                docs = result.get("documents", []) if result else []
+                docs = _live_only(result.get("documents", []) if result else [])
                 if docs:
                     return docs
+
+                if roster is None:
+                    roster = await self._recent_reservations(base_tenant)
+
+                near = match_by_email(email_clean, roster)
+                if near:
+                    return near
 
             return []
 

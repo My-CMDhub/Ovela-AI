@@ -3,7 +3,6 @@
 import type React from "react"
 import { motion, useMotionValue, useSpring, AnimatePresence } from "framer-motion"
 import { useState, useEffect } from "react"
-import { EcosystemLoop } from "@/components/ecosystem-loop"
 import { VoiceDemoForm } from "@/components/VoiceDemoForm"
 import { ArrowRight, X, Check, ShieldCheck, Activity } from "lucide-react"
 import Link from "next/link"
@@ -332,7 +331,7 @@ export function Hero() {
     return () => window.removeEventListener("keydown", handleEscape)
   }, [])
 
-  // Open modal when navigating to #demo (from pricing "Try AI Demo" button)
+  // Open the demo modal on request
   useEffect(() => {
     const handleOpenDemo = () => {
       setIsDemoOpen(true)
@@ -341,13 +340,21 @@ export function Hero() {
     // Listen for custom event from other components
     window.addEventListener("openDemoModal", handleOpenDemo)
 
-    // Also check for hash on mount (fallback)
-    if (window.location.hash === "#demo") {
-      setIsDemoOpen(true)
-      window.history.replaceState(null, "", window.location.pathname)
+    // Links elsewhere on the site point at /#demo: open on arrival, and on
+    // a same-page click (which fires hashchange, not a remount)
+    const openFromHash = () => {
+      if (window.location.hash === "#demo") {
+        setIsDemoOpen(true)
+        window.history.replaceState(null, "", window.location.pathname)
+      }
     }
+    openFromHash()
+    window.addEventListener("hashchange", openFromHash)
 
-    return () => window.removeEventListener("openDemoModal", handleOpenDemo)
+    return () => {
+      window.removeEventListener("openDemoModal", handleOpenDemo)
+      window.removeEventListener("hashchange", openFromHash)
+    }
   }, [])
 
 
@@ -379,7 +386,7 @@ export function Hero() {
             className="mb-6 inline-flex flex-row items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs sm:text-sm text-primary backdrop-blur-sm max-w-full text-left"
           >
             <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse shrink-0"> </span>
-            <span className="whitespace-nowrap overflow-hidden text-ellipsis">Founding cohort open • AUD $300 setup • 21-day free trial</span>
+            <span className="whitespace-nowrap overflow-hidden text-ellipsis">A personal engineering project, running in production</span>
           </motion.div>
 
           {/* Main Heading */}

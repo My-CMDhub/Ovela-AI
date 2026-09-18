@@ -2706,31 +2706,8 @@ class VoiceAgentHandler:
             {"success": False, "error": "<message>"}        on failure
         Never raises — callers must handle the None/False cases.
         """
-        try:
-            doc_id = ID.unique()
-            headers = {
-                "Content-Type": "application/json",
-                "X-Appwrite-Project": settings.APPWRITE_PROJECT_ID,
-                "X-Appwrite-Key": settings.APPWRITE_API_KEY
-            }
-            data["tenant_id"] = self.tenant_id
-            url = f"{settings.APPWRITE_ENDPOINT}/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
-            payload = {"documentId": doc_id, "data": data}
-
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                doc = response.json()
-                logger.info(
-                    "✅ Reservation saved | doc_id=%s | booking_ref=%s",
-                    doc.get("$id", doc_id),
-                    data.get("booking_reference", "?"),
-                )
-                return {"success": True, "document": doc}
-
-        except Exception as e:
-            logger.error(f"Error saving reservation: {e}")
-            return {"success": False, "error": str(e)}
+        # Single shared implementation — see services/db/bookings.py
+        return await db_service.save_motel_reservation(data, tenant_id=self.tenant_id)
 
 
     async def _cleanup(self):

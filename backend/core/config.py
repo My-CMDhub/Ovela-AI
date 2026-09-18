@@ -6,10 +6,14 @@ class Settings(BaseSettings):
     # App Settings
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Ovela AI Backend"
-    BACKEND_URL: str = os.getenv("BACKEND_URL", "https://ovela-backend-278930799830.australia-southeast1.run.app")
+    BACKEND_URL: str = os.getenv("BACKEND_URL", "https://ovela-12c561a30285.herokuapp.com")
     ENVIRONMENT: str = "demo"  # 'demo' or 'production'
     TENANT_ID: str = "coalcreek"  
     USE_LIVE_SCRAPING: bool = False  # Toggle between Appwrite PMS vs live scraping
+    VOICE_PIPELINE_MODE: str = "cascaded"  # 'cascaded' (sub-second Phase 12) or 'monolithic'
+
+    # Observability (Sentry)
+    SENTRY_DSN: str = ""  # set via env; empty disables Sentry (main.py guards on it)
 
     # Meta (WhatsApp Cloud API)
     META_ACCESS_TOKEN: str = ""
@@ -30,6 +34,10 @@ class Settings(BaseSettings):
 
     # Optional Security Keys
     DASHBOARD_API_KEY: Optional[str] = None  # Internal key for dashboard access
+
+    # Off during testing so a live call does not fill a real inbox. Every
+    # other code path behaves exactly as if the send had succeeded.
+    EMAIL_ENABLED: bool = True
 
     # SMTP (Ovela - Zoho)
     SMTP_HOST: str = "smtppro.zoho.com.au"
@@ -58,7 +66,7 @@ class Settings(BaseSettings):
     # Twilio (Missed Call → WhatsApp)
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_PHONE_NUMBER: str = "+61468088990"  # my purchased number
+    TWILIO_PHONE_NUMBER: str = ""  # set via env
     
 
     # Personal Assistant Target Number
@@ -72,7 +80,7 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: Optional[str] = ""
     
     # Staff Phone (for transfers)
-    STAFF_PHONE_NUMBER: str = "+61475677771"
+    STAFF_PHONE_NUMBER: str = ""  # set via env
     
     # Demo Settings
     TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
@@ -80,7 +88,7 @@ class Settings(BaseSettings):
     # Phone to Tenant Mapping (Ingress)
     # Maps Twilio 'To' number -> Tenant ID (Can be set via env var as JSON)
     PHONE_TO_TENANT_MAP: dict = {
-        "+61468088990": "coalcreek"
+        "+61348236219": "coalcreek"
     }
 
     class Config:

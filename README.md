@@ -1,196 +1,226 @@
 <div align="center">
-  <img src="images/banner.png" alt="Ovela AI Banner" width="100%" />
-  
-  <br />
-  
-  **An ultra-low latency, multi-agent conversational voice system for hospitality, powered by the Gemini Enterprise Agent Platform.**
-  
+  <img src="images/banner.png" alt="Ovela" width="100%" />
+
   <br />
 
-  [![Powered by Gemini](https://img.shields.io/badge/Powered%20by-Gemini%202.5%20Flash-blue.svg?style=flat-square)](#)
-  [![Google ADK](https://img.shields.io/badge/Google-Agent%20Development%20Kit-blue?style=flat-square)](#)
-  [![Latency](https://img.shields.io/badge/Latency-%3C850ms-success.svg?style=flat-square)](#)
-  [![Production Ready](https://img.shields.io/badge/Status-Production%20Ready-success.svg?style=flat-square)](#)
+  **A voice receptionist on a real phone line, built for the parts of a phone call that usually go wrong.**
+
+  <br />
+
+  [![Stack](https://img.shields.io/badge/stack-Python%20·%20FastAPI%20·%20asyncio-3776AB?style=flat-square)](#architecture)
+  [![Voice](https://img.shields.io/badge/voice-Twilio%20·%20Deepgram%20Flux%20·%20Cartesia-6b46c1?style=flat-square)](#architecture)
+  [![LLM](https://img.shields.io/badge/LLM-gpt--4.1--nano-10a37f?style=flat-square)](#decisions-that-make-it-different)
+  [![Reply](https://img.shields.io/badge/reply%20(no%20tool)-0.55--0.71%20s-success?style=flat-square)](#measurements)
+  [![Tests](https://img.shields.io/badge/tests-1%2C922%20passing-success?style=flat-square)](#running-it)
+  [![Status](https://img.shields.io/badge/status-personal%20project-lightgrey?style=flat-square)](#why-this-exists)
 </div>
 
 <br />
 
-## ⚡ Key Capabilities
+## Why this exists
 
-Ovela AI transcends typical chatbot limitations by offering a fluid, human-like voice experience backed by robust, enterprise-grade business logic. 
+There are hundreds of voice-agent demos online, and nearly all of them show the
+happy path: the caller asks, the agent answers, everyone waits their turn. Real
+calls aren't like that. People talk over you, say "mhmm" while you're
+mid-sentence, spell their name because they know you'll mishear it, say "yes" to
+the wrong question, and expect you to remember at minute six what they told you
+at minute one.
 
-- 🚀 **Sub-850ms Voice Latency:** A highly optimized "Hot Path" decouples LLM generation from real-time streaming, resulting in instant, natural conversational speed.
-- 🧠 **Multi-Agent Orchestration:** Powered by Google's **Agent Development Kit (ADK)**, Ovela routes intents across specialized worker graphs (Booking, Info) without stalling the active voice interaction.
-- 💾 **Stateless Resilience:** Utilizing a custom `AppwriteSessionService`, the ADK graph state is persisted natively to a NoSQL database. Cloud Run scaling events never destroy mid-call guest data.
-- 💳 **Autonomous Transactions:** End-to-end booking logic—from availability negotiation to dynamic Stripe pricing and confirmation emails—executes securely without human-in-the-loop dependencies.
+A good receptionist handles all of that without thinking. Ovela is my attempt to
+turn those human habits — taking turns, being interrupted, remembering what was
+settled, asking before acting — into a system reliable enough to trust. It is
+built and measured around the failure modes, not the demo.
 
----
+It is a personal engineering project running on a real phone line. It is not a
+business and has no customers: every call behind the numbers below is one of my
+own test calls, Stripe runs in test mode, and no third-party booking system is
+connected — the demo motel runs on its own booking store.
 
-## 🏗️ System Architecture (Hot & Cold Paths)
+## Architecture
 
-To achieve both sub-second conversational reflexes and deep reasoning, Ovela utilizes an asynchronous dual-path architecture.
+A cascaded pipeline: speech-to-text, the language model and text-to-speech are
+separate streaming providers, and a Python orchestrator owns the conversation —
+when a turn ends, when the caller has taken the floor, what the call has
+established, and what the agent is allowed to do.
 
 ```mermaid
-graph TD
-    %% Styling
-    classDef user fill:#6b46c1,stroke:#444,stroke-width:2px,color:#fff
-    classDef hot fill:#1f2937,stroke:#10b981,stroke-width:2px,color:#fff
-    classDef cold fill:#1f2937,stroke:#f59e0b,stroke-width:2px,color:#fff
-    classDef db fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#fff
-    classDef external fill:#374151,stroke:#60a5fa,stroke-width:2px,color:#fff
+flowchart LR
+    classDef caller fill:#6b46c1,stroke:#4c1d95,stroke-width:2px,color:#fff
+    classDef voice fill:#1f2937,stroke:#60a5fa,stroke-width:2px,color:#fff
+    classDef core fill:#1f2937,stroke:#10b981,stroke-width:2px,color:#fff
+    classDef gate fill:#7c2d12,stroke:#f59e0b,stroke-width:2px,color:#fff
+    classDef store fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#fff
 
-    Guest((Guest)):::user
+    C((Caller)):::caller <-->|phone network| T[Twilio Media Streams]:::voice
+    T <-->|8 kHz audio| O[Orchestrator<br/>FastAPI · asyncio]:::core
 
-    subgraph HOT_PATH [🔥 Hot Path: Real-Time Voice]
-        direction TB
-        WS[Twilio WebSockets]:::hot
-        FastAPI[FastAPI Audio Bridge]:::hot
-        DG[Deepgram Nova-3<br/>STT + Voice Agent]:::hot
-        Cartesia[Cartesia Sonic-3<br/>Live TTS]:::hot
+    subgraph LISTEN [Listening]
+        V[webrtcvad<br/>barge-in, 20 ms frames]:::voice
+        D[Deepgram Flux<br/>transcript + end of turn]:::voice
     end
 
-    subgraph COLD_PATH [❄️ Cold Path: Google ADK]
-        direction TB
-        Manager[OvelaManager<br/>Gemini 2.5 Flash]:::cold
-        
-        Session[(AppwriteSessionService<br/>Scale-Out Resilient State)]:::db
-        
-        BookingWorker[BookingWorker]:::cold
-        InfoWorker[InfoWorker]:::cold
+    subgraph THINK [One turn at a time]
+        Q[(turn queue)]:::store
+        W[turn worker]:::core
+        S[Call state<br/>settled · heard · perishable]:::store
+        L[gpt-4.1-nano]:::core
+        G{Code gates}:::gate
     end
 
-    subgraph EXTERNAL [External Services]
-        direction TB
-        Appwrite[(Appwrite PMS)]:::external
-        Stripe[Stripe / Email]:::external
-        Search[Google Search API]:::external
-    end
-
-    %% Hot Path Flow
-    Guest <-->|Audio Stream| WS
-    WS <-->|Binary| FastAPI
-    FastAPI -->|Speech| DG
-    DG -->|Text / Tool Calls| Cartesia
-    Cartesia -->|Generated Audio| FastAPI
-
-    %% The Critical Bridge
-    DG -.->|Async Webhook / Tool Trigger| Manager
-
-    %% Cold Path Flow
-    Manager <-->|Persist State| Session
-    Manager -->|Delegate| BookingWorker
-    Manager -->|Delegate| InfoWorker
-
-    %% External Integrations
-    BookingWorker -->|Sync| Appwrite
-    BookingWorker -->|Checkout| Stripe
-    InfoWorker -->|Grounding| Search
+    O --> V -->|caller took the floor| O
+    O --> D -->|turn ended| Q --> W
+    S -->|facts every turn| L
+    W --> L -->|tool call| G --> X[Tools]:::core
+    X --> A[(Appwrite)]:::store
+    X --> P[Stripe · test mode]:::store
+    X -->|results| S
+    L -->|streamed text| K[Cartesia Sonic-3]:::voice -->|audio| O
 ```
 
-<br />
+| Layer | Technology | Job |
+| --- | --- | --- |
+| Telephony | Twilio Media Streams | Real number, two-way μ-law 8 kHz audio over WebSocket |
+| Orchestrator | Python, FastAPI, asyncio on Heroku | Turn-taking, interruption, call state, tool gating, tracing |
+| Speech-to-text | Deepgram Flux | Streaming transcript and semantic end-of-turn |
+| Barge-in | webrtcvad (local) | Detects the caller speaking over the agent |
+| Reasoning | OpenAI `gpt-4.1-nano` | Replies and tool calls, streamed |
+| Text-to-speech | Cartesia `sonic-3` | Speech synthesis, starting on the first phrase |
+| Data | Appwrite | Bookings, tenant configuration, call transcripts |
+| Web | Next.js | Public site and staff dashboard |
 
-### The Hot Path — Real-Time Telephony Infrastructure (~850ms)
-- **Flow:** Guest Voice → Twilio WebSocket → FastAPI Audio Bridge → Deepgram Nova-3 STT + VAD → Cartesia Sonic-3 TTS
-- **Purpose:** Pure speech streaming layer. Handles voice activity detection (VAD), audio byte routing, and transcription. Has **no AI tools, no business logic, and no database access.** Transcribed text is forwarded to the Cold Path via async webhook.
-- **Stack:** Deepgram Nova-3 (STT + keyterm domain boosting), Cartesia Sonic-3 (TTS) with zero-latency pre-synthesized `.mulaw.raw` voice cache.
+Voice, speaking speed, model and turn-taking thresholds come from a per-tenant
+configuration record, not from code.
 
-### The Cold Path — Gemini AI Intelligence Layer (Google ADK)
-- **Flow:** Async Webhook → FastAPI ADK Router → `OvelaManager` (LlmAgent) on **Gemini 2.5 Flash**
-  - ├─ `BookingWorker`: availability checks, hold placement, dynamic Stripe pricing, confirmation emails
-  - └─ `InfoWorker`: motel policies, amenities, live Google Search grounding
-- **All AI reasoning, every tool call, and every business decision runs exclusively here** — authenticated to Vertex AI via Application Default Credentials (ADC). Zero hardcoded API keys.
-- **Session Resilience:** `AppwriteSessionService` persists ADK graph state across Cloud Run scaling events so conversation context is never dropped.
+## One call, turn by turn
 
----
+1. **Before the caller speaks**, the booking attached to their number is fetched
+   in the background — but only the fact that a reservation exists is shared. The
+   guest's name stays out of the conversation.
+2. **Deepgram Flux decides when the caller has finished.** Pauses and "um"s don't
+   end a turn, and silence alone never triggers a reply.
+3. **The finished turn goes onto a queue, and one worker answers it.** The next
+   thing the caller says is read immediately, and two replies are never live at
+   once.
+4. **The model gets the recent transcript plus the call state** — what's settled,
+   what was only heard, and what may have changed since.
+5. **Every tool call passes through code gates** before it can touch a booking,
+   money or a person.
+6. **The reply streams to Cartesia phrase by phrase**, so the caller hears the
+   first words while the rest is still being written.
+7. **If the caller talks over the agent**, audio stops, the part they heard is
+   kept in the agent's memory, and the new question is answered. "Mhmm" and
+   "go on" are recognised and the agent carries on.
+8. **When the call ends**, the transcript is saved with its barge-ins,
+   backchannels, tools called, gate refusals, and any number the agent said that
+   no tool supplied.
 
-## 🔧 Production Innovations
+## Decisions that make it different
 
-Standard hackathon implementations fail under the strict constraints of live telephony. Ovela implements the following enterprise-grade solutions:
+**Agreeing to one thing isn't agreeing to everything.**
+The booking tool used to trust a flag the model filled in to say the summary had
+been read back. In 4 of 7 booking attempts it claimed a confirmation the caller
+never gave — in one, a "yes" to an email spelling became a booked room. The gate
+now reads the transcript: a name, a price and dates spoken by the agent, followed
+by the caller agreeing to *that*. Transfers to a person work the same way and need
+the caller to ask for one or accept the offer.
 
-* **Interruption-Safe Trimming:** Guest interruptions natively truncate unheard text from the agent's context window. This ensures the LLM's next turn remains completely coherent, increasing interruption scenario reliability by 13%.
-* **Phonetic Clarification Gate:** A one-shot phonetic confirmation loop, combined with ASR keyterm boosting for domain vocabulary, improves guest name capture accuracy by 26% against non-English accents.
-* **Zero-Latency Voice Caching:** Core system greetings and acknowledgments are pre-synthesized directly to `.mulaw.raw` bytes. This eliminates TTS generation latency entirely for critical conversational junctures, saving 300–800ms.
+**A receptionist doesn't read out someone's details before knowing who's calling.**
+With the guest's name in the prompt behind a "do not reveal" rule, the agent
+volunteered it on the first turn in **4 of 5** replays. Now the lookup tool
+withholds it and code releases it only after identity is confirmed: **0 of 5**.
+Anything that could cost data, money or a promise is enforced this way; tone and
+phrasing stay in the prompt and are measured as rates over repeated runs.
 
----
+**When someone spells their name, the letters win.**
+Speech recognition transcribed "s i o b h a n" perfectly, and the booking was
+still written as "Cyborn". Spelled letters are now captured from the caller's own
+words, and any booking or update that doesn't contain them is refused.
 
-## 📊 Performance & Reliability
+**Being unsure is better than guessing.**
+Name matching answers only when one guest is clearly ahead of every other. If two
+guests both fit — Katherine Smyth and Catherine Smith — it declines and asks for
+a phone number, reference or email, even when one of them matches exactly.
 
-Ovela undergoes continuous adversarial testing against real-world edge cases across three cognitive difficulty levels. 
+**Remember what was settled, and know the difference between knowing and hearing.**
+Tool results leave the model's context after each turn, so a long call used to
+forget a booking reference it had looked up on turn 2. The orchestrator now keeps
+the facts itself in three labelled tiers, re-sent every turn: *settled* (a tool
+confirmed it), *heard* (the caller said it, nothing has checked it) and
+*perishable* (availability, re-checked before any promise).
 
-### Highlight Metrics:
-* **92.8 / 100** Audited Phase 1 Average Score — 14 adversarial scenarios, graded by an independent LLM judge across a strict 100-point rubric.
-* Scenarios span 3 cognitive difficulty levels: Happy Path → Mid-Flow Interruptions → Race Conditions, Privacy Boundary Violations, and Backend Failure Recovery.
+**The question isn't "can the agent stop talking?" — it's "what did the caller actually hear?"**
+Text is generated faster than it is spoken, so when a caller cuts in, the model
+has already "said" words the caller never heard. Ovela keeps only the part that
+played — estimated from audio Twilio confirms it delivered, trimmed to the last
+full sentence — so the agent doesn't assume context the caller never received.
+And "mhmm" isn't an interruption: cutting in takes about half a second of
+sustained speech or words that aren't continuers.
 
-<div align="center">
-  <a href="https://ovela.dev/evaluations" target="_blank">
-    <img src="images/eval_dashboard.png" alt="Live Evaluation Dashboard" width="85%" />
-  </a>
-  <br />
-  <strong><a href="https://ovela.dev/evaluations" target="_blank">🔗 View Live Evaluation Dashboard (ovela.dev/evaluations)</a></strong>
-</div>
+**The model was chosen on the real workload.**
+Candidates were benchmarked under the production prompt (~9,500 tokens,
+12 tools), not a bare "hello". The ranking reversed between the two.
 
-> [!NOTE]  
-> For the complete breakdown of our testing pipeline, ASR Noise Simulator methodology, and scenario matrix, view the full **[Evaluation Methodology & System Card](docs/EVALUATION_METHODOLOGY.md)**.
+## What works today
 
----
+- Answers questions about rooms, rates, availability and the property.
+- Finds a caller's booking from their number, a reference, their email, their
+  name, or a name spelled letter by letter.
+- Takes a booking request after reading it back and hearing agreement, then
+  creates a payment link (Stripe test mode).
+- Transfers to a person only with the caller's consent.
+- Resolves relative dates — "this weekend" and "next weekend" are different
+  weekends.
+- Staff dashboard for reservations, call logs and guests.
 
-## 🧪 Evaluation & Testing Methodology
+## Measurements
 
-Our evaluation harness is a first-class engineering artifact — not a post-hoc benchmark. It runs against live production APIs (Appwrite, Vertex AI, Deepgram) and persists results directly to the hosted dashboard.
+Measured on my own test calls over the phone network, August–September 2026.
+Medians, with sample sizes; updated after significant changes, not continuously.
 
-| Artifact | Description |
-|---|---|
-| [`run_multi_agent_evaluation.py`](backend/tests/run_multi_agent_evaluation.py) | 14-scenario simulation harness. Exercises the full OvelaManager → Worker ADK routing graph on Gemini 2.5 Flash via Vertex AI ADC. |
-| [`asr_noise_simulator.py`](backend/tests/asr_noise_simulator.py) | Deterministic ASR noise emulator (light / medium / heavy profiles). Seeds phonetic swaps, filler words, and acoustic distortions to simulate real phone call degradation. |
-| [`evaluation_run.json`](backend/tests/evaluation_run.json) | Last persisted run output. Full transcript traces + per-scenario LLM judge scores. |
-| [`EVALUATION_METHODOLOGY.md`](docs/EVALUATION_METHODOLOGY.md) | System card: rubric breakdown, sandbox waivers, and scenario matrix.
+| Measure | Result | Sample |
+| --- | --- | --- |
+| Reply time, no tool: turn end detected → first audio sent | **0.55–0.71 s** | 6 days, 12–51 turns each |
+| Reply time when a tool runs (e.g. availability) | **1.5–2.7 s** | 7 days, 2–22 turns each |
+| Repeat booking lookup within a call | **1,073 ms → 0.4 ms** (per-call cache) | 15 → 21 lookups |
+| Finding a guest from misheard details | **24 of 28** found, **0** wrong guest | 36 transcription-style queries |
+| Guest name volunteered before identification | **4 of 5 → 0 of 5** | scripted replays |
+| Interrupting a long reply | caught up to **6.5 s** into an answer | 6 interruptions |
+| Automated tests | **1,922** passing | tracked backend suite |
 
----
+Reply time starts when Deepgram reports the end of turn, so it excludes
+Deepgram's own end-of-turn decision. Replies without a tool are under a second;
+replies with a tool aren't yet — the remaining latency is the tool round trip,
+not the model.
 
-## 🏃 Quick Start & Developer Guide
+## Try it
 
-### Prerequisites
-- Python 3.10+ / Node.js 18+
-- Google Cloud Project (Vertex AI enabled)
-- Appwrite Cloud account (for PMS and session persistence)
-- API keys: Twilio, Deepgram, Cartesia, Stripe
+**[ovela.dev](https://ovela.dev)** — the demo opens from the landing page.
 
-### Environment Configuration
+## Running it
+
+Backend (Python 3.12), from `backend/`:
+
 ```bash
-# Core Environment Variables (.env)
-GOOGLE_CLOUD_PROJECT=your-gcp-project-id
-GOOGLE_CLOUD_LOCATION=us-central1
-APPWRITE_PROJECT_ID=your-appwrite-project
-STRIPE_SECRET_KEY=sk_live_...
-DEEPGRAM_API_KEY=your-deepgram-key
-```
-
-### Running Locally (Backend)
-The backend utilizes Application Default Credentials (ADC) for seamless, keyless Vertex AI access.
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate
+python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
+pytest
 ```
 
-### Running the Dashboard (Frontend)
+Needs `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY`,
+`APPWRITE_PROJECT_ID`, `APPWRITE_API_KEY` and `SMTP_PASSWORD` in `backend/.env`,
+plus Twilio credentials for real calls.
+
+Frontend (Node 20+), from `frontend/`:
+
 ```bash
-cd frontend
 npm install
 npm run dev
 ```
 
 ---
 
-## 🛡️ Security & Privacy
+Built by Dhruv Patel. Implementation was AI-assisted; the architecture,
+measurement, debugging and corrections were mine.
 
-- **Credential Security:** Keyless authentication for Google Cloud via ADC. Third-party keys securely injected at runtime from Secret Manager.
-- **PII Protection:** Guest session data remains isolated in memory during live negotiation. Details are only persisted to the Appwrite database upon explicit verbal confirmation of booking.
-- **Abuse Prevention:** AEST-anchored local rate limiting (2 calls/24hr per caller) prevents toll fraud and token drain.
-
----
-<div align="center">
-  <i>Ovela is not a finished answer to human conversation. It’s an ongoing attempt to understand it—one call, one interaction, and one lesson at a time.</i> ✧
-</div>
+<p align="center"><i>Ovela is not a finished answer to human conversation. It’s an ongoing attempt to understand it—one call, one interaction, and one lesson at a time. ✧</i></p>

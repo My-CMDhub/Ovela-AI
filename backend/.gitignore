@@ -54,6 +54,13 @@ __pycache__/
 # Local scripts (keep health_check.py only)
 scripts/*.py
 !scripts/health_check.py
+# The identity harness: one roster, one case list, replayable by anyone.
+!scripts/identity_corpus.py
+!scripts/seed_reservations.py
+!scripts/eval_identity.py
+!scripts/probe_asr_confidence.py
+!scripts/replay_conversation.py
 
 # Local documentation
 redeploy-guide.md
+!scripts/probe_live_call.py

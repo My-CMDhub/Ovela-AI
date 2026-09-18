@@ -5,7 +5,6 @@ import React, { useState, useEffect, useRef } from "react"
 import { motion } from "framer-motion"
 
 
-import { WaitlistForm } from "./waitlist-form"
 
 export function Contact() {
 
@@ -165,11 +164,11 @@ export function Contact() {
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-black dark:bg-white opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-black dark:bg-white"></span>
             </span>
-            Applications Open
+            About this project
           </div>
-          <h2 className="font-serif text-4xl md:text-5xl tracking-tight mb-4 text-black dark:text-white transition-colors">Join the Exclusive Waitlist</h2>
+          <h2 className="font-serif text-4xl md:text-5xl tracking-tight mb-4 text-black dark:text-white transition-colors">Built and run by one engineer</h2>
           <p className="text-zinc-600 dark:text-zinc-400 text-lg transition-colors text-balance">
-            Secure your spot for the next intake. Priority access for early applicants.
+            Ovela is a personal engineering project. It runs in production on a real phone line, but it is not a registered business and has no customers — every call in its traces is a test call I made myself.
           </p>
         </motion.div>
 
@@ -215,7 +214,20 @@ export function Contact() {
             />
           </div>
 
-          <WaitlistForm />
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <a
+              href="/#demo"
+              className="px-6 py-3 bg-black text-white dark:bg-white dark:text-black text-sm font-medium rounded-full hover:opacity-90 transition-all"
+            >
+              Try the demo call
+            </a>
+            <a
+              href="https://github.com/My-CMDhub/Ovela-AI"
+              className="px-6 py-3 border border-black/15 dark:border-white/20 text-black dark:text-white text-sm font-medium rounded-full hover:bg-black/5 dark:hover:bg-white/5 transition-all"
+            >
+              Read the code and the measurements
+            </a>
+          </div>
         </div>
       </div>
     </section>
