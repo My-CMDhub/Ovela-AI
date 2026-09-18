@@ -1,169 +1,140 @@
 # Ovela
 
-A voice AI receptionist that answers a real phone line, checks availability,
-looks up and takes bookings, and hands the caller to a person when they ask for
-one — built, measured and run in production as a **personal engineering
-project**.
+A voice AI receptionist that answers a real phone line, understands what the
+caller needs, checks availability, finds their booking, takes new bookings and
+hands them to a person when they ask — in real time, over the phone network.
 
-**Status, plainly.** Ovela runs on Heroku behind a real Australian phone number.
-It is not a registered business, has no customers and has no pricing. Every call
-in its traces and screenshots is a test call I made myself. Payments run in
-Stripe test mode, and outbound email is switched off in production.
-
-The code on this branch is one release ahead of production: the latest
-turn-taking fixes (the turn queue and the backchannel vocabulary described
-below) are written, tested and reviewed, but not yet deployed. Production runs
-the release before them.
-
-The interesting part is not that it talks. It's how it was made to talk
-*reliably*, and how every claim about it was measured, and withdrawn when the
-measurement turned out to be wrong.
+Ovela is a **personal engineering project**, built and run in production by one
+engineer. It is not a registered business and has no customers; the calls behind
+the numbers below are my own test calls. Payments run in Stripe test mode and no
+third-party booking system is connected — the demo property runs on its own
+booking store.
 
 ---
 
-## What ships
+## Architecture
 
-One conversational path runs in production: a **cascaded pipeline** in which each
-stage is a separate provider, and the orchestrator decides when turns begin and
-end.
+A **cascaded voice pipeline**: each stage is a separate, specialised provider,
+and a Python orchestrator owns the conversation — when a turn starts, when it
+ends, when the caller interrupts, and what the agent is allowed to do.
+
+| Layer | Technology | Responsibility |
+|---|---|---|
+| Telephony | Twilio Media Streams | Real phone number; bidirectional μ-law 8 kHz audio over WebSocket |
+| Orchestrator | Python · FastAPI · asyncio, on Heroku | Turn-taking, interruption, call state, tool gating, tracing |
+| Speech-to-text | Deepgram Flux | Streaming transcription and semantic end-of-turn detection |
+| Interruption | webrtcvad (local) | 20 ms frame voice detection for barge-in |
+| Reasoning | OpenAI `gpt-4.1-nano` | Replies and tool calls, streamed token by token |
+| Text-to-speech | Cartesia `sonic-3` | Streaming speech synthesis, started on the first phrase |
+| Data | Appwrite | Bookings, tenants and their configuration, call transcripts |
+| Payments | Stripe (test mode) | Payment links for booking requests |
+| Web | Next.js | Public site and the staff dashboard |
+
+**Multi-tenant by design.** The number that was dialled selects the business.
+Each tenant's voice, speaking speed, models and turn-taking thresholds live in
+its configuration record rather than in code, every booking query is filtered by
+tenant on the server, and tenant-specific code sits in its own module. One
+tenant runs today: a demo modelled on a real regional motel's public details.
+
+## How it works
 
 ```mermaid
 flowchart LR
-    C([Caller]) -- PSTN --> T[Twilio<br/>media stream<br/>μ-law 8 kHz]
-    T <-- WebSocket --> O[FastAPI orchestrator<br/>on Heroku]
+    C([Caller]) -- phone network --> T[Twilio]
+    T <-- audio over WebSocket --> O[Orchestrator]
 
-    O -- audio --> V[webrtcvad<br/>20 ms frames]
-    V -- barge-in --> O
-    O -- audio --> D[Deepgram Flux STT]
-    D -- EndOfTurn --> Q[(turn queue)]
-    Q --> W[turn worker<br/>one live turn]
+    O --> V[webrtcvad]
+    V -- caller interrupts --> O
+    O --> D[Deepgram Flux]
+    D -- turn ended --> Q[(turn queue)]
+    Q --> W[turn worker]
 
-    W --> L[OpenAI gpt-4.1-nano<br/>12 tools + call_state facts]
-    L -- tool calls --> G{code gates}
-    G --> X[CoalCreekFunctionDispatcher]
-    X --> A[(Appwrite<br/>bookings · tenants · transcripts)]
-    X --> S[Stripe<br/>test mode]
-
-    L -- text, streamed --> K[Cartesia sonic-3 TTS]
+    W --> L[gpt-4.1-nano]
+    L -- tool call --> G{code gates}
+    G --> X[tools]
+    X --> A[(Appwrite)]
+    X --> S[Stripe]
+    L -- streamed text --> K[Cartesia]
     K -- audio --> O
-
-    O -. spans .-> Y[Sentry]
 ```
 
-- **Turn end comes only from Deepgram Flux's `EndOfTurn`.** Acoustic silence
-  never triggers the model.
-- **Barge-in is a separate signal**, from local `webrtcvad`, so a caller can
-  interrupt a long answer. "Mhmm" and "go on" are recognised as a closed
-  vocabulary and do not stop the agent; three-word questions such as "cancel
-  my booking" do.
-- **The read loop never waits for a reply.** Finished turns go onto a queue and
-  one worker answers them one at a time, so the caller's next question is read
-  the moment it's spoken and no two turns are ever live at once.
-- **`call_state`** holds what the call has established in three tiers:
-  *settled* (a tool confirmed it), *heard* (the caller said it, nothing verified
-  it) and *perishable* (availability, payment status). It is re-injected as facts
-  every turn, so the agent still knows at turn 18 what was settled at turn 3.
-- **Anything that costs data, money or a promise is gated in code, not in the
-  prompt.** Four gates sit in front of the tools: a transfer needs the caller's
-  consent in the transcript, a booking needs a price-and-date summary the caller
-  agreed to, a spelled-out name beats the phonetic guess, and changing a guest's
-  details needs a confirmed identity. A guest's name that sat in the prompt
-  marked "do not reveal" was volunteered on turn one in 4 of 5 replays; moved
-  out of the context window and gated in code, 0 of 5.
+**One call, turn by turn:**
+
+1. The caller's number is looked up before the first word, so a returning guest's
+   booking is already loaded when they start speaking.
+2. Audio streams to Deepgram Flux, which decides when the caller has actually
+   finished — pauses and "um"s do not end a turn.
+3. The finished turn goes onto a queue. A single worker answers it, so the next
+   thing the caller says is heard immediately and no two replies ever overlap.
+4. The model replies with the call's established facts injected alongside the
+   transcript. When it needs data it calls a tool — every tool that touches a
+   booking, money or a person passes a check in code first.
+5. The reply streams to Cartesia phrase by phrase; the caller hears the first
+   words while the rest is still being written.
+6. If the caller talks over the agent, audio stops, the part they actually heard
+   is kept in the conversation, and the new question is answered. "Mhmm" and
+   "go on" are recognised and let the agent continue.
+7. At the end of the call the full transcript and its metadata are saved.
+
+## What works today
+
+- **Answers questions** about rooms, rates, availability and the property.
+- **Finds a caller's booking** from their phone number, their name, or a name
+  they spell out letter by letter — spelled letters always win over what speech
+  recognition guessed.
+- **Takes a booking request** only after reading the dates, room and price back
+  and hearing the caller agree, then creates a payment link.
+- **Transfers to a person** only once the caller has agreed to be put through.
+- **Remembers the whole call.** Facts are held in three tiers — confirmed by a
+  tool, said by the caller, or likely to change (like availability) — and
+  re-injected every turn, so the agent still knows at turn 18 what was settled
+  at turn 3.
+- **Handles interruption like a person**: stops when interrupted, keeps what was
+  heard, and ignores simple acknowledgements.
+- **Keeps guest data out of the model's reach.** A guest's details are released
+  to the conversation only after identity is confirmed in code.
+- **Staff dashboard** with reservations, call logs, guests and notifications.
+
+### Engineering decisions that made it reliable
+
+- **Anything that can cost data, money or a promise is enforced in code, not in
+  the prompt.** A guest's name kept in the prompt behind a "do not reveal" rule
+  was volunteered on the first turn in **4 of 5** test runs. Kept out of the
+  model's context and released by code, **0 of 5**. When the booking gate relied
+  on a flag the model filled in, **4 of 7** booking attempts claimed a
+  confirmation the caller never gave; the gate now reads the transcript.
+- **Behaviour is measured as a rate, never a single run.** Tone and phrasing are
+  tuned in the prompt and scored over repeated replays; boundaries are tested
+  with the model out of the loop.
+- **The model was chosen on the real workload.** Candidate models were
+  benchmarked under the production prompt (~9,500 tokens, 12 tools), not a bare
+  "hello" — the ranking reversed between the two.
 
 ## Measurements
 
-From one paginated read of Sentry spans on 2026-09-16. Every number has its n,
-and plain turns are never pooled with turns that call a tool. **Full tables,
-method, and the numbers that must *not* be quoted:
-[`docs/MEASUREMENTS.md`](docs/MEASUREMENTS.md).**
+Taken on my own test calls over the phone network, August–September 2026.
+Each figure is a median with its sample size. These are updated after
+significant changes, not continuously.
 
-| measure | value | n |
+| Measure | Result | Sample |
 |---|---|---|
-| Plain turn: caller stops speaking → first audio, p50 | **551–706 ms** on each of six days | 12–51 per day |
-| Turn that calls a tool, p50 | **1.5–2.7 s** on each of seven days | 2–22 per day |
-| Plain turn, 18–21 Aug → 3–4 Sep | 647 → 594 ms (−8%) | 47 → 76 |
-| Tool turn, 18–21 Aug → 3–4 Sep | 2180 → 1777 ms (−18%) | 26 → 15 |
-| `lookup_booking`, repeat within a call | **1073 → 0.4 ms** | 15 → 21 |
-| LLM first token, p50 | 420–468 ms, flat across releases | 11–51 per day |
-| Barge-in depth into a long answer (v425) | up to 6.5 s; was dead after 3–4 s | 6 interruptions |
+| Reply time — caller stops speaking to first audio, no tool needed | **0.55–0.71 s** | 6 days, 12–51 turns each |
+| Reply time when a tool is called (e.g. availability check) | **1.5–2.7 s** | 7 days, 2–22 turns each |
+| Repeat booking lookup within a call | **1,073 ms → 0.4 ms** (per-call cache) | 15 → 21 lookups |
+| Identifying a caller's booking from spoken details | **24 of 28** found, **0** matched to the wrong guest | 36 spoken queries |
+| Interrupting a long reply | caught up to **6.5 s** into an answer | 6 interruptions |
+| Automated tests | **2,036** passing | backend suite |
 
-The biggest win was a per-call reservation cache, not the model. The remaining
-latency problem is the tool round trip, not the LLM.
+Replies that need no tool are inside the sub-second target. Replies that call a
+tool are not yet — the tool round trip, not the model, is the remaining latency
+work.
 
-## Multi-tenancy
+## Website
 
-Built for more than one business; **exactly one tenant exists**.
-
-- The number dialled resolves the tenant (`PHONE_TO_TENANT_MAP`, or a
-  `?tenant_id=` on the Twilio webhook).
-- Each tenant's configuration — voice, TTS model, speaking speed, LLM model,
-  end-of-turn thresholds, staff contacts — lives in Appwrite `Tenants.config`,
-  not in code, and is read at the start of every call.
-- Tenant-specific code lives in `backend/services/tenants/<id>/`, with a
-  `_template` for new ones.
-- Booking reads and writes are filtered by `tenant_id` on the server
-  (`backend/tests/test_db_isolation.py`), and rate limits are keyed by caller
-  and tenant.
-
-The demo tenant is modelled on **Coal Creek Motel**, a real motel in Korumburra,
-Victoria, using its public details so the conversation has something realistic
-to talk about. The motel is not a customer and has not used or endorsed Ovela.
-
-## What this repo does not claim
-
-- **That Ovela is a business.** No customers, no revenue, no pricing, no
-  registered company.
-- **Any third-party booking-system integration.** Availability and bookings sit
-  behind one adapter interface (`services/pms/`); the only client in it is a
-  stub whose endpoint URLs are placeholders. The demo runs on its own store.
-- **A current latency median for the newest code.** The latest turn-taking fix
-  is written and reviewed but not deployed; the release before it had a fault
-  that hid up to ~6 s of the caller's wait from every span. See
-  [Do not quote](docs/MEASUREMENTS.md#do-not-quote).
-- **That tool turns meet the 800 ms target.** They don't. Plain turns do.
-- **A quality score.** The Google-hackathon harness produced a score in August
-  against a different conversational driver; it isn't a current measure. What it
-  tested is described in
-  [`docs/EVALUATION_METHODOLOGY.md`](docs/EVALUATION_METHODOLOGY.md), including
-  a latency claim that has since been withdrawn.
-- **A clean test run.** `pytest` in `backend/`: **2036 passed, 8 failed** as of
-  2026-09-16. The 8 are long-standing — five in the Stripe/email test file and
-  three older assertions — and are listed, not hidden.
-- **That booking confirmations reach anyone.** Outbound email is off in
-  production, and payment links are Stripe test mode.
-
-## History — older paths, kept and dated
-
-Nothing has been lost; these are how the project got here. Each lives on its own
-branch, and `archive/*` branches are never deployed.
-
-- **Google agentic hackathon (submitted June 2026; `main` as of 13 July 2026).**
-  The original version: a Google
-  ADK multi-agent graph on Gemini 2.5 Flash as the conversational driver, with
-  the README, evaluation write-up and screenshots of the time. Preserved on the
-  branch [`archive/google-agentic-hackathon`](https://github.com/My-CMDhub/Ovela-AI/tree/archive/google-agentic-hackathon).
-  The ADK code still lives in `backend/services/adk/`; in the shipping path it
-  only serves an optional background search (`fire_adk_cold_path`).
-- **Monolithic path (superseded).** `backend/services/voice_agent/handler.py`
-  used Deepgram's Voice Agent API as a single speech-to-speech hop. Replaced by
-  the cascaded pipeline, which exposes each stage's timing and lets the
-  orchestrator own interruption. Selectable with `VOICE_PIPELINE_MODE`, and not
-  what runs.
-- **DEV Summer Bug Smash (August 2026).** Six stacked pull requests, each a
-  class of production bug found in the cascaded pipeline, with Sentry evidence:
-  [#7](https://github.com/My-CMDhub/Ovela-AI/pull/7) provider bridges ·
-  [#8](https://github.com/My-CMDhub/Ovela-AI/pull/8) barge-in ·
-  [#9](https://github.com/My-CMDhub/Ovela-AI/pull/9) turn loop ·
-  [#10](https://github.com/My-CMDhub/Ovela-AI/pull/10) control flow and cold start ·
-  [#11](https://github.com/My-CMDhub/Ovela-AI/pull/11) telemetry ·
-  [#12](https://github.com/My-CMDhub/Ovela-AI/pull/12) redundant work.
-  The screenshots are captioned in [`traces/`](traces/README.md).
-- **The earlier product website.** The version of ovela.dev written as a SaaS
-  launch — pricing, a founding cohort, industry pages, integration claims — is
-  kept on [`archive/product-website`](https://github.com/My-CMDhub/Ovela-AI/tree/archive/product-website)
-  as product-design work. It is not deployed and makes claims this project
-  does not.
+- **[ovela.dev](https://ovela.dev)** — what Ovela is and how it works, with a
+  walkthrough of a booking call at [ovela.dev/demo](https://ovela.dev/demo).
+- **Staff dashboard** (sign-in required) — reservations, call logs, guests,
+  notifications and per-tenant settings.
 
 ## Running it
 
@@ -176,25 +147,18 @@ uvicorn main:app --reload --port 8000
 pytest
 ```
 
-It needs at least `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY`,
+Requires `OPENAI_API_KEY`, `DEEPGRAM_API_KEY`, `CARTESIA_API_KEY`,
 `APPWRITE_PROJECT_ID`, `APPWRITE_API_KEY` and `SMTP_PASSWORD` in `backend/.env`,
-plus Twilio credentials for real calls. Everything else in `core/config.py` has a
-default.
+plus Twilio credentials for real calls.
 
-Dashboard and site (Node 20+), from `frontend/`:
+Frontend (Node 20+), from `frontend/`:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Re-read the latency numbers yourself, from `backend/`:
-
-```bash
-python -m scripts.analyze_trace --period 30d --by-day --by-kind --no-gemini
-```
-
 ---
 
-Implementation was AI-assisted (Claude Code). The architecture, the
-measurement, the debugging and the corrections were mine.
+Built by Dhruv Patel. Implementation was AI-assisted; the architecture,
+measurement, debugging and corrections were mine.

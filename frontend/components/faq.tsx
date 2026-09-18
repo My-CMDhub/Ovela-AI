@@ -27,7 +27,7 @@ const faqs = [
   },
   {
     q: "Can I see how it works?",
-    a: "Yes — the code, the measurements and the list of claims it deliberately does not make are all on GitHub at github.com/My-CMDhub/Ovela-AI.",
+    a: "Yes — the code, the architecture and the measurements are on GitHub at github.com/My-CMDhub/Ovela-AI.",
   },
 ]
 
