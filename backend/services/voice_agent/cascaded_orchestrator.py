@@ -79,6 +79,28 @@ SPOKEN_WORDS_PER_SECOND = 2.5
 PLAYBACK_DRAIN_GRACE_S = 2.0
 
 
+# What the agent says, in code, when the model reaches for a tool without
+# having said anything: the same move as Pipecat's on_function_calls_started
+# speaking "Let me check on that." Each line promises effort, never an outcome
+# — the gates may still refuse the tool. Hang-up and transfer get nothing: the
+# model's own goodbye or hand-off line is what the caller should hear.
+_TOOL_ACKS = {
+    "check_availability": ("Let me check that for you.", "Let me have a look at those dates."),
+    "lookup_booking": ("Let me have a look.", "One moment, let me look that up."),
+}
+_DEFAULT_ACKS = ("One moment.", "Just a moment.")
+_NO_ACK_TOOLS = {"hang_up_call", "transfer_to_staff"}
+
+
+def tool_acknowledgement(tool_name: Optional[str], already_spoken: int) -> Optional[str]:
+    """The line to say before `tool_name` runs, or None. Rotates so a call
+    with several lookups does not repeat itself word for word."""
+    if not tool_name or tool_name in _NO_ACK_TOOLS:
+        return None
+    options = _TOOL_ACKS.get(tool_name, _DEFAULT_ACKS)
+    return options[already_spoken % len(options)] + " "
+
+
 def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[str], str]:
     """
     Split text_buffer into phrases based on punctuation or length (>= 6 words).
@@ -154,6 +176,7 @@ class CascadedPipelineOrchestrator:
         # Send turn 1's request once during the greeting (see _warm_llm).
         # Off in tests that build a call context without meaning to reach OpenAI.
         self.warm_llm_on_start: bool = True
+        self._acks_spoken: int = 0
         self._warm_task: Optional[asyncio.Task] = None
 
         # Core state & history
@@ -1796,6 +1819,10 @@ class CascadedPipelineOrchestrator:
             if state_note and len(messages) > 1:
                 messages.insert(len(messages) - 1, {"role": "system", "content": state_note})
             # Bounded so a tool-calling loop can never stall the voice turn.
+            # Whether the caller has heard anything this turn. A tool round
+            # with nothing said first is dead air for as long as the tool and
+            # the next model round take — about a second at best.
+            said_this_turn = False
             for _round in range(3):
                 # Time the model wait separately from tool execution. Span 1
                 # is ~86% of a turn; without this split neither a human nor
@@ -1847,8 +1874,20 @@ class CascadedPipelineOrchestrator:
                     delta = event.choices[0].delta
                     if delta.content:
                         assistant_text += delta.content
+                        said_this_turn = True
                         yield delta.content
                     for tc in (delta.tool_calls or []):
+                        # Acknowledge the moment the model reaches for a tool,
+                        # not when it has finished writing the call. Done in
+                        # code: the prompt asks for this and the model rarely
+                        # does it before a tool call.
+                        name = tc.function.name if tc.function else None
+                        ack = tool_acknowledgement(name, self._acks_spoken) if not said_this_turn else None
+                        if ack:
+                            said_this_turn = True
+                            self._acks_spoken += 1
+                            assistant_text += ack
+                            yield ack
                         slot = pending.setdefault(tc.index, {"id": "", "name": "", "args": ""})
                         if tc.id:
                             slot["id"] = tc.id
