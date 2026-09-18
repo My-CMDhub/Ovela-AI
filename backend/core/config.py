@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: Optional[str] = ""
     
     # Staff Phone (for transfers)
-    STAFF_PHONE_NUMBER: str = "+61475677771"
+    STAFF_PHONE_NUMBER: str = "+61491570006"
     
     # Demo Settings
     TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
