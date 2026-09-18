@@ -331,7 +331,7 @@ export function Hero() {
     return () => window.removeEventListener("keydown", handleEscape)
   }, [])
 
-  // Open modal when navigating to #demo (from pricing "Try AI Demo" button)
+  // Open the demo modal on request
   useEffect(() => {
     const handleOpenDemo = () => {
       setIsDemoOpen(true)
@@ -340,13 +340,21 @@ export function Hero() {
     // Listen for custom event from other components
     window.addEventListener("openDemoModal", handleOpenDemo)
 
-    // Also check for hash on mount (fallback)
-    if (window.location.hash === "#demo") {
-      setIsDemoOpen(true)
-      window.history.replaceState(null, "", window.location.pathname)
+    // Links elsewhere on the site point at /#demo: open on arrival, and on
+    // a same-page click (which fires hashchange, not a remount)
+    const openFromHash = () => {
+      if (window.location.hash === "#demo") {
+        setIsDemoOpen(true)
+        window.history.replaceState(null, "", window.location.pathname)
+      }
     }
+    openFromHash()
+    window.addEventListener("hashchange", openFromHash)
 
-    return () => window.removeEventListener("openDemoModal", handleOpenDemo)
+    return () => {
+      window.removeEventListener("openDemoModal", handleOpenDemo)
+      window.removeEventListener("hashchange", openFromHash)
+    }
   }, [])
 
 

@@ -216,7 +216,7 @@ export function Contact() {
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <a
-              href="/demo"
+              href="/#demo"
               className="px-6 py-3 bg-black text-white dark:bg-white dark:text-black text-sm font-medium rounded-full hover:opacity-90 transition-all"
             >
               Try the demo call

@@ -95,7 +95,7 @@ export function Header() {
             </div>
 
             <a
-              href="/demo"
+              href="/#demo"
               className="px-5 py-2.5 bg-primary text-primary-foreground text-sm rounded-full hover:opacity-90 transition-all hover:scale-105 shadow-md shadow-primary/20"
             >
               Get Started
@@ -163,13 +163,13 @@ export function Header() {
                 >
                   About
                 </Link>
-                <Link
-                  href="/demo"
+                <a
+                  href="/#demo"
                   onClick={closeSidebar}
                   className="block px-4 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors"
                 >
                   Try the demo
-                </Link>
+                </a>
               </nav>
 
               {/* Theme Toggle at Bottom */}
