@@ -296,7 +296,9 @@ class TestCascadedPipelineOrchestrator:
         # test failure rather than a feature.
         assert {k: v for k, v in sent_args.items() if not k.startswith("_")} \
             == {"room_type": "any"}
-        assert chunks == ["We have a Queen available."]
+        # A round that goes straight to a tool now opens with a line said in
+        # code, so the caller is not left in silence while it runs.
+        assert chunks == ["Let me check that for you. ", "We have a Queen available."]
 
     @pytest.mark.asyncio
     async def test_run_loop_processes_twilio_events(self, orchestrator):
@@ -1013,3 +1015,134 @@ class TestTheCallWritesItselfDown:
                    AsyncMock(return_value={})) as saved:
             await orchestrator.stop()
         saved.assert_awaited_once()
+
+
+class TestGreetingWarmup:
+    """
+    Turn 1 was the slowest turn of every call: the model's first token took
+    1.7-2.5 s on turn 1 of three calls against ~0.5 s afterwards. The fix sends
+    turn 1's request once while the greeting plays. It is worth nothing unless
+    it sends what turn 1 will send, so that is what these pin down.
+    """
+
+    @staticmethod
+    def _wire(orchestrator, reservations):
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.caller_reservation = AsyncMock(return_value=reservations)
+        orchestrator._openai = MagicMock()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("reservations", [[], [{"booking_reference": "CC-1", "status": "confirmed"}]])
+    async def test_warmup_sends_the_same_prefix_and_tools_as_turn_one(self, orchestrator, reservations):
+        self._wire(orchestrator, reservations)
+        warm = MagicMock()
+        warm.usage.prompt_tokens = 9000
+        warm.usage.prompt_tokens_details.cached_tokens = 0
+
+        async def one_round(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Hi.")
+
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=[warm, one_round()])
+
+        await orchestrator._warm_llm()
+        _ = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "I'm calling about my booking."}])]
+
+        warm_kw, turn_kw = (c.kwargs for c in orchestrator._openai.chat.completions.create.await_args_list)
+        prefix = warm_kw["messages"][:-1]            # everything but the throwaway "Hello?"
+        assert turn_kw["messages"][:len(prefix)] == prefix, "warm-up warmed a different prompt"
+        assert warm_kw["tools"] == turn_kw["tools"]
+        assert warm_kw["model"] == turn_kw["model"]
+        assert warm_kw["max_tokens"] == 1 and not warm_kw.get("stream")
+
+    @pytest.mark.asyncio
+    async def test_a_failed_warmup_is_logged_not_raised(self, orchestrator):
+        self._wire(orchestrator, [])
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=RuntimeError("429"))
+        await orchestrator._warm_llm()   # must not raise: turn 1 just keeps its old latency
+
+    @pytest.mark.asyncio
+    async def test_building_the_call_context_starts_the_warmup(self, orchestrator):
+        orchestrator.twilio_ws = MagicMock()
+        started = []
+        orchestrator._warm_llm = AsyncMock(side_effect=lambda: started.append(True))
+        with patch("services.appwrite.db_service") as db, \
+             patch("services.voice_agent.functions.CoalCreekFunctionDispatcher"), \
+             patch.object(orchestrator, "_apply_voice_settings", AsyncMock()):
+            db.get_tenant_config = AsyncMock(return_value={})
+            await orchestrator._build_call_context()
+            await orchestrator._warm_task
+        assert started == [True]
+
+
+class TestToolAcknowledgement:
+    """
+    On a live call the model almost never said anything before a tool call,
+    so every lookup was a second or more of silence. Pipecat's documented
+    answer is to speak a line in code when function calls start; this is the
+    same, with rules about when not to.
+    """
+
+    @staticmethod
+    def _tool_delta(name, index=0):
+        tc = MagicMock()
+        tc.index = index
+        tc.id = f"call_{index}"
+        tc.function.name = name
+        tc.function.arguments = "{}"
+        return TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+    async def _run(self, orchestrator, first_round, then="Done."):
+        async def round_one(*_a, **_kw):
+            for d in first_round:
+                yield d
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content=then)
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock(caller_reservation=AsyncMock(return_value=[]))
+        orchestrator.dispatcher.execute = AsyncMock(return_value={"ok": True})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()])
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "is the queen free on friday?"}])]
+        return chunks, orchestrator._openai.chat.completions.create.await_args_list
+
+    @pytest.mark.asyncio
+    async def test_speaks_before_the_tool_runs_and_tells_the_model_it_did(self, orchestrator):
+        chunks, calls = await self._run(orchestrator, [self._tool_delta("check_availability")])
+        assert chunks[0] == "Let me check that for you. "
+        # Round two must see its own acknowledgement, or it says it again.
+        assistant = [m for m in calls[1].kwargs["messages"] if m.get("role") == "assistant"][-1]
+        assert assistant["content"].startswith("Let me check that for you.")
+
+    @pytest.mark.asyncio
+    async def test_says_nothing_extra_when_the_model_already_spoke(self, orchestrator):
+        chunks, _ = await self._run(orchestrator, [
+            TestCascadedPipelineOrchestrator._delta(content="Sure, one sec. "),
+            self._tool_delta("check_availability"),
+        ])
+        assert chunks == ["Sure, one sec. ", "Done."]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool", ["hang_up_call", "transfer_to_staff"])
+    async def test_no_acknowledgement_before_a_goodbye_or_a_handoff(self, orchestrator, tool):
+        chunks, _ = await self._run(orchestrator, [self._tool_delta(tool)])
+        assert chunks == ["Done."]
+
+    @pytest.mark.asyncio
+    async def test_one_acknowledgement_per_turn_even_with_two_tools(self, orchestrator):
+        chunks, _ = await self._run(orchestrator, [
+            self._tool_delta("lookup_booking", 0), self._tool_delta("check_availability", 1)])
+        assert chunks == ["Let me have a look. ", "Done."]
+
+    def test_rotates_so_repeated_lookups_do_not_sound_canned(self):
+        from services.voice_agent.cascaded_orchestrator import tool_acknowledgement
+        first, second = (tool_acknowledgement("lookup_booking", n) for n in (0, 1))
+        assert first != second
+        assert tool_acknowledgement("update_guest_info", 0) == "One moment. "

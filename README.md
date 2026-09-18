@@ -10,7 +10,7 @@
   [![Stack](https://img.shields.io/badge/stack-Python%20·%20FastAPI%20·%20asyncio-3776AB?style=flat-square)](#architecture)
   [![Voice](https://img.shields.io/badge/voice-Twilio%20·%20Deepgram%20Flux%20·%20Cartesia-6b46c1?style=flat-square)](#architecture)
   [![LLM](https://img.shields.io/badge/LLM-gpt--4.1--nano-10a37f?style=flat-square)](#decisions-that-make-it-different)
-  [![Reply](https://img.shields.io/badge/first%20reply-0.9%20s-success?style=flat-square)](#measurements)
+  [![Reply](https://img.shields.io/badge/reply%20(no%20tool)-0.76--0.91%20s%20·%202%20calls-success?style=flat-square)](#measurements)
   [![Tests](https://img.shields.io/badge/tests-1%2C934%20passing-success?style=flat-square)](#running-it)
   [![Status](https://img.shields.io/badge/status-personal%20project-lightgrey?style=flat-square)](#why-this-exists)
 </div>
@@ -165,7 +165,8 @@ first question paid for a cold connection to the model and an extra lookup the
 agent didn't need. Now the orchestrator sends that first request once while the
 greeting plays and throws the answer away, the agent asks who's calling before
 looking anything up, and whenever it does reach for a tool, code says a short
-line first so the wait is never silence. First reply: **0.9 s**.
+line first so the wait is never silence. First reply: **3.7 s → 0.9 s**, one
+call each side.
 
 **Models are compared on the real workload, and re-measured.**
 Speed is benchmarked under the production prompt (~8,900 tokens, 12 tools) from
@@ -197,6 +198,7 @@ from the call traces. Updated after significant changes, not continuously.
 | First reply of a call: turn end detected → first audio sent | **3.7 s → 0.9 s** | one call before, one after the greeting warm-up (18 Sep) |
 | Replies with no tool, median per call | **0.76 s** and **0.91 s** | last two calls, 20 and 14 turns |
 | First words when a tool runs | **2.3–4.3 s → 0.7–0.8 s** | 4 tool turns before, 2 after the in-code acknowledgement |
+| Full answer when a tool runs: turn end → answer starts generating | **1.5–4.0 s** (median 3.2 s) **→ 1.1–1.7 s** | 5 tool turns before, 2 after; from the call logs |
 | Repeat booking lookup within a call | **1,073 ms → 0.4 ms** (per-call cache) | 15 → 21 lookups |
 | Finding a guest from misheard details | **24 of 28** real guests found; **0** of 8 non-guests invented; **0** wrong guest | 36 transcription-style queries ([`eval_identity.py`](backend/scripts/eval_identity.py)) |
 | Guest name volunteered before identification | **4 of 5 → 0 of 5** | scripted replays ([`replay_conversation.py`](backend/scripts/replay_conversation.py)) |
@@ -206,7 +208,10 @@ from the call traces. Updated after significant changes, not continuously.
 Reply time starts when Deepgram reports the end of turn, so it excludes
 Deepgram's own end-of-turn decision. Replies without a tool are under a second.
 When a tool runs, the caller now hears a short acknowledgement in under a
-second, but the answer itself still waits on the tool and a second model round.
+second; the answer itself still waits on the tool and a second model round,
+speech synthesis adds about 0.2 s to it, and it plays once the acknowledgement
+has finished. Every before/after row here is one call each side of the change —
+directionally clear, not yet a large sample.
 
 ## Known limits
 
