@@ -3,7 +3,6 @@
 import type React from "react"
 import { motion, useMotionValue, useSpring, AnimatePresence } from "framer-motion"
 import { useState, useEffect } from "react"
-import { EcosystemLoop } from "@/components/ecosystem-loop"
 import { VoiceDemoForm } from "@/components/VoiceDemoForm"
 import { ArrowRight, X, Check, ShieldCheck, Activity } from "lucide-react"
 import Link from "next/link"
