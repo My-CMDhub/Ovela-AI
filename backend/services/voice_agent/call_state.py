@@ -301,6 +301,16 @@ class CallState:
             if self.guest_email:
                 stay.append(f"email on the booking {self.guest_email}")
             lines.append(f"- Their booking: {', '.join(stay)}.")
+            if self.guest_name:
+                # The lookup matched the name the caller said to this one in
+                # Python, so what was heard is a mishearing of it. On a live
+                # call the agent kept calling Dhruv "Drew" for the rest of the
+                # call because both names sat in front of it unranked.
+                lines.append(
+                    f"- Call them by the name on their booking, {self.guest_name}. "
+                    "If you heard it differently earlier, that was the speech "
+                    "recognition mishearing it — do not repeat the misheard version."
+                )
 
         if self.promises:
             lines.append(f"- Already done on this call: {'; '.join(self.promises)}.")
@@ -316,7 +326,11 @@ class CallState:
                 f"— use this exact spelling. They spelled it because they expect "
                 f"the sound to be misheard, and it usually is."
             )
-        if self.heard_name and self.heard_name.lower() != self.spelled_name.lower():
+        # Once identity is confirmed the booking's name supersedes what was
+        # heard, so the misheard version is not offered back to the model.
+        name_settled = self.identity_confirmed and self.guest_name
+        if (self.heard_name and not name_settled
+                and self.heard_name.lower() != self.spelled_name.lower()):
             label = "name as heard (unreliable — see the spelling above)" \
                 if self.spelled_name else "name as heard"
             heard.append(f"{label}: {self.heard_name}")
