@@ -379,7 +379,7 @@ export function Hero() {
             className="mb-6 inline-flex flex-row items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs sm:text-sm text-primary backdrop-blur-sm max-w-full text-left"
           >
             <span className="flex h-2 w-2 rounded-full bg-primary mr-2 animate-pulse shrink-0"> </span>
-            <span className="whitespace-nowrap overflow-hidden text-ellipsis">Founding cohort open • AUD $300 setup • 21-day free trial</span>
+            <span className="whitespace-nowrap overflow-hidden text-ellipsis">A personal engineering project, running in production</span>
           </motion.div>
 
           {/* Main Heading */}

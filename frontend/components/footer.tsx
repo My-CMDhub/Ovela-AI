@@ -21,12 +21,15 @@ export function Footer() {
           <Link href="/#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
             Features
           </Link>
-          <Link href="/#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            Pricing
+          <Link href="/demo" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            Demo
           </Link>
           <Link href="/#contact" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            Contact
+            About
           </Link>
+          <a href="https://github.com/My-CMDhub/Ovela-AI" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+            Code
+          </a>
         </nav>
 
         <p className="text-sm text-muted-foreground">© Ovela 2026</p>

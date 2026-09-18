@@ -19,8 +19,6 @@ const painPoints = [
     ),
     title: "Calls Going to Voicemail",
     description: "When you're on the job, calls get missed and most callers won't leave a message",
-    stat: "67%",
-    statLabel: "of callers don't call back after voicemail",
   },
   {
     icon: (
@@ -30,8 +28,6 @@ const painPoints = [
     ),
     title: "Constant Interruptions",
     description: "The same questions: availability, pricing, directions - pull you away from the work every day",
-    stat: "40+",
-    statLabel: "routine calls handled per week on average",
   },
   {
     icon: (
@@ -41,8 +37,6 @@ const painPoints = [
     ),
     title: "Lost Bookings",
     description: "A missed call at the wrong moment often means the customer books with your competitor instead",
-    stat: "1 in 3",
-    statLabel: "missed calls become a lost booking",
   },
 ]
 
@@ -103,8 +97,8 @@ const solutionSteps = [
     step: 2,
     title: "AI Understanding",
     description: "Natural conversation intelligence",
-    detail: "100%",
-    detailLabel: "context aware",
+    detail: "Stateful",
+    detailLabel: "remembers what was settled",
     Icon: Sparkles,
     mockup: (isActive: boolean) => (
       <div className="w-full max-w-sm mx-auto p-4 rounded-xl bg-background border border-border shadow-lg" key={isActive ? "active" : "inactive"}>
@@ -142,7 +136,7 @@ const solutionSteps = [
     title: "System Sync",
     description: "Real-time availability check",
     detail: "Live",
-    detailLabel: "calendar + CRM",
+    detailLabel: "availability check",
     Icon: ClipboardList,
     mockup: (isActive: boolean) => (
       <div className="w-full max-w-md mx-auto p-4 rounded-xl bg-background border border-border shadow-lg" key={isActive ? "active" : "inactive"}>
@@ -229,7 +223,7 @@ const solutionSteps = [
     title: "Booking Confirmed",
     description: "Appointment locked & notified",
     detail: "Auto",
-    detailLabel: "SMS + calendar",
+    detailLabel: "booking request",
     Icon: CircleCheckBig,
     mockup: (isActive: boolean) => (
       <div className="w-full max-w-sm mx-auto" key={isActive ? "active" : "inactive"}>
@@ -352,17 +346,7 @@ export function ProblemSolution() {
                   <h3 className="font-serif text-2xl mb-2">{pain.title}</h3>
                   <p className="text-muted-foreground mb-6 flex-1">{pain.description}</p>
 
-                  <div className="pt-6 border-t border-border/30 mt-auto">
-                    <div className="flex items-end gap-2">
-                      <motion.span
-                        animate={{ opacity: activePain === index ? 1 : 0.5 }}
-                        className="font-serif text-4xl text-accent whitespace-nowrap shrink-0"
-                      >
-                        {pain.stat}
-                      </motion.span>
-                      <span className="text-sm text-muted-foreground mb-1 leading-tight">{pain.statLabel}</span>
-                    </div>
-                  </div>
+
 
                   <AnimatePresence>
                     {activePain === index && (

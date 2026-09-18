@@ -23,10 +23,10 @@ const playfair = Playfair_Display({
 
 export const metadata: Metadata = {
   title: {
-    default: "Ovela | AI Phone Answering for Australian Service Businesses",
+    default: "Ovela | A voice AI receptionist, built and measured in production",
     template: "%s | Ovela"
   },
-  description: "Ovela answers your calls, checks live availability, and books directly into your software — 24/7. No missed bookings, no interruptions. Australian AI receptionist. Free 21-day trial.",
+  description: "A voice AI receptionist that answers a real phone line, checks availability and handles bookings — built, measured and run in production as a personal engineering project.",
   keywords: [
     "AI receptionist for hotels",
     "hotel ai receptionist",
@@ -42,35 +42,33 @@ export const metadata: Metadata = {
     "missed call answering service Australia",
     "AI receptionist for tradies",
     "after hours answering service Australia",
-    "ServiceM8 AI integration",
-    "Cliniko phone answering automation",
     "phone answering service hospitality Australia",
     "AI phone answering 24 7",
     "automated booking service Australia",
 
   ],
-  authors: [{ name: "Ovela AI" }],
-  creator: "Ovela AI",
+  authors: [{ name: "Dhruv Patel" }],
+  creator: "Dhruv Patel",
   openGraph: {
     type: "website",
     locale: "en_AU",
     url: "https://ovela.dev",
-    title: "Ovela | AI Phone Answering for Australian Service Businesses",
-    description: "Ovela answers your calls, checks live availability, and books directly into your software — 24/7. No missed bookings. Free 21-day trial.",
+    title: "Ovela | A voice AI receptionist, built and measured in production",
+    description: "A voice AI receptionist that answers a real phone line, checks availability and handles bookings — built, measured and run in production as a personal engineering project.",
     siteName: "Ovela",
     images: [
       {
         url: "/og-image.jpg",
         width: 1200,
         height: 630,
-        alt: "Ovela AI - Enterprise-Grade Phone Automation"
+        alt: "Ovela — a voice AI receptionist"
       }
     ]
   },
   twitter: {
     card: "summary_large_image",
-    title: "Ovela | AI Phone Answering for Australian Service Businesses",
-    description: "Ovela answers your calls, checks live availability, and books directly into your software — 24/7. No missed bookings. Free 21-day trial.",
+    title: "Ovela | A voice AI receptionist, built and measured in production",
+    description: "A voice AI receptionist that answers a real phone line, checks availability and handles bookings — built, measured and run in production as a personal engineering project.",
     images: ["/og-image.jpg"],
     creator: "@ovela_ai"
   },
@@ -116,42 +114,13 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
               "@context": "https://schema.org",
-              "@graph": [
-                {
-                  "@type": "SoftwareApplication",
-                  "name": "Ovela",
-                  "url": "https://ovela.dev",
-                  "description": "AI voice receptionist for Australian service businesses. Answers calls, checks live availability, and books directly into your existing software — 24/7.",
-                  "applicationCategory": "BusinessApplication",
-                  "operatingSystem": "Web",
-                  "offers": {
-                    "@type": "Offer",
-                    "price": "200",
-                    "priceCurrency": "AUD",
-                    "availability": "https://schema.org/InStock"
-                  },
-                  "provider": {
-                    "@type": "Organization",
-                    "name": "Ovela",
-                    "url": "https://ovela.dev",
-                    "areaServed": "AU"
-                  },
-                  "featureList": [
-                    "Answers calls 24/7",
-                    "Books appointments directly in your software",
-                    "Integrates with ServiceM8, Tradify, Cliniko, RMS Cloud and more",
-                    "Handles reschedules and cancellations",
-                    "Transfers urgent calls to staff"
-                  ]
-                },
-                {
-                  "@type": "Organization",
-                  "name": "Ovela",
-                  "url": "https://ovela.dev",
-                  "description": "AI voice receptionist software for Australian service businesses",
-                  "areaServed": "AU"
-                }
-              ]
+              "@type": "SoftwareSourceCode",
+              "name": "Ovela",
+              "url": "https://ovela.dev",
+              "codeRepository": "https://github.com/My-CMDhub/Ovela-AI",
+              "programmingLanguage": ["Python", "TypeScript"],
+              "description": "A voice AI receptionist built and run in production as a personal engineering project. Not a registered business; no customers.",
+              "author": { "@type": "Person", "name": "Dhruv Patel" }
             })
           }}
         />
