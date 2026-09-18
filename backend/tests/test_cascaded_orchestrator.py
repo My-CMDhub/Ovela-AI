@@ -367,4 +367,250 @@ class TestCascadedPipelineOrchestrator:
         assert any("YXVkaW8=" in p for p in sent_media), "current turn audio was dropped"
         assert not any("c3RhbGU=" in p for p in sent_media), "stale audio was forwarded"
 
+    # ------------------------------------------------------------------
+    # Control-flow tool actions (hang_up_call)
+    # ------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_hangup_action_from_dispatcher_is_recorded(self, orchestrator):
+        """
+        Regression: the dispatcher returns {"action": "hangup"} for hang_up_call,
+        but the cascaded tool loop only forwarded the dict back to the LLM and
+        never read `action`. The model then narrated a goodbye while the call
+        stayed open — verified live, hang_up_call fired 3x on a 566s call.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_hangup"
+        tc.function.name = "hang_up_call"
+        tc.function.arguments = '{"farewell_message": "Thanks for calling, goodbye."}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Thanks for calling, goodbye.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock(return_value={
+            "action": "hangup", "message": "Thanks for calling, goodbye."
+        })
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+
+        [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "that's all, bye"}]
+        )]
+
+        assert orchestrator._pending_hangup is True, "hangup action was dropped by the tool loop"
+
+    @pytest.mark.asyncio
+    async def test_pending_hangup_terminates_call_after_farewell(self, orchestrator):
+        """
+        A recorded hangup must fire only once the farewell has finished
+        streaming — never mid-phrase.
+        """
+        async def fake_llm_stream(history):
+            orchestrator._pending_hangup = True
+            yield "Thanks for calling, goodbye."
+
+        orchestrator.llm_callback = fake_llm_stream
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_bye"
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+
+        async def fake_audio_events():
+            yield {"type": "chunk", "data": "YXVkaW8="}
+            yield {"type": "done"}
+
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
+             patch("asyncio.sleep", AsyncMock()), \
+             patch.object(orchestrator, "_hangup_call", AsyncMock()) as mock_hangup:
+            await orchestrator._run_parallel_streaming_pipeline()
+
+        mock_hangup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_pending_hangup_aborted_when_user_interrupts_farewell(self, orchestrator):
+        """
+        If the caller speaks during the farewell they are not done talking.
+        Hanging up on them is worse than the bug this fixes.
+        """
+        async def fake_llm_stream(history):
+            orchestrator._pending_hangup = True
+            yield "Thanks for calling, goodbye."
+            # trigger_barge_in() drops the state back to AWAITING_INPUT.
+            orchestrator.state = ConversationState.AWAITING_INPUT
+
+        orchestrator.llm_callback = fake_llm_stream
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_bye"
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+
+        async def fake_audio_events():
+            yield {"type": "chunk", "data": "YXVkaW8="}
+            yield {"type": "done"}
+
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
+             patch("asyncio.sleep", AsyncMock()), \
+             patch.object(orchestrator, "_hangup_call", AsyncMock()) as mock_hangup:
+            await orchestrator._run_parallel_streaming_pipeline()
+
+        mock_hangup.assert_not_awaited()
+        assert orchestrator._pending_hangup is False
+
+    @pytest.mark.asyncio
+    async def test_hangup_call_posts_completed_status_to_twilio(self, orchestrator):
+        """
+        The actual termination is a Twilio REST status update — the only thing
+        that ends a live PSTN call.
+        """
+        orchestrator.call_sid = "CA_test_sid"
+        orchestrator.is_running = True
+
+        mock_response = MagicMock()
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("services.voice_agent.cascaded_orchestrator.httpx.AsyncClient", return_value=mock_ctx):
+            await orchestrator._hangup_call()
+
+        assert mock_client.post.await_count == 1
+        assert mock_client.post.await_args.kwargs["data"] == {"Status": "completed"}
+        assert "CA_test_sid" in mock_client.post.await_args.args[0]
+        assert orchestrator.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_transfer_action_from_dispatcher_is_recorded(self, orchestrator):
+        """
+        Regression: same dropped-`action` root cause as hang_up_call. The agent
+        told the caller "I'll transfer you to reception now" and then kept
+        talking — the transfer never happened.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_transfer"
+        tc.function.name = "transfer_to_staff"
+        tc.function.arguments = '{}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Sure, transferring you now.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock(return_value={
+            "action": "transfer",
+            "transfer_to": "+61399990000",
+            "message": "Sure, I'll transfer you to reception now.",
+        })
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+
+        [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "can I speak to a human"}]
+        )]
+
+        assert orchestrator._pending_transfer == "+61399990000", \
+            "transfer action was dropped by the tool loop"
+
+    @pytest.mark.asyncio
+    async def test_pending_transfer_updates_call_with_dial_twiml(self, orchestrator):
+        """
+        A transfer is a TwiML update on the live call — <Dial> to staff, with a
+        fallback back to the AI if nobody answers.
+        """
+        orchestrator.call_sid = "CA_test_sid"
+        orchestrator.is_running = True
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=MagicMock())
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("services.voice_agent.cascaded_orchestrator.httpx.AsyncClient", return_value=mock_ctx):
+            await orchestrator._transfer_call("+61399990000")
+
+        twiml = mock_client.post.await_args.kwargs["data"]["Twiml"]
+        assert "<Dial" in twiml
+        assert "+61399990000" in twiml
+        assert "CA_test_sid" in mock_client.post.await_args.args[0]
+        assert orchestrator.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_pending_transfer_fires_after_the_spoken_handoff(self, orchestrator):
+        """
+        The transfer must land after "I'll transfer you now" has been streamed,
+        otherwise the caller is moved in silence.
+        """
+        async def fake_llm_stream(history):
+            orchestrator._pending_transfer = "+61399990000"
+            yield "Sure, transferring you now."
+
+        orchestrator.llm_callback = fake_llm_stream
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_transfer"
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+
+        async def fake_audio_events():
+            yield {"type": "chunk", "data": "YXVkaW8="}
+            yield {"type": "done"}
+
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
+             patch("asyncio.sleep", AsyncMock()), \
+             patch.object(orchestrator, "_transfer_call", AsyncMock()) as mock_transfer:
+            await orchestrator._run_parallel_streaming_pipeline()
+
+        mock_transfer.assert_awaited_once_with("+61399990000")
+
+    @pytest.mark.asyncio
+    async def test_transfer_without_call_sid_does_not_crash(self, orchestrator):
+        """
+        No Call SID means no transfer is possible; the call must survive it.
+        """
+        orchestrator.call_sid = ""
+        orchestrator.is_running = True
+
+        await orchestrator._transfer_call("+61399990000")
+
+        assert orchestrator.is_running is True
+
+    @pytest.mark.asyncio
+    async def test_hangup_call_is_idempotent(self, orchestrator):
+        """
+        The model called hang_up_call three times on one call. A second
+        termination must not fire a second Twilio request.
+        """
+        orchestrator.call_sid = "CA_test_sid"
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=MagicMock())
+        mock_ctx = MagicMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("services.voice_agent.cascaded_orchestrator.httpx.AsyncClient", return_value=mock_ctx):
+            await orchestrator._hangup_call()
+            await orchestrator._hangup_call()
+
+        assert mock_client.post.await_count == 1
+
 
