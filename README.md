@@ -157,10 +157,13 @@ full sentence — so the agent doesn't assume context the caller never received.
 And "mhmm" isn't an interruption: cutting in takes about half a second of
 sustained speech or words that aren't continuers.
 
-**The model was chosen on the real workload.**
-Candidates were benchmarked under the production prompt (~9,500 tokens,
-12 tools), not a bare "hello". `gpt-4o-mini` won on the bare "hello" and was
-2.7× slower than `gpt-4.1-nano` under the real prompt.
+**Models are compared on the real workload, and re-measured.**
+Speed is benchmarked under the production prompt (~8,900 tokens, 12 tools) from
+the server's own region, never on a bare "hello"
+([`bench_llm.py`](backend/scripts/bench_llm.py)). Re-run in September 2026,
+`gpt-4.1-nano` and `gpt-4o-mini` both reach a first token in about **0.5 s**, so
+speed no longer separates them; `gpt-4.1-nano` stays on cost, and a switch would
+need a scored behaviour eval rather than a latency number.
 
 ## What works today
 
