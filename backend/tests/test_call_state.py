@@ -1,3 +1,4 @@
+import pytest
 """
 tests/test_call_state.py — the call's memory, checked without the model.
 
@@ -68,15 +69,25 @@ def test_unidentified_caller_gets_no_detail_carried_forward():
     assert "NOT been identified" in note
 
 
-def test_contact_details_are_never_carried():
-    """lookup_booking releases these on the turn a name matched. Re-sending them
-    in a system note on every later turn is a wider surface for no gain."""
+def test_the_email_is_carried_once_identity_is_confirmed_the_phone_never():
+    """Left out, the email was not fetched again when asked for: on a live call
+    the agent said none was on file, then read back one it made up. A caller
+    who has proven they are the guest hears their real address instead."""
     state = CallState()
     state.observe("lookup_booking", {"guest_name": "Dhruv Patel"}, CONFIRMED)
     note = state.as_note()
 
-    assert "dhruv.patel+stays@example.com" not in note
+    assert "dhruv.patel+stays@example.com" in note
     assert "+61491570006" not in note
+
+
+@pytest.mark.parametrize("result", [UNCONFIRMED, MISMATCH])
+def test_no_email_is_carried_before_identity_is_confirmed(result):
+    """The boundary that moved is 'after identity', not 'always'."""
+    state = CallState()
+    state.observe("lookup_booking", {"guest_name": "Sarah Wilkinson"},
+                  dict(result, guest_email="dhruv.patel+stays@example.com"))
+    assert "dhruv.patel+stays@example.com" not in state.as_note()
 
 
 def test_a_name_that_does_not_fit_confirms_nothing():

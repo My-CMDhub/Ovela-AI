@@ -1039,7 +1039,12 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             if name_mismatch:
                 return f"{opener}. However, the name on file is '{guest}'. If '{guest}' sounds like a misspelled version of what the user said (e.g. 'B H R U V' vs 'Drew', or 'Smith' vs 'Smyth'), ignore the mismatch and confirm it with them naturally. If it is completely different, tell them 'I have a different name on file though — what name is it under?'"
             if name_already_provided:
-                return f"{opener}. And since you've already given your name, I can confirm it's yours. How can I help you with it?"
+                # The name they said matched this one in Python, so any
+                # difference is the recogniser mishearing it ("Drew" for
+                # "Dhruv" on a live call, which the agent then used all call).
+                return (f"{opener}. And since you've already given your name, I can confirm it's yours. "
+                        f"The name on the booking is {guest} — call them by that name; if you heard it "
+                        f"differently, speech recognition misheard it. How can I help you with it?")
             return f"{opener}. I've got your booking details right here. How can I help you with it?"
             
         elif found_by == "phone":
