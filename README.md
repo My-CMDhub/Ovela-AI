@@ -135,13 +135,14 @@ to talk about. The motel is not a customer and has not used or endorsed Ovela.
 
 ## History — older paths, kept and dated
 
-Nothing has been deleted; these are how the project got here.
+Nothing has been lost; these are how the project got here. Each lives on its own
+branch, and `archive/*` branches are never deployed.
 
 - **Google agentic hackathon (submitted June 2026; `main` as of 13 July 2026).**
   The original version: a Google
   ADK multi-agent graph on Gemini 2.5 Flash as the conversational driver, with
-  the README, evaluation write-up and screenshots of the time. Preserved at the
-  tag [`google-agentic-hackathon`](https://github.com/My-CMDhub/Ovela-AI/tree/google-agentic-hackathon).
+  the README, evaluation write-up and screenshots of the time. Preserved on the
+  branch [`archive/google-agentic-hackathon`](https://github.com/My-CMDhub/Ovela-AI/tree/archive/google-agentic-hackathon).
   The ADK code still lives in `backend/services/adk/`; in the shipping path it
   only serves an optional background search (`fire_adk_cold_path`).
 - **Monolithic path (superseded).** `backend/services/voice_agent/handler.py`
@@ -158,6 +159,11 @@ Nothing has been deleted; these are how the project got here.
   [#11](https://github.com/My-CMDhub/Ovela-AI/pull/11) telemetry ·
   [#12](https://github.com/My-CMDhub/Ovela-AI/pull/12) redundant work.
   The screenshots are captioned in [`traces/`](traces/README.md).
+- **The earlier product website.** The version of ovela.dev written as a SaaS
+  launch — pricing, a founding cohort, industry pages, integration claims — is
+  kept on [`archive/product-website`](https://github.com/My-CMDhub/Ovela-AI/tree/archive/product-website)
+  as product-design work. It is not deployed and makes claims this project
+  does not.
 
 ## Running it
 
