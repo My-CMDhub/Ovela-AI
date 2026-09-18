@@ -24,14 +24,18 @@ class CartesiaStandaloneBridge:
     """
     def __init__(
         self,
-        model_id: str = "sonic-english",
+        model_id: str = "sonic-3",
         voice_id: str = "a0e99841-438c-4a64-b679-ae501e7d6091",
         sample_rate: int = 8000,
-        encoding: str = "mulaw",
+        # Cartesia rejects "mulaw" — the raw-container encoding is "pcm_mulaw".
+        encoding: str = "pcm_mulaw",
         container: str = "raw",
     ):
         self.model_id = model_id
         self.voice_id = voice_id
+        # Optional generation_config overrides, set from tenant voice_settings.
+        self.speed: Optional[float] = None
+        self.volume: Optional[float] = None
         self.sample_rate = sample_rate
         self.encoding = encoding
         self.container = container
@@ -93,6 +97,15 @@ class CartesiaStandaloneBridge:
             },
             "continue": continue_stream,
         }
+        # Cartesia takes numeric speed (0.6-1.5) / volume (0.5-2.0) under
+        # generation_config; the top-level slow/normal/fast form is deprecated.
+        generation_config = {}
+        if self.speed is not None:
+            generation_config["speed"] = self.speed
+        if self.volume is not None:
+            generation_config["volume"] = self.volume
+        if generation_config:
+            payload["generation_config"] = generation_config
         try:
             await self.ws.send(json.dumps(payload))
         except Exception as e:
@@ -131,10 +144,14 @@ class CartesiaStandaloneBridge:
                         logger.warning(f"🟡 [CartesiaStandalone] Malformed JSON: {message[:100]}")
         except websockets.exceptions.ConnectionClosed:
             logger.info("🔌 [CartesiaStandalone] Connection closed by server")
+            self.is_connected = False
         except Exception as e:
             logger.error(f"🔴 [CartesiaStandalone] Error receiving audio events: {e}")
-        finally:
             self.is_connected = False
+        # NO `finally: is_connected = False` — callers break out of this
+        # generator on `done`/barge-in every turn. Finalizing the async
+        # generator would then mark a perfectly healthy socket as dead, and
+        # send_transcript_chunk() would silently no-op for the rest of the call.
 
     async def close(self) -> None:
         """
