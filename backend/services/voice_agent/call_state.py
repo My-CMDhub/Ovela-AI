@@ -24,10 +24,12 @@ Two boundaries it must not cross, both Track A:
   guest's name; a note that then carried the reservation forward for the rest of
   the call would quietly widen that. Until the tool says the name matched, all
   this holds is "a reservation exists on this number".
-* **The guest's email and phone are never carried.** The tool releases those on
-  the turn a name matched. Re-sending them in a note on every later turn is a
-  bigger surface for no gain — the model can call the tool again, and the
-  per-call cache makes that free.
+* **The guest's phone is never carried; their email is, once identity is
+  confirmed.** Both used to be left out on the theory that the model would call
+  the tool again when it needed them. On a live call (18 Sep) it did not: two
+  turns after the lookup it told the caller no email was on file, then read
+  back an address it made up. A caller who has already proven they are the
+  guest is safer hearing their real address than an invented one.
 """
 
 import logging
@@ -94,6 +96,7 @@ class CallState:
     num_nights: str = ""
     total_amount: str = ""
     payment_status: str = ""
+    guest_email: str = ""
 
     # What the CALLER gave us that no tool has confirmed. For a stranger with
     # no record these are the only copy in existence: update_guest_info used to
@@ -254,6 +257,7 @@ class CallState:
             ("room_type", "room_type"), ("check_in", "check_in_date"),
             ("check_out", "check_out_date"), ("num_nights", "num_nights"),
             ("total_amount", "total_amount"), ("payment_status", "payment_status"),
+            ("guest_email", "guest_email"),
         ):
             value = result.get(key) or args.get(key) or ""
             if value != "" and value is not None:
@@ -294,6 +298,8 @@ class CallState:
                 stay.append(f"total ${self.total_amount}")
             if self.payment_status:
                 stay.append(f"payment {self.payment_status}")
+            if self.guest_email:
+                stay.append(f"email on the booking {self.guest_email}")
             lines.append(f"- Their booking: {', '.join(stay)}.")
 
         if self.promises:
