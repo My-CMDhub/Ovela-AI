@@ -1692,8 +1692,19 @@ class CascadedPipelineOrchestrator:
 
     async def _default_llm_callback(self, history: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
         """
-        Default LLM response generation using ADKOrchestrator query_stream if available,
-        or falling back cleanly when disconnected.
+        Generate the agent's reply for this turn with OpenAI.
+
+        Streams a chat completion from `voice_settings.llm_model` (default
+        `gpt-4.1-nano`) with the Coal Creek tool definitions, runs any tool
+        calls through `CoalCreekFunctionDispatcher` and the code gates in
+        `_execute_tool`, and yields text as it arrives so TTS can start on the
+        first phrase. `call_state` is re-injected as facts every round.
+
+        This docstring used to say the reply came from ADKOrchestrator's
+        `query_stream`. It has not since the conversational driver moved to
+        OpenAI after benchmarking under the real ~9,500-token prompt with 12
+        tools; ADK/Gemini remains only as an optional background cold path
+        (`fire_adk_cold_path`) and as the Google-hackathon harness.
         """
         if not history:
             return
