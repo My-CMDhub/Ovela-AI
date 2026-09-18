@@ -60,6 +60,7 @@ scripts/*.py
 !scripts/eval_identity.py
 !scripts/probe_asr_confidence.py
 !scripts/replay_conversation.py
+!scripts/bench_llm.py
 
 # Local documentation
 redeploy-guide.md
