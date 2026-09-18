@@ -214,3 +214,44 @@ async def test_a_booking_found_by_phone_alone_arrives_without_the_guests_identit
     blob = str(result)
     for secret in ("Dhruv", "Patel", "dhruv.patel", "+61481131771"):
         assert secret not in blob, f"leaked {secret!r} before the caller identified themselves"
+
+
+# ── A number someone SAYS is not caller ID ──────────────────────────────────
+# Regression guard, green on arrival. A replay caught the model inventing a
+# phone number for lookup_booking on the first turn. Caller ID proves the
+# handset; a number spoken on the call, or invented, proves nothing — and the
+# handler's privacy refusal already keeps such a lookup from returning anyone
+# else's booking. This pins that down so a refactor of the lookup steps
+# cannot quietly reopen it.
+
+def _db_with_stranger_on(phone: str):
+    stranger = dict(BOOKING, guest_name="Priya Raman", booking_reference="CC-76819",
+                    guest_phone=phone, guest_email="priya@example.com")
+
+    # The real lookup normalises what it is given (services.db.bookings), so
+    # the fake must too, or it tests a stricter database than the one we have.
+    from services.db.bookings import normalise_lookup_value
+
+    async def lookup(**kw):
+        said = kw.get("phone")
+        return [stranger] if said and normalise_lookup_value("phone", said) == phone else []
+
+    db = MagicMock()
+    db.lookup_motel_reservation = AsyncMock(side_effect=lookup)
+    return db
+
+
+@pytest.mark.parametrize("args", [
+    {"phone": "0412 555 019"},                               # a number alone
+    {"phone": "0412 555 019", "guest_name": "Sarah Wilkinson"},  # and a name that does not fit
+])
+async def test_a_spoken_number_alone_never_opens_someone_elses_booking(args):
+    from services.voice_agent.functions.coalcreek_handlers import handle_lookup_booking
+
+    result = await handle_lookup_booking(args, _db_with_stranger_on("+61412555019"),
+                                         "+61400000123")
+
+    blob = str(result)
+    for secret in ("Priya", "Raman", "CC-76819", "priya@example.com", "queen"):
+        assert secret not in blob, f"leaked {secret!r} on a number nobody verified"
+
