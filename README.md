@@ -215,6 +215,8 @@ directionally clear, not yet a large sample.
 
 ## Known limits
 
+- **Not yet:** <!-- not-yet -->as fast when a tool runs · 1.1–1.7 s<!-- /not-yet -->. A reply that needs a tool
+  still waits on the tool's round trip. (dhruvpatel.net shows this line.)
 - **Identity is confirmed on one matching word of the name.** A relative on the
   same phone who shares the surname passes.
 - **The gates judge agreement from word patterns in the transcript**, not full
