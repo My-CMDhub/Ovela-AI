@@ -61,6 +61,7 @@ scripts/*.py
 !scripts/probe_asr_confidence.py
 !scripts/replay_conversation.py
 !scripts/bench_llm.py
+!scripts/call_trace.py
 
 # Local documentation
 redeploy-guide.md
