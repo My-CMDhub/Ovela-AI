@@ -37,6 +37,8 @@ from types import SimpleNamespace as NS
 from scripts import replay_conversation as rc
 from services.voice_agent.interruption import prune_conversation_history
 
+PAUSE_S = 0.0     # --pause; seconds between caller turns
+
 SIMULATED = {"create_booking_request", "update_guest_info", "resend_payment_link",
              "resend_payment_confirmation", "request_human_callback"}
 
@@ -164,16 +166,22 @@ async def run_scenario(sc, run, model, anthropic_key):
 
     # The live greeting warms the model with turn 1's own prefix.
     m, prefix, tools = await agent._request_prefix()
-    warm = await agent._openai.chat.completions.create(
-        model=m, messages=prefix + [{"role": "user", "content": "Hello?"}], tools=tools,
-        stream=True, max_completion_tokens=16)
-    async for _ in warm:
-        pass
+    try:
+        warm = await agent._openai.chat.completions.create(
+            model=m, messages=prefix + [{"role": "user", "content": "Hello?"}], tools=tools,
+            stream=True, max_completion_tokens=16)
+        async for _ in warm:
+            pass
+    except Exception as exc:                               # as live: a failed warm-up is not fatal
+        print(f"  warm-up failed: {type(exc).__name__}", flush=True)
 
     requests = []
     agent._openai.chat.completions.create = _timed(agent._openai.chat.completions.create, requests)
     history, turns = [], []
     for n, turn in enumerate(sc.turns, 1):
+        # Callers take seconds between turns; back-to-back turns push ~400k
+        # tokens/min, over nano's 200k limit, and the 429s land in the timings.
+        await asyncio.sleep(PAUSE_S)
         rng = random.Random(f"{sc.key}:{n}")                 # same cuts for every model
         interrupted = None
         if n > 1 and rng.random() < 0.3 and history and history[-1]["role"] == "assistant":
@@ -255,7 +263,11 @@ def main():
     ap.add_argument("--anthropic", action="store_true", help="run on Anthropic's native API")
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--out", help="write every turn as JSON")
-    asyncio.run(main_async(ap.parse_args()))
+    ap.add_argument("--pause", type=float, default=0.0, help="seconds between caller turns")
+    args = ap.parse_args()
+    global PAUSE_S
+    PAUSE_S = args.pause
+    asyncio.run(main_async(args))
 
 
 if __name__ == "__main__":
