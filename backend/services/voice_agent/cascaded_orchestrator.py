@@ -147,6 +147,9 @@ def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[st
     return phrases, text_buffer
 
 
+WARMUP_MAX_TOKENS = 64   # room for a short tool call; see _warm_llm
+
+
 class CascadedPipelineOrchestrator:
     """
     Orchestrates the decoupled STT -> LLM -> TTS pipeline for real-time Twilio calls.
@@ -1535,7 +1538,9 @@ class CascadedPipelineOrchestrator:
         logger.info(
             f"🎚️ [CascadedOrchestrator] voice_settings applied | voice={self.cartesia.voice_id} "
             f"| tts={self.cartesia.model_id} | eot={vs.get('eot_threshold')} "
-            f"| eot_timeout_ms={vs.get('eot_timeout_ms')}"
+            f"| eot_timeout_ms={vs.get('eot_timeout_ms')} "
+            f"| llm={vs.get('llm_model') or 'gpt-4.1-nano'} "
+            f"| reasoning={vs.get('reasoning_effort') or 'unset'}"
         )
 
     async def _ensure_call_context(self) -> None:
@@ -1615,6 +1620,19 @@ class CascadedPipelineOrchestrator:
         tools = [{"type": "function", "function": fn} for fn in get_coalcreek_functions()]
         return model, messages, tools
 
+    def _model_options(self) -> Dict[str, Any]:
+        """
+        Per-model request fields from `voice_settings`, sent on every request.
+
+        `reasoning_effort` is the one that matters: gpt-5.6-luna defaults to
+        *medium* reasoning, which thinks before its first token — measured
+        against nano only with it set to "none". Read from the tenant's
+        settings, like every other voice parameter, and sent only when set,
+        because gpt-4.1-nano rejects the field.
+        """
+        effort = ((self.tenant_config or {}).get("voice_settings") or {}).get("reasoning_effort")
+        return {"reasoning_effort": effort} if effort else {}
+
     async def _warm_llm(self) -> None:
         """
         Send turn 1's request once while the greeting plays, and throw the
@@ -1630,9 +1648,17 @@ class CascadedPipelineOrchestrator:
         started = time.perf_counter()
         try:
             model, messages, tools = await self._request_prefix()
+            # max_completion_tokens, not max_tokens: gpt-5.6-luna rejects the
+            # latter with a 400. And not 1: Luna answers "Hello?" by starting a
+            # tool call, and one that cannot finish inside the limit is also a
+            # 400 ("could not finish the message") — nano tolerated 1, a mock
+            # passed with 1, the live model did not. A failed warm-up only logs
+            # a warning, so either fault would quietly put turn 1 back to ~2 s.
+            # The prompt is what warms the cache; the reply is thrown away.
             reply = await self._openai.chat.completions.create(
-                model=model, tools=tools, max_tokens=1,
+                model=model, tools=tools, max_completion_tokens=WARMUP_MAX_TOKENS,
                 messages=messages + [{"role": "user", "content": "Hello?"}],
+                **self._model_options(),
             )
             details = getattr(reply.usage, "prompt_tokens_details", None)
             logger.info(
@@ -1844,6 +1870,7 @@ class CascadedPipelineOrchestrator:
                     # Adds a final chunk carrying usage; its `choices` is empty,
                     # which the guard below already skips.
                         stream_options={"include_usage": True},
+                        **self._model_options(),
                     )
                 except Exception:
                     if llm_span:

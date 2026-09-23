@@ -1055,7 +1055,35 @@ class TestGreetingWarmup:
         assert turn_kw["messages"][:len(prefix)] == prefix, "warm-up warmed a different prompt"
         assert warm_kw["tools"] == turn_kw["tools"]
         assert warm_kw["model"] == turn_kw["model"]
-        assert warm_kw["max_tokens"] == 1 and not warm_kw.get("stream")
+        assert warm_kw["max_completion_tokens"] >= 64 and not warm_kw.get("stream")   # 1 is a 400 on Luna
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("settings, sent", [
+        ({"llm_model": "gpt-5.6-luna", "reasoning_effort": "none"}, {"reasoning_effort": "none"}),
+        ({"llm_model": "gpt-4.1-nano"}, {}),
+    ])
+    async def test_reasoning_effort_reaches_warmup_and_turn_only_when_set(
+            self, orchestrator, settings, sent):
+        # gpt-5.6-luna defaults to medium reasoning, which delays its first
+        # token; it was only measured faster than nano with "none". nano
+        # rejects the field outright, so it must not be sent when unset.
+        self._wire(orchestrator, [])
+        orchestrator.tenant_config = {"voice_settings": settings}
+        warm = MagicMock()
+        warm.usage.prompt_tokens = 9000
+        warm.usage.prompt_tokens_details.cached_tokens = 0
+
+        async def one_round(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Hi.")
+
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=[warm, one_round()])
+        await orchestrator._warm_llm()
+        _ = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "I'm calling about my booking."}])]
+
+        for call in orchestrator._openai.chat.completions.create.await_args_list:
+            assert {k: v for k, v in call.kwargs.items() if k == "reasoning_effort"} == sent
+            assert call.kwargs["model"] == settings["llm_model"]
 
     @pytest.mark.asyncio
     async def test_a_failed_warmup_is_logged_not_raised(self, orchestrator):
