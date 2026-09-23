@@ -62,6 +62,7 @@ scripts/*.py
 !scripts/replay_conversation.py
 !scripts/bench_llm.py
 !scripts/call_trace.py
+!scripts/turn_gaps.py
 
 # Local documentation
 redeploy-guide.md

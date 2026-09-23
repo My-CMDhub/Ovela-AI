@@ -10,6 +10,13 @@ Adds no logging. It reads what the call already left behind and joins it:
     long the model took to first token, how long a tool ran, and the gap
     between the first token and the first audio chunk. Only with --sentry.
 
+Per turn it also counts Flux's negotiation before the turn was called
+(`eager_eot`, `turn_resumed`), the backchannels held while the agent spoke,
+and marks `caller_not_done` when the caller carried on — the turn was dropped
+before reaching the model (`superseded`), or they "barged in" within
+EARLY_BARGE_MS of the turn being called. That is the log's view of an early answer. `scripts/turn_gaps.py` is the
+audio's view, and the only one that knows the caller's real last word.
+
 What it cannot tell you, because nothing records it:
   * when the caller REALLY stopped talking. `caller_stopped_ms` is when
     Deepgram Flux decided the turn had ended, which trails the last word by
@@ -44,8 +51,16 @@ EVENTS = (
     ("llm", re.compile(r"api\.openai\.com/v1/chat/completions \"HTTP/[\d.]+ 200 OK\"")),
     ("tool", re.compile(r"Tool call: (\w+)\(")),
     ("barge", re.compile(r"Barge-in triggered \((\w+)\)")),
+    # Flux's turn negotiation. Each eager guess is a draft stage 1 would start;
+    # each resume is one it would throw away — the ratio bounds its cost.
+    ("eager", re.compile(r"EagerEndOfTurn received")),
+    ("resumed", re.compile(r"TurnResumed — caller is still talking")),
+    ("backchannel", re.compile(r"Backchannel — letting the agent finish: (.*)$")),
     ("end", re.compile(r"Transcript saved \| (CA[0-9a-f]+)")),
 )
+
+
+EARLY_BARGE_MS = 2500    # caller "interrupts" this soon after the turn was called: they weren't done
 
 
 def parse_log(text):
@@ -97,18 +112,30 @@ def build(events, sentry=None):
     trace = {"call_sid": call_sid, "started_at": datetime.fromtimestamp(t0).isoformat(),
              "warm_up_ms": None, "turns": []}
     turn = None
+    negotiation = {"eager_eot": 0, "turn_resumed": 0}    # belongs to the turn it precedes
     for kind, when, value in events[start + 1:]:
         ms = round((when - t0) * 1000)
         if kind == "call":
             break
-        if kind == "warm":
+        if kind in ("eager", "resumed"):
+            negotiation["eager_eot" if kind == "eager" else "turn_resumed"] += 1
+        elif kind == "backchannel":
+            if turn is not None:
+                turn["backchannels_held"].append({"at_ms": ms, "said": value})
+        elif kind == "warm":
             trace["warm_up_ms"] = int(value)
         elif kind == "greeting":
             trace["greeting_ms"] = ms
         elif kind == "eot":
             turn = {"turn": len(trace["turns"]) + 1, "caller_stopped_ms": ms,
                     "caller_said": value, "model_returned_ms": [], "tools": [],
-                    "barge_in": None, "audio_started_ms": None}
+                    "barge_in": None, "audio_started_ms": None,
+                    "backchannels_held": [], **negotiation}
+            negotiation = {"eager_eot": 0, "turn_resumed": 0}
+            if trace["turns"] and not trace["turns"][-1]["model_returned_ms"]:
+                # the previous turn never reached the model: Flux called it over,
+                # the caller carried on, and the worker dropped it for this one
+                trace["turns"][-1]["superseded"] = True
             trace["turns"].append(turn)
         elif turn is None:
             continue            # before the first turn: the greeting's own round
@@ -127,6 +154,13 @@ def build(events, sentry=None):
             trace["ended_ms"] = ms
 
     for i, t in enumerate(trace["turns"]):
+        barge = t["barge_in"]
+        # 20 Sep, turn 3: Flux called "...family suite for four people?" over,
+        # the caller went on "checking in Friday..." and "barged in" 1.56 s
+        # later — finishing their own sentence. A real interruption came 7.6 s in.
+        # ponytail: fixed window; tune it against turn_gaps.py's audio verdicts.
+        if t.get("superseded") or (barge and barge["detected_ms"] - t["caller_stopped_ms"] < EARLY_BARGE_MS):
+            t["caller_not_done"] = True
         s = (sentry or [])[i] if sentry and i < len(sentry) else {}
         span1, span3 = s.get("speech_end_to_first_token_ms"), s.get("first_token_to_first_audio_ms")
         if span1 is not None and span3 is not None:
@@ -167,5 +201,27 @@ def main():
     print(json.dumps(build(events, spans), indent=2))
 
 
+def _selfcheck():
+    stamp = "2026-09-20T05:48:{:06.3f}+00:00 app[web.1]: "
+    lines = [(0.0, "Voice webhook from +61 CallSid: CAabc123"),
+             (5.0, "⚡ [CascadedOrchestrator] EagerEndOfTurn received. Pre-warming LLM..."),
+             (5.1, "🔄 [CascadedOrchestrator] TurnResumed — caller is still talking."),
+             (6.0, "🗣️ [CascadedOrchestrator] User finished turn: 'I need to change'"),
+             (6.4, "🗣️ [CascadedOrchestrator] User finished turn: 'my booking'"),
+             (6.9, 'POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"'),
+             (8.0, "🔇 [CascadedOrchestrator] Backchannel — letting the agent finish: 'Mhmm.'"),
+             (9.0, "🛑 [CascadedOrchestrator] Barge-in triggered (sustained_speech). Cutting audio!"),
+             (11.0, "🗣️ [CascadedOrchestrator] User finished turn: 'no, the suite'"),
+             (11.5, 'POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"'),
+             (12.0, "🛑 [CascadedOrchestrator] Barge-in triggered (sustained_speech). Cutting audio!")]
+    trace = build(parse_log("\n".join(stamp.format(s) + msg for s, msg in lines)))
+    first, second, third = trace["turns"]
+    assert (first["eager_eot"], first["turn_resumed"], first.get("caller_not_done")) == (1, 1, True), first
+    assert (second["eager_eot"], second.get("caller_not_done")) == (0, None), second   # barged 2.6 s in
+    assert second["backchannels_held"] == [{"at_ms": 8000, "said": "'Mhmm.'"}], second
+    assert third.get("caller_not_done") is True, third                                # barged 1.0 s in
+    print("selfcheck ok")
+
+
 if __name__ == "__main__":
-    main()
+    _selfcheck() if sys.argv[1:] == ["--selfcheck"] else main()
