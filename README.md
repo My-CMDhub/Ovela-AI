@@ -257,7 +257,4 @@ npm run dev
 
 ---
 
-Built by Dhruv Patel. Implementation was AI-assisted; the architecture,
-measurement, debugging and corrections were mine.
-
 <p align="center"><i>Ovela is not a finished answer to human conversation. It’s an ongoing attempt to understand it—one call, one interaction, and one lesson at a time. ✧</i></p>
