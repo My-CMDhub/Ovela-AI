@@ -63,6 +63,9 @@ scripts/*.py
 !scripts/bench_llm.py
 !scripts/call_trace.py
 !scripts/turn_gaps.py
+!scripts/flux_replay.py
+!scripts/bench_claude.py
+!scripts/pipeline_latency.py
 
 # Local documentation
 redeploy-guide.md

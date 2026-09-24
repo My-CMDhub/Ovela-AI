@@ -73,10 +73,19 @@ MULAW_BYTES_PER_SECOND = 8000.0
 # away. Cartesia at "normal" speed sits around 2.5.
 SPOKEN_WORDS_PER_SECOND = 2.5
 
-# Slack on top of the audio's own duration before giving up on Twilio's marks.
-# The wait exists so a long reply stays interruptible while it plays; the cap
-# exists so a dropped mark cannot leave the agent permanently deaf.
-PLAYBACK_DRAIN_GRACE_S = 2.0
+# Slack on top of the audio's own duration before the agent stands down. The
+# wait exists so a long reply stays interruptible while it plays. It was 2.0 s
+# when the wait followed Twilio's marks; it follows exact byte counts now, and
+# the only slack left to cover is network delay — measured on the 24 Sep call
+# as 0.24-0.87 s between sending audio and the caller hearing it. At 2.0 s,
+# six of seven "barge-ins" on that call fired after the agent had finished:
+# the caller was answering its question, and each one cut the question out of
+# the agent's own history ("Who is the").
+PLAYBACK_DRAIN_GRACE_S = 0.8
+
+# Sending audio to Twilio is not the caller hearing it: allow this much before
+# counting elapsed playback as heard (see trigger_barge_in).
+PLAYBACK_START_DELAY_S = 0.3
 
 
 # What the agent says, in code, when the model reaches for a tool without
@@ -145,6 +154,10 @@ def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[st
             break
             
     return phrases, text_buffer
+
+
+WARMUP_MAX_TOKENS = 64   # room for a short tool call; see _warm_llm
+MODEL_REQUEST_FIELDS = ("reasoning_effort", "service_tier")   # from voice_settings; see _model_options
 
 
 class CascadedPipelineOrchestrator:
@@ -379,7 +392,14 @@ class CascadedPipelineOrchestrator:
             self.history.append({"role": "assistant", "content": spoken})
         # Now prune targets the message it was always meant to: this one. A
         # confirmed index of zero drops it, which is right — nothing was heard.
+        # What was heard: the later of Twilio's marks and elapsed playback at
+        # the calibrated speaking rate. Marks alone lag — on 24 Sep the caller
+        # answered "Who is the booking under?" and the history kept "Who is the".
+        # Overshoot is bounded by the sentence round-back in the prune.
         confirmed_idx = self.mark_tracker.confirmed_index
+        if self._playback_started_at:
+            played_s = time.time() - self._playback_started_at - PLAYBACK_START_DELAY_S
+            confirmed_idx = max(confirmed_idx, int(max(0.0, played_s) * SPOKEN_WORDS_PER_SECOND))
         self.history = prune_conversation_history(self.history, confirmed_word_index=confirmed_idx)
         self.mark_tracker.reset()
 
@@ -1077,6 +1097,12 @@ class CascadedPipelineOrchestrator:
                 for task in (producer_task, receiver_task):
                     if not task.done():
                         task.cancel()
+            # Nothing was sent to Cartesia, so no `done` will ever come for this
+            # context. Waiting for it held a tool-only turn open for the full 15 s
+            # below — and a hang-up queued behind it with it (24 Sep: 11-12 s of
+            # silence after every goodbye).
+            elif total_words_sent == 0 and not receiver_task.done():
+                receiver_task.cancel()
 
             # These awaits are bounded. If Cartesia never emits `done` (e.g.
             # after a cancelled context) an unbounded await here would block the
@@ -1209,7 +1235,7 @@ class CascadedPipelineOrchestrator:
                         "🛑 [CascadedOrchestrator] Hangup aborted — user spoke during farewell"
                     )
                 else:
-                    await self._hangup_call()
+                    await self._call_owned(self._hangup_call())
 
             # A transfer is never aborted by barge-in WITHIN its own turn: the
             # caller asking again while the handoff line plays still wants the
@@ -1217,7 +1243,7 @@ class CascadedPipelineOrchestrator:
             if self._pending_transfer:
                 transfer_to, self._pending_transfer = self._pending_transfer, None
                 self._pending_turn = 0
-                await self._transfer_call(transfer_to)
+                await self._call_owned(self._transfer_call(transfer_to))
 
     async def _stop_audio_reader(self) -> None:
         """
@@ -1247,6 +1273,20 @@ class CascadedPipelineOrchestrator:
                 raise          # ours, not the reader's — see _abandon_current_turn
         except Exception:
             pass
+
+    @staticmethod
+    async def _call_owned(action) -> None:
+        """
+        Run a one-way call action (hang-up, transfer) to completion even if the
+        turn that started it is cancelled.
+
+        It used to run inside the turn, and the next thing the caller said
+        cancels the turn: 24 Sep, "Hello?" arrived 7 ms after "Hanging up call"
+        and killed the Twilio request mid-flight — no success line, no failure
+        line, and the line stayed open. The turn may stop waiting; the action
+        may not stop.
+        """
+        await asyncio.shield(asyncio.ensure_future(action))
 
     async def _hangup_call(self) -> None:
         """
@@ -1280,6 +1320,9 @@ class CascadedPipelineOrchestrator:
             logger.info("✅ [CascadedOrchestrator] Call terminated successfully")
             self.is_running = False
         except Exception as e:
+            # Done only when Twilio says so. Marked done up front, one failed
+            # attempt turned every later hang_up_call into a silent no-op.
+            self._hangup_triggered = False
             logger.error(f"🔴 [CascadedOrchestrator] Failed to hang up call: {e}")
             sentry_sdk.capture_exception(e)
 
@@ -1535,7 +1578,10 @@ class CascadedPipelineOrchestrator:
         logger.info(
             f"🎚️ [CascadedOrchestrator] voice_settings applied | voice={self.cartesia.voice_id} "
             f"| tts={self.cartesia.model_id} | eot={vs.get('eot_threshold')} "
-            f"| eot_timeout_ms={vs.get('eot_timeout_ms')}"
+            f"| eot_timeout_ms={vs.get('eot_timeout_ms')} "
+            f"| llm={vs.get('llm_model') or 'gpt-4.1-nano'} "
+            f"| reasoning={vs.get('reasoning_effort') or 'unset'} "
+            f"| tier={vs.get('service_tier') or 'unset'}"
         )
 
     async def _ensure_call_context(self) -> None:
@@ -1615,6 +1661,23 @@ class CascadedPipelineOrchestrator:
         tools = [{"type": "function", "function": fn} for fn in get_coalcreek_functions()]
         return model, messages, tools
 
+    def _model_options(self) -> Dict[str, Any]:
+        """
+        Per-model request fields from `voice_settings`, sent on every request.
+
+        `reasoning_effort`: gpt-5.6-luna defaults to *medium* reasoning, which
+        thinks before its first token — measured only with "none".
+        `service_tier`: "priority" (OpenAI's Fast mode, 2x price) took Luna's
+        first token from 636 to 535 ms p50 on Heroku (24 Sep, 3 passes).
+
+        Read from the tenant's settings, like every other voice parameter, and
+        each sent only when set: gpt-4.1-nano rejects reasoning_effort. An
+        explicit list, not a pass-through — a typo in the DB must not become
+        an unknown request field on every live turn.
+        """
+        vs = (self.tenant_config or {}).get("voice_settings") or {}
+        return {k: vs[k] for k in MODEL_REQUEST_FIELDS if vs.get(k)}
+
     async def _warm_llm(self) -> None:
         """
         Send turn 1's request once while the greeting plays, and throw the
@@ -1630,9 +1693,17 @@ class CascadedPipelineOrchestrator:
         started = time.perf_counter()
         try:
             model, messages, tools = await self._request_prefix()
+            # max_completion_tokens, not max_tokens: gpt-5.6-luna rejects the
+            # latter with a 400. And not 1: Luna answers "Hello?" by starting a
+            # tool call, and one that cannot finish inside the limit is also a
+            # 400 ("could not finish the message") — nano tolerated 1, a mock
+            # passed with 1, the live model did not. A failed warm-up only logs
+            # a warning, so either fault would quietly put turn 1 back to ~2 s.
+            # The prompt is what warms the cache; the reply is thrown away.
             reply = await self._openai.chat.completions.create(
-                model=model, tools=tools, max_tokens=1,
+                model=model, tools=tools, max_completion_tokens=WARMUP_MAX_TOKENS,
                 messages=messages + [{"role": "user", "content": "Hello?"}],
+                **self._model_options(),
             )
             details = getattr(reply.usage, "prompt_tokens_details", None)
             logger.info(
@@ -1825,6 +1896,7 @@ class CascadedPipelineOrchestrator:
             # with nothing said first is dead air for as long as the tool and
             # the next model round take — about a second at best.
             said_this_turn = False
+            ending_call = False
             for _round in range(3):
                 # Time the model wait separately from tool execution. Span 1
                 # is ~86% of a turn; without this split neither a human nor
@@ -1844,6 +1916,7 @@ class CascadedPipelineOrchestrator:
                     # Adds a final chunk carrying usage; its `choices` is empty,
                     # which the guard below already skips.
                         stream_options={"include_usage": True},
+                        **self._model_options(),
                     )
                 except Exception:
                     if llm_span:
@@ -1873,6 +1946,16 @@ class CascadedPipelineOrchestrator:
                         if llm_span:
                             llm_span.finish()
                             llm_span = None
+                        # OpenAI may serve a Fast-mode request at standard speed
+                        # when traffic ramps, and says so only in this field.
+                        # Paying 2x for a tier we did not get should be visible.
+                        asked = self._model_options().get("service_tier")
+                        served = getattr(event, "service_tier", None)
+                        if asked and served == "default":
+                            logger.warning(
+                                "🟡 [CascadedOrchestrator] Asked for service_tier=%s, "
+                                "served %s", asked, served,
+                            )
                     delta = event.choices[0].delta
                     if delta.content:
                         assistant_text += delta.content
@@ -1962,11 +2045,27 @@ class CascadedPipelineOrchestrator:
                         elif result.get("action") == "transfer" and result.get("transfer_to"):
                             self._pending_transfer = result["transfer_to"]
                             self._pending_turn = self._turn_id
+                        # The call is ending, so the line is ours to say.
+                        # gpt-5.6-luna calls hang_up_call without a word and
+                        # puts the goodbye in `farewell_message`, which nothing
+                        # spoke: 24 Sep, three silent "goodbyes" and a caller
+                        # asking "Hello?". nano happened to speak first.
+                        if result.get("action") in ("hangup", "transfer"):
+                            ending_call = True
+                            if not said_this_turn and result.get("message"):
+                                said_this_turn = True
+                                assistant_text += result["message"]
+                                yield result["message"]
                     messages.append({
                         "role": "tool",
                         "tool_call_id": call["id"],
                         "content": json.dumps(result, default=str)[:4000],
                     })
+                # Nothing more to ask the model once it has hung up or handed
+                # the caller to staff: another round only adds a second goodbye
+                # and a second of latency before the line closes.
+                if ending_call:
+                    return
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] LLM generation failed: {e}", exc_info=True)
             yield "I am checking those details right now. Just one moment please."

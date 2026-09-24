@@ -7,6 +7,7 @@ and Deepgram Flux v2 event orchestration.
 """
 
 import asyncio
+import time
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1055,7 +1056,59 @@ class TestGreetingWarmup:
         assert turn_kw["messages"][:len(prefix)] == prefix, "warm-up warmed a different prompt"
         assert warm_kw["tools"] == turn_kw["tools"]
         assert warm_kw["model"] == turn_kw["model"]
-        assert warm_kw["max_tokens"] == 1 and not warm_kw.get("stream")
+        assert warm_kw["max_completion_tokens"] >= 64 and not warm_kw.get("stream")   # 1 is a 400 on Luna
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("settings, sent", [
+        ({"llm_model": "gpt-5.6-luna", "reasoning_effort": "none"}, {"reasoning_effort": "none"}),
+        ({"llm_model": "gpt-5.6-luna", "reasoning_effort": "none", "service_tier": "priority"},
+         {"reasoning_effort": "none", "service_tier": "priority"}),
+        ({"llm_model": "gpt-4.1-nano"}, {}),
+        ({"llm_model": "gpt-4.1-nano", "temprature": 0.2}, {}),     # a DB typo is not a request field
+    ])
+    async def test_reasoning_effort_reaches_warmup_and_turn_only_when_set(
+            self, orchestrator, settings, sent):
+        # gpt-5.6-luna defaults to medium reasoning, which delays its first
+        # token; it was only measured faster than nano with "none". nano
+        # rejects the field outright, so it must not be sent when unset.
+        self._wire(orchestrator, [])
+        orchestrator.tenant_config = {"voice_settings": settings}
+        warm = MagicMock()
+        warm.usage.prompt_tokens = 9000
+        warm.usage.prompt_tokens_details.cached_tokens = 0
+
+        async def one_round(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Hi.")
+
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=[warm, one_round()])
+        await orchestrator._warm_llm()
+        _ = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "I'm calling about my booking."}])]
+
+        for call in orchestrator._openai.chat.completions.create.await_args_list:
+            assert {k: v for k, v in call.kwargs.items()
+                    if k in ("reasoning_effort", "service_tier", "temprature")} == sent
+            assert call.kwargs["model"] == settings["llm_model"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("served, warned", [("default", True), ("priority", False)])
+    async def test_a_downgraded_service_tier_is_logged(self, orchestrator, caplog, served, warned):
+        # Fast mode is 2x price; OpenAI may serve it at standard speed and say
+        # so only in the response's service_tier.
+        self._wire(orchestrator, [])
+        orchestrator.tenant_config = {"voice_settings": {
+            "llm_model": "gpt-5.6-luna", "reasoning_effort": "none", "service_tier": "priority"}}
+        event = TestCascadedPipelineOrchestrator._delta(content="Hi.")
+        event.service_tier = served
+
+        async def one_round(*_a, **_kw):
+            yield event
+
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=[one_round()])
+        with caplog.at_level("WARNING"):
+            _ = [c async for c in orchestrator._default_llm_callback(
+                [{"role": "user", "content": "Hi."}])]
+        assert ("served default" in caplog.text) is warned
 
     @pytest.mark.asyncio
     async def test_a_failed_warmup_is_logged_not_raised(self, orchestrator):
@@ -1146,3 +1199,141 @@ class TestToolAcknowledgement:
         first, second = (tool_acknowledgement("lookup_booking", n) for n in (0, 1))
         assert first != second
         assert tool_acknowledgement("update_guest_info", 0) == "One moment. "
+
+
+class TestCallEndingActions:
+    """
+    24 Sep, first call on gpt-5.6-luna: "No, that's all for today" -> the model
+    called hang_up_call without a word, the turn sat 11-12 s waiting for audio
+    that was never requested, and the caller's "Hello?" then cancelled the
+    Twilio hang-up mid-request. Three more goodbyes, and the caller hung up.
+    """
+
+    @staticmethod
+    def _hangup_delta():
+        tc = MagicMock()
+        tc.index, tc.id = 0, "call_0"
+        tc.function.name = "hang_up_call"
+        tc.function.arguments = '{"farewell_message": "Thanks for calling, goodbye."}'
+        return TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+    async def _run(self, orchestrator, first_round):
+        async def round_one(*_a, **_kw):
+            for d in first_round:
+                yield d
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Anything else?")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-5.6-luna"}}
+        orchestrator.dispatcher = MagicMock(caller_reservation=AsyncMock(return_value=[]))
+        orchestrator.dispatcher.execute = AsyncMock(
+            return_value={"action": "hangup", "message": "Thanks for calling, goodbye."})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()])
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "No, that's all for today."}])]
+        return chunks, orchestrator._openai.chat.completions.create.await_count
+
+    @pytest.mark.asyncio
+    async def test_a_silent_hangup_speaks_its_farewell_and_asks_no_more(self, orchestrator):
+        chunks, requests = await self._run(orchestrator, [self._hangup_delta()])
+        assert "".join(chunks) == "Thanks for calling, goodbye."
+        assert requests == 1, "a second round only adds a second goodbye before the line closes"
+        assert orchestrator._pending_hangup is True
+
+    @pytest.mark.asyncio
+    async def test_a_goodbye_the_model_said_is_not_said_twice(self, orchestrator):
+        chunks, requests = await self._run(orchestrator, [
+            TestCascadedPipelineOrchestrator._delta(content="Goodbye! "), self._hangup_delta()])
+        assert "".join(chunks) == "Goodbye! "
+        assert requests == 1
+
+    @staticmethod
+    def _twilio(post):
+        client = MagicMock()
+        client.post = post
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        return patch("services.voice_agent.cascaded_orchestrator.httpx.AsyncClient",
+                     return_value=ctx)
+
+    @pytest.mark.asyncio
+    async def test_the_hangup_survives_the_turn_being_cancelled(self, orchestrator):
+        orchestrator.call_sid = "CA1"
+        done = []
+
+        async def slow_post(*_a, **_kw):
+            await asyncio.sleep(0.2)
+            done.append(True)
+            return MagicMock(raise_for_status=MagicMock())
+
+        with self._twilio(slow_post):
+            turn = asyncio.create_task(orchestrator._call_owned(orchestrator._hangup_call()))
+            await asyncio.sleep(0.05)
+            turn.cancel()                       # the caller said "Hello?"
+            await asyncio.sleep(0.3)
+        assert done and orchestrator.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_a_failed_hangup_can_be_tried_again(self, orchestrator):
+        orchestrator.call_sid = "CA1"
+        post = AsyncMock(side_effect=[RuntimeError("twilio 500"),
+                                      MagicMock(raise_for_status=MagicMock())])
+        with self._twilio(post):
+            await orchestrator._hangup_call()
+            await orchestrator._hangup_call()
+        assert post.await_count == 2 and orchestrator.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_a_turn_that_says_nothing_does_not_wait_for_audio(self, orchestrator):
+        async def silent_turn(history):
+            return
+            yield                                        # an async generator with no text
+
+        async def cartesia_never_answers():
+            await asyncio.Event().wait()                 # no text sent, so no `done` comes
+            yield {}
+
+        orchestrator.llm_callback = silent_turn
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+        orchestrator.cartesia.receive_audio_events = cartesia_never_answers
+        orchestrator._turn_id += 1
+        started = time.monotonic()
+        await asyncio.wait_for(orchestrator._run_parallel_streaming_pipeline(
+            orchestrator._turn_id, context_id="ctx_silent"), timeout=5)
+        assert time.monotonic() - started < 1.0, "a word-less turn waited for audio"
+
+
+class TestWhatTheCallerHeard:
+    """
+    24 Sep, real call on the recording: the log counted seven barge-ins, the
+    recording one. Six fired 0.3-3.2 s after the agent's audio had ended —
+    the caller answering its question inside a 2 s grace — and each cut the
+    agent's own history back to what Twilio's marks had confirmed: "Who is the".
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_agent_stands_down_soon_after_its_audio_ends(self, orchestrator):
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator._turn_id = 1
+        orchestrator._audio_bytes_sent = 8000                  # exactly one second of audio
+        orchestrator._playback_started_at = time.time() - 2.0  # it ended one second ago
+        started = time.monotonic()
+        await orchestrator._await_playback(interrupted=False, turn_id=1)
+        assert time.monotonic() - started < 0.1, "still 'speaking' a second after the audio ended"
+
+    @pytest.mark.asyncio
+    async def test_a_reply_played_out_is_kept_whole_when_the_caller_cuts_in(self, orchestrator):
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.cartesia.cancel_stream = AsyncMock()
+        orchestrator.twilio_ws.send_text = AsyncMock()
+        orchestrator._current_turn_parts = ["Who is the booking under?"]
+        orchestrator.mark_tracker.confirmed_index = 3          # the marks lagged
+        orchestrator._playback_started_at = time.time() - 3.0  # 3 s of a ~2 s question played
+        await orchestrator.trigger_barge_in(reason="sustained_speech")
+        assert orchestrator.history[-1]["content"] == "Who is the booking under?"

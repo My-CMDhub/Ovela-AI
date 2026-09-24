@@ -91,8 +91,12 @@ def sentry_turns(period, t0, t_end):
     turns = []
     for spans in sorted(by_trace.values(), key=lambda s: min(x["timestamp"] for x in s)):
         durations = {s.get("span.description"): s.get("span.duration", 0) for s in spans}
+        # The span name carries the model, so match the prefix: a literal
+        # "(gpt-4.1-nano)" went blank the day the model changed.
+        round1 = next((v for k, v in durations.items()
+                       if k and k.startswith("LLM round 1: request -> first token")), None)
         turns.append({
-            "model_to_first_token_ms": durations.get("LLM round 1: request -> first token (gpt-4.1-nano)"),
+            "model_to_first_token_ms": round1,
             "speech_end_to_first_token_ms": durations.get("Span 1: User Speech Ended -> First Token Yielded"),
             "first_token_to_first_audio_ms": durations.get(
                 "Span 3: First Token Yielded -> Cartesia First Audio Chunk Ingestion"),
