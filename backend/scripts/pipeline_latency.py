@@ -29,6 +29,7 @@ Usage (from backend/):
 import argparse
 import asyncio
 import json
+import logging
 import os
 import random
 import time
@@ -137,9 +138,15 @@ def _timed(create, requests):
     """Wrap chat.completions.create so every request's time to first event is kept."""
     async def timed_create(*a, **kw):
         t0 = time.perf_counter()
-        stream = await create(*a, **kw)
-        record = {"ttft_ms": None}
+        record = {"ttft_ms": None, "failed": None}
         requests.append(record)
+        try:
+            stream = await create(*a, **kw)
+        except Exception as exc:
+            # The orchestrator turns this into its "checking those details"
+            # fallback line, so without this a 429 would look like a fast turn.
+            record["failed"] = type(exc).__name__
+            raise
 
         async def events():
             async for ev in stream:
@@ -164,16 +171,21 @@ async def run_scenario(sc, run, model, anthropic_key):
         return _simulated(name, args) if name in SIMULATED else await real_execute(name, args, context)
     agent.dispatcher.execute = execute
 
-    # The live greeting warms the model with turn 1's own prefix.
-    m, prefix, tools = await agent._request_prefix()
-    try:
-        warm = await agent._openai.chat.completions.create(
-            model=m, messages=prefix + [{"role": "user", "content": "Hello?"}], tools=tools,
-            stream=True, max_completion_tokens=16)
-        async for _ in warm:
-            pass
-    except Exception as exc:                               # as live: a failed warm-up is not fatal
-        print(f"  warm-up failed: {type(exc).__name__}", flush=True)
+    # The live greeting warms the model with turn 1's own prefix. For OpenAI
+    # models that is the orchestrator's own _warm_llm, already started by the
+    # call context — await it rather than send a second one. The Claude adapter
+    # replaces the client after that, so it gets one warm-up of its own.
+    if anthropic_key:
+        m, prefix, tools = await agent._request_prefix()
+        try:
+            async for _ in await agent._openai.chat.completions.create(
+                    model=m, messages=prefix + [{"role": "user", "content": "Hello?"}],
+                    tools=tools, max_completion_tokens=64):
+                pass
+        except Exception as exc:                           # as live: a failed warm-up is not fatal
+            print(f"  warm-up failed: {type(exc).__name__}", flush=True)
+    elif agent._warm_task:
+        await agent._warm_task
 
     requests = []
     agent._openai.chat.completions.create = _timed(agent._openai.chat.completions.create, requests)
@@ -206,6 +218,7 @@ async def run_scenario(sc, run, model, anthropic_key):
             "first_words_ms": round(first * 1000) if first else None,
             "full_reply_ms": round((time.perf_counter() - t0) * 1000),
             "model_ttft_ms": [r["ttft_ms"] for r in requests[before_req:]],
+            "failed_requests": [r["failed"] for r in requests[before_req:] if r["failed"]],
             "tools": tools_used[before_tools:],
             "privacy_flags": [b for b in turn.never_says if rc._mentions(reply, b)],
             "reply": reply, "error": error,
@@ -216,6 +229,16 @@ async def run_scenario(sc, run, model, anthropic_key):
 def _pct(xs, p):
     xs = sorted(xs)
     return xs[min(len(xs) - 1, int(p * len(xs)))] if xs else None
+
+
+def stats(model, run, rows):
+    ttft = [t for r in rows for t in r["model_ttft_ms"] if t is not None]
+    heard = [r["first_words_ms"] for r in rows if r["first_words_ms"]]
+    return {"model": model, "pass": run, "turns": len(rows), "requests": len(ttft),
+            "ttft_p50": _pct(ttft, .5), "ttft_p75": _pct(ttft, .75), "ttft_p90": _pct(ttft, .9),
+            "ttft_p99": _pct(ttft, .99), "heard_p50": _pct(heard, .5), "heard_p90": _pct(heard, .9),
+            "failed_requests": sum(len(r["failed_requests"]) for r in rows),
+            "privacy_flags": sum(len(r["privacy_flags"]) for r in rows)}
 
 
 def summarise(model, rows):
@@ -236,6 +259,7 @@ def summarise(model, rows):
     print(f"  full reply, with tools         {line(tool)} ms")
     print(f"  turns {len(rows)}, interrupted {sum(1 for r in rows if r['interrupted_after_words'])}, "
           f"errors {sum(1 for r in rows if r['error'])}, "
+          f"failed requests {sum(len(r['failed_requests']) for r in rows)}, "
           f"privacy flags {sum(len(r['privacy_flags']) for r in rows)}")
     print(f"  tools chosen {dict(sorted(counts.items()))}")
 
@@ -245,11 +269,15 @@ async def main_async(args):
     rc.MODEL_OVERRIDE.update(model=args.model, extra=json.loads(args.extra),
                              base_url=None, key_env=None)
     key = os.environ["ANTHROPIC_API_KEY"] if args.anthropic else None
+    logging.disable(logging.INFO)                          # results, not the call's INFO chatter
     rows = []
     for run in range(1, args.runs + 1):
-        for sc in rc.SCENARIOS:
-            rows += await run_scenario(sc, run, args.model, key)
-        print(f"run {run}/{args.runs} done", flush=True)
+        this_pass = []
+        for sc in [s for s in rc.SCENARIOS if not args.only or s.key in args.only.split(",")]:
+            this_pass += await run_scenario(sc, run, args.model, key)
+        rows += this_pass
+        # One line per pass, so a run cut short still leaves its numbers behind.
+        print("PASS " + json.dumps(stats(args.model, run, this_pass)), flush=True)
     if args.out:
         with open(args.out, "w") as fh:
             json.dump(rows, fh, indent=1)
@@ -264,6 +292,7 @@ def main():
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--out", help="write every turn as JSON")
     ap.add_argument("--pause", type=float, default=0.0, help="seconds between caller turns")
+    ap.add_argument("--only", help="comma-separated scenario keys (default: all)")
     args = ap.parse_args()
     global PAUSE_S
     PAUSE_S = args.pause
