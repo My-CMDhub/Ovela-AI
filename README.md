@@ -9,7 +9,7 @@
 
   [![Stack](https://img.shields.io/badge/stack-Python%20·%20FastAPI%20·%20asyncio-3776AB?style=flat-square)](#architecture)
   [![Voice](https://img.shields.io/badge/voice-Twilio%20·%20Deepgram%20Flux%20·%20Cartesia-6b46c1?style=flat-square)](#architecture)
-  [![LLM](https://img.shields.io/badge/LLM-gpt--4.1--nano-10a37f?style=flat-square)](#decisions-that-make-it-different)
+  [![LLM](https://img.shields.io/badge/LLM-gpt-10a37f?style=flat-square)](#decisions-that-make-it-different)
   [![Reply](https://img.shields.io/badge/reply%20(no%20tool)-0.76--0.91%20s%20·%202%20calls-success?style=flat-square)](#measurements)
   [![Tests](https://img.shields.io/badge/tests-1%2C934%20passing-success?style=flat-square)](#running-it)
   [![Status](https://img.shields.io/badge/status-personal%20project-lightgrey?style=flat-square)](#why-this-exists)
@@ -63,7 +63,7 @@ flowchart LR
         Q[(turn queue)]:::store
         W[turn worker]:::core
         S[Call state<br/>settled · heard · perishable]:::store
-        L[gpt-4.1-nano]:::core
+        L[gpt]:::core
         G{Code gates}:::gate
     end
 
@@ -74,7 +74,7 @@ flowchart LR
     X --> A[(Appwrite)]:::store
     X --> P[Stripe · test mode]:::store
     X -->|results| S
-    L -->|streamed text| K[Cartesia Sonic-3]:::voice -->|audio| O
+    L -->|streamed text| K[Cartesia]:::voice -->|audio| O
 ```
 
 | Layer | Technology | Job |
@@ -83,8 +83,8 @@ flowchart LR
 | Orchestrator | Python, FastAPI, asyncio on Heroku | Turn-taking, interruption, call state, tool gating, tracing |
 | Speech-to-text | Deepgram Flux | Streaming transcript and semantic end-of-turn |
 | Barge-in | webrtcvad (local) | Detects the caller speaking over the agent |
-| Reasoning | OpenAI `gpt-4.1-nano` | Replies and tool calls, streamed |
-| Text-to-speech | Cartesia `sonic-3` | Speech synthesis, starting on the first phrase |
+| Reasoning | OpenAI `gpt` | Replies and tool calls, streamed |
+| Text-to-speech | Cartesia | Speech synthesis, starting on the first phrase |
 | Data | Appwrite | Bookings, tenant configuration, call transcripts |
 | Web | Next.js | Public site and staff dashboard |
 
@@ -172,8 +172,8 @@ call each side.
 Speed is benchmarked under the production prompt (~8,900 tokens, 12 tools) from
 the server's own region, never on a bare "hello"
 ([`bench_llm.py`](backend/scripts/bench_llm.py)). Re-run in September 2026,
-`gpt-4.1-nano` and `gpt-4o-mini` both reach a first token in about **0.5 s**, so
-speed no longer separates them; `gpt-4.1-nano` stays on cost, and a switch would
+`gpt` and `gpt` both reach a first token in about **0.5 s**, so
+speed no longer separates them; `gpt` stays on cost, and a switch would
 need a scored behaviour eval rather than a latency number.
 
 ## What works today
