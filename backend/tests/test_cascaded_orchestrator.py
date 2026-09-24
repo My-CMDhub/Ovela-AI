@@ -1307,3 +1307,33 @@ class TestCallEndingActions:
         await asyncio.wait_for(orchestrator._run_parallel_streaming_pipeline(
             orchestrator._turn_id, context_id="ctx_silent"), timeout=5)
         assert time.monotonic() - started < 1.0, "a word-less turn waited for audio"
+
+
+class TestWhatTheCallerHeard:
+    """
+    24 Sep, real call on the recording: the log counted seven barge-ins, the
+    recording one. Six fired 0.3-3.2 s after the agent's audio had ended —
+    the caller answering its question inside a 2 s grace — and each cut the
+    agent's own history back to what Twilio's marks had confirmed: "Who is the".
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_agent_stands_down_soon_after_its_audio_ends(self, orchestrator):
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator._turn_id = 1
+        orchestrator._audio_bytes_sent = 8000                  # exactly one second of audio
+        orchestrator._playback_started_at = time.time() - 2.0  # it ended one second ago
+        started = time.monotonic()
+        await orchestrator._await_playback(interrupted=False, turn_id=1)
+        assert time.monotonic() - started < 0.1, "still 'speaking' a second after the audio ended"
+
+    @pytest.mark.asyncio
+    async def test_a_reply_played_out_is_kept_whole_when_the_caller_cuts_in(self, orchestrator):
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.cartesia.cancel_stream = AsyncMock()
+        orchestrator.twilio_ws.send_text = AsyncMock()
+        orchestrator._current_turn_parts = ["Who is the booking under?"]
+        orchestrator.mark_tracker.confirmed_index = 3          # the marks lagged
+        orchestrator._playback_started_at = time.time() - 3.0  # 3 s of a ~2 s question played
+        await orchestrator.trigger_barge_in(reason="sustained_speech")
+        assert orchestrator.history[-1]["content"] == "Who is the booking under?"

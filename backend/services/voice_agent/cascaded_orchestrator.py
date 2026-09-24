@@ -73,10 +73,19 @@ MULAW_BYTES_PER_SECOND = 8000.0
 # away. Cartesia at "normal" speed sits around 2.5.
 SPOKEN_WORDS_PER_SECOND = 2.5
 
-# Slack on top of the audio's own duration before giving up on Twilio's marks.
-# The wait exists so a long reply stays interruptible while it plays; the cap
-# exists so a dropped mark cannot leave the agent permanently deaf.
-PLAYBACK_DRAIN_GRACE_S = 2.0
+# Slack on top of the audio's own duration before the agent stands down. The
+# wait exists so a long reply stays interruptible while it plays. It was 2.0 s
+# when the wait followed Twilio's marks; it follows exact byte counts now, and
+# the only slack left to cover is network delay — measured on the 24 Sep call
+# as 0.24-0.87 s between sending audio and the caller hearing it. At 2.0 s,
+# six of seven "barge-ins" on that call fired after the agent had finished:
+# the caller was answering its question, and each one cut the question out of
+# the agent's own history ("Who is the").
+PLAYBACK_DRAIN_GRACE_S = 0.8
+
+# Sending audio to Twilio is not the caller hearing it: allow this much before
+# counting elapsed playback as heard (see trigger_barge_in).
+PLAYBACK_START_DELAY_S = 0.3
 
 
 # What the agent says, in code, when the model reaches for a tool without
@@ -383,7 +392,14 @@ class CascadedPipelineOrchestrator:
             self.history.append({"role": "assistant", "content": spoken})
         # Now prune targets the message it was always meant to: this one. A
         # confirmed index of zero drops it, which is right — nothing was heard.
+        # What was heard: the later of Twilio's marks and elapsed playback at
+        # the calibrated speaking rate. Marks alone lag — on 24 Sep the caller
+        # answered "Who is the booking under?" and the history kept "Who is the".
+        # Overshoot is bounded by the sentence round-back in the prune.
         confirmed_idx = self.mark_tracker.confirmed_index
+        if self._playback_started_at:
+            played_s = time.time() - self._playback_started_at - PLAYBACK_START_DELAY_S
+            confirmed_idx = max(confirmed_idx, int(max(0.0, played_s) * SPOKEN_WORDS_PER_SECOND))
         self.history = prune_conversation_history(self.history, confirmed_word_index=confirmed_idx)
         self.mark_tracker.reset()
 
