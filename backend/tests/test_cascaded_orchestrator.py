@@ -7,6 +7,7 @@ and Deepgram Flux v2 event orchestration.
 """
 
 import asyncio
+import time
 import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1198,3 +1199,111 @@ class TestToolAcknowledgement:
         first, second = (tool_acknowledgement("lookup_booking", n) for n in (0, 1))
         assert first != second
         assert tool_acknowledgement("update_guest_info", 0) == "One moment. "
+
+
+class TestCallEndingActions:
+    """
+    24 Sep, first call on gpt-5.6-luna: "No, that's all for today" -> the model
+    called hang_up_call without a word, the turn sat 11-12 s waiting for audio
+    that was never requested, and the caller's "Hello?" then cancelled the
+    Twilio hang-up mid-request. Three more goodbyes, and the caller hung up.
+    """
+
+    @staticmethod
+    def _hangup_delta():
+        tc = MagicMock()
+        tc.index, tc.id = 0, "call_0"
+        tc.function.name = "hang_up_call"
+        tc.function.arguments = '{"farewell_message": "Thanks for calling, goodbye."}'
+        return TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+    async def _run(self, orchestrator, first_round):
+        async def round_one(*_a, **_kw):
+            for d in first_round:
+                yield d
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="Anything else?")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-5.6-luna"}}
+        orchestrator.dispatcher = MagicMock(caller_reservation=AsyncMock(return_value=[]))
+        orchestrator.dispatcher.execute = AsyncMock(
+            return_value={"action": "hangup", "message": "Thanks for calling, goodbye."})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()])
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "No, that's all for today."}])]
+        return chunks, orchestrator._openai.chat.completions.create.await_count
+
+    @pytest.mark.asyncio
+    async def test_a_silent_hangup_speaks_its_farewell_and_asks_no_more(self, orchestrator):
+        chunks, requests = await self._run(orchestrator, [self._hangup_delta()])
+        assert "".join(chunks) == "Thanks for calling, goodbye."
+        assert requests == 1, "a second round only adds a second goodbye before the line closes"
+        assert orchestrator._pending_hangup is True
+
+    @pytest.mark.asyncio
+    async def test_a_goodbye_the_model_said_is_not_said_twice(self, orchestrator):
+        chunks, requests = await self._run(orchestrator, [
+            TestCascadedPipelineOrchestrator._delta(content="Goodbye! "), self._hangup_delta()])
+        assert "".join(chunks) == "Goodbye! "
+        assert requests == 1
+
+    @staticmethod
+    def _twilio(post):
+        client = MagicMock()
+        client.post = post
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        return patch("services.voice_agent.cascaded_orchestrator.httpx.AsyncClient",
+                     return_value=ctx)
+
+    @pytest.mark.asyncio
+    async def test_the_hangup_survives_the_turn_being_cancelled(self, orchestrator):
+        orchestrator.call_sid = "CA1"
+        done = []
+
+        async def slow_post(*_a, **_kw):
+            await asyncio.sleep(0.2)
+            done.append(True)
+            return MagicMock(raise_for_status=MagicMock())
+
+        with self._twilio(slow_post):
+            turn = asyncio.create_task(orchestrator._call_owned(orchestrator._hangup_call()))
+            await asyncio.sleep(0.05)
+            turn.cancel()                       # the caller said "Hello?"
+            await asyncio.sleep(0.3)
+        assert done and orchestrator.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_a_failed_hangup_can_be_tried_again(self, orchestrator):
+        orchestrator.call_sid = "CA1"
+        post = AsyncMock(side_effect=[RuntimeError("twilio 500"),
+                                      MagicMock(raise_for_status=MagicMock())])
+        with self._twilio(post):
+            await orchestrator._hangup_call()
+            await orchestrator._hangup_call()
+        assert post.await_count == 2 and orchestrator.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_a_turn_that_says_nothing_does_not_wait_for_audio(self, orchestrator):
+        async def silent_turn(history):
+            return
+            yield                                        # an async generator with no text
+
+        async def cartesia_never_answers():
+            await asyncio.Event().wait()                 # no text sent, so no `done` comes
+            yield {}
+
+        orchestrator.llm_callback = silent_turn
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+        orchestrator.cartesia.receive_audio_events = cartesia_never_answers
+        orchestrator._turn_id += 1
+        started = time.monotonic()
+        await asyncio.wait_for(orchestrator._run_parallel_streaming_pipeline(
+            orchestrator._turn_id, context_id="ctx_silent"), timeout=5)
+        assert time.monotonic() - started < 1.0, "a word-less turn waited for audio"

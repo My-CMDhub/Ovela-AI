@@ -1081,6 +1081,12 @@ class CascadedPipelineOrchestrator:
                 for task in (producer_task, receiver_task):
                     if not task.done():
                         task.cancel()
+            # Nothing was sent to Cartesia, so no `done` will ever come for this
+            # context. Waiting for it held a tool-only turn open for the full 15 s
+            # below — and a hang-up queued behind it with it (24 Sep: 11-12 s of
+            # silence after every goodbye).
+            elif total_words_sent == 0 and not receiver_task.done():
+                receiver_task.cancel()
 
             # These awaits are bounded. If Cartesia never emits `done` (e.g.
             # after a cancelled context) an unbounded await here would block the
@@ -1213,7 +1219,7 @@ class CascadedPipelineOrchestrator:
                         "🛑 [CascadedOrchestrator] Hangup aborted — user spoke during farewell"
                     )
                 else:
-                    await self._hangup_call()
+                    await self._call_owned(self._hangup_call())
 
             # A transfer is never aborted by barge-in WITHIN its own turn: the
             # caller asking again while the handoff line plays still wants the
@@ -1221,7 +1227,7 @@ class CascadedPipelineOrchestrator:
             if self._pending_transfer:
                 transfer_to, self._pending_transfer = self._pending_transfer, None
                 self._pending_turn = 0
-                await self._transfer_call(transfer_to)
+                await self._call_owned(self._transfer_call(transfer_to))
 
     async def _stop_audio_reader(self) -> None:
         """
@@ -1251,6 +1257,20 @@ class CascadedPipelineOrchestrator:
                 raise          # ours, not the reader's — see _abandon_current_turn
         except Exception:
             pass
+
+    @staticmethod
+    async def _call_owned(action) -> None:
+        """
+        Run a one-way call action (hang-up, transfer) to completion even if the
+        turn that started it is cancelled.
+
+        It used to run inside the turn, and the next thing the caller said
+        cancels the turn: 24 Sep, "Hello?" arrived 7 ms after "Hanging up call"
+        and killed the Twilio request mid-flight — no success line, no failure
+        line, and the line stayed open. The turn may stop waiting; the action
+        may not stop.
+        """
+        await asyncio.shield(asyncio.ensure_future(action))
 
     async def _hangup_call(self) -> None:
         """
@@ -1284,6 +1304,9 @@ class CascadedPipelineOrchestrator:
             logger.info("✅ [CascadedOrchestrator] Call terminated successfully")
             self.is_running = False
         except Exception as e:
+            # Done only when Twilio says so. Marked done up front, one failed
+            # attempt turned every later hang_up_call into a silent no-op.
+            self._hangup_triggered = False
             logger.error(f"🔴 [CascadedOrchestrator] Failed to hang up call: {e}")
             sentry_sdk.capture_exception(e)
 
@@ -1857,6 +1880,7 @@ class CascadedPipelineOrchestrator:
             # with nothing said first is dead air for as long as the tool and
             # the next model round take — about a second at best.
             said_this_turn = False
+            ending_call = False
             for _round in range(3):
                 # Time the model wait separately from tool execution. Span 1
                 # is ~86% of a turn; without this split neither a human nor
@@ -2005,11 +2029,27 @@ class CascadedPipelineOrchestrator:
                         elif result.get("action") == "transfer" and result.get("transfer_to"):
                             self._pending_transfer = result["transfer_to"]
                             self._pending_turn = self._turn_id
+                        # The call is ending, so the line is ours to say.
+                        # gpt-5.6-luna calls hang_up_call without a word and
+                        # puts the goodbye in `farewell_message`, which nothing
+                        # spoke: 24 Sep, three silent "goodbyes" and a caller
+                        # asking "Hello?". nano happened to speak first.
+                        if result.get("action") in ("hangup", "transfer"):
+                            ending_call = True
+                            if not said_this_turn and result.get("message"):
+                                said_this_turn = True
+                                assistant_text += result["message"]
+                                yield result["message"]
                     messages.append({
                         "role": "tool",
                         "tool_call_id": call["id"],
                         "content": json.dumps(result, default=str)[:4000],
                     })
+                # Nothing more to ask the model once it has hung up or handed
+                # the caller to staff: another round only adds a second goodbye
+                # and a second of latency before the line closes.
+                if ending_call:
+                    return
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] LLM generation failed: {e}", exc_info=True)
             yield "I am checking those details right now. Just one moment please."
