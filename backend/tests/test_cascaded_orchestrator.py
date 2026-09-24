@@ -1060,7 +1060,10 @@ class TestGreetingWarmup:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("settings, sent", [
         ({"llm_model": "gpt-5.6-luna", "reasoning_effort": "none"}, {"reasoning_effort": "none"}),
+        ({"llm_model": "gpt-5.6-luna", "reasoning_effort": "none", "service_tier": "priority"},
+         {"reasoning_effort": "none", "service_tier": "priority"}),
         ({"llm_model": "gpt-4.1-nano"}, {}),
+        ({"llm_model": "gpt-4.1-nano", "temprature": 0.2}, {}),     # a DB typo is not a request field
     ])
     async def test_reasoning_effort_reaches_warmup_and_turn_only_when_set(
             self, orchestrator, settings, sent):
@@ -1082,8 +1085,29 @@ class TestGreetingWarmup:
             [{"role": "user", "content": "I'm calling about my booking."}])]
 
         for call in orchestrator._openai.chat.completions.create.await_args_list:
-            assert {k: v for k, v in call.kwargs.items() if k == "reasoning_effort"} == sent
+            assert {k: v for k, v in call.kwargs.items()
+                    if k in ("reasoning_effort", "service_tier", "temprature")} == sent
             assert call.kwargs["model"] == settings["llm_model"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("served, warned", [("default", True), ("priority", False)])
+    async def test_a_downgraded_service_tier_is_logged(self, orchestrator, caplog, served, warned):
+        # Fast mode is 2x price; OpenAI may serve it at standard speed and say
+        # so only in the response's service_tier.
+        self._wire(orchestrator, [])
+        orchestrator.tenant_config = {"voice_settings": {
+            "llm_model": "gpt-5.6-luna", "reasoning_effort": "none", "service_tier": "priority"}}
+        event = TestCascadedPipelineOrchestrator._delta(content="Hi.")
+        event.service_tier = served
+
+        async def one_round(*_a, **_kw):
+            yield event
+
+        orchestrator._openai.chat.completions.create = AsyncMock(side_effect=[one_round()])
+        with caplog.at_level("WARNING"):
+            _ = [c async for c in orchestrator._default_llm_callback(
+                [{"role": "user", "content": "Hi."}])]
+        assert ("served default" in caplog.text) is warned
 
     @pytest.mark.asyncio
     async def test_a_failed_warmup_is_logged_not_raised(self, orchestrator):

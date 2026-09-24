@@ -148,6 +148,7 @@ def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[st
 
 
 WARMUP_MAX_TOKENS = 64   # room for a short tool call; see _warm_llm
+MODEL_REQUEST_FIELDS = ("reasoning_effort", "service_tier")   # from voice_settings; see _model_options
 
 
 class CascadedPipelineOrchestrator:
@@ -1540,7 +1541,8 @@ class CascadedPipelineOrchestrator:
             f"| tts={self.cartesia.model_id} | eot={vs.get('eot_threshold')} "
             f"| eot_timeout_ms={vs.get('eot_timeout_ms')} "
             f"| llm={vs.get('llm_model') or 'gpt-4.1-nano'} "
-            f"| reasoning={vs.get('reasoning_effort') or 'unset'}"
+            f"| reasoning={vs.get('reasoning_effort') or 'unset'} "
+            f"| tier={vs.get('service_tier') or 'unset'}"
         )
 
     async def _ensure_call_context(self) -> None:
@@ -1624,14 +1626,18 @@ class CascadedPipelineOrchestrator:
         """
         Per-model request fields from `voice_settings`, sent on every request.
 
-        `reasoning_effort` is the one that matters: gpt-5.6-luna defaults to
-        *medium* reasoning, which thinks before its first token — measured
-        against nano only with it set to "none". Read from the tenant's
-        settings, like every other voice parameter, and sent only when set,
-        because gpt-4.1-nano rejects the field.
+        `reasoning_effort`: gpt-5.6-luna defaults to *medium* reasoning, which
+        thinks before its first token — measured only with "none".
+        `service_tier`: "priority" (OpenAI's Fast mode, 2x price) took Luna's
+        first token from 636 to 535 ms p50 on Heroku (24 Sep, 3 passes).
+
+        Read from the tenant's settings, like every other voice parameter, and
+        each sent only when set: gpt-4.1-nano rejects reasoning_effort. An
+        explicit list, not a pass-through — a typo in the DB must not become
+        an unknown request field on every live turn.
         """
-        effort = ((self.tenant_config or {}).get("voice_settings") or {}).get("reasoning_effort")
-        return {"reasoning_effort": effort} if effort else {}
+        vs = (self.tenant_config or {}).get("voice_settings") or {}
+        return {k: vs[k] for k in MODEL_REQUEST_FIELDS if vs.get(k)}
 
     async def _warm_llm(self) -> None:
         """
@@ -1900,6 +1906,16 @@ class CascadedPipelineOrchestrator:
                         if llm_span:
                             llm_span.finish()
                             llm_span = None
+                        # OpenAI may serve a Fast-mode request at standard speed
+                        # when traffic ramps, and says so only in this field.
+                        # Paying 2x for a tier we did not get should be visible.
+                        asked = self._model_options().get("service_tier")
+                        served = getattr(event, "service_tier", None)
+                        if asked and served == "default":
+                            logger.warning(
+                                "🟡 [CascadedOrchestrator] Asked for service_tier=%s, "
+                                "served %s", asked, served,
+                            )
                     delta = event.choices[0].delta
                     if delta.content:
                         assistant_text += delta.content
