@@ -215,8 +215,11 @@ directionally clear, not yet a large sample.
 
 ## Known limits
 
-- **Not yet:** <!-- not-yet -->as fast when a tool runs · 1.1–1.7 s<!-- /not-yet -->. A reply that needs a tool
-  still waits on the tool's round trip. (dhruvpatel.net shows this line.)
+- **Not yet:** <!-- not-yet -->under a second from the caller's last word · 1.5–1.7 s<!-- /not-yet -->
+  on real calls, measured from the two-channel call recordings, not the logs. Deepgram's
+  end-of-turn decision and the audio's round trip between Australia and the US
+  server take about 0.8 s before the model starts, so a faster model alone
+  cannot close it. (dhruvpatel.net shows this line.)
 - **Identity is confirmed on one matching word of the name.** A relative on the
   same phone who shares the surname passes.
 - **The gates judge agreement from word patterns in the transcript**, not full
