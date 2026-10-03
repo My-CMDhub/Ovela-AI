@@ -221,13 +221,19 @@ class LLMDeadlineExceeded(Exception):
 
 
 def normalise_transcript(text: str) -> str:
-    """Lowercase, punctuation gone, whitespace collapsed. Flux re-punctuates
-    between EagerEndOfTurn and EndOfTurn ("yes" / "Yes."), and that alone
-    must not throw a speculation away; any difference in the WORDS must.
-    Apostrophes join ("that's" = "thats"), other marks separate ("check-in"
-    = "check in")."""
-    joined = re.sub(r"['’]", "", (text or "").lower())
-    return " ".join(re.sub(r"[^\w\s]", " ", joined).split())
+    """Lowercase, sentence punctuation gone, whitespace collapsed. Flux
+    re-punctuates between EagerEndOfTurn and EndOfTurn ("yes" / "Yes.",
+    "a room for Friday" / "a room, for Friday"), and that alone must not throw
+    a speculation away; any difference in the WORDS must.
+
+    Only . , ! ? ; : that END a word are dropped ("?" included: the eager
+    transcript of a question usually has none, and treating it as a
+    different turn would discard nearly every question). Stripping every mark
+    made "we'll" equal "well", "$40" equal "40" and an email equal its
+    spoken-out letters — and the model then answered words the caller did not
+    finally say."""
+    t = re.sub(r"[.,!?;:]+(?=\s|$)", "", (text or "").lower())
+    return " ".join(t.split())
 
 
 class _Speculation:
@@ -2387,7 +2393,8 @@ class CascadedPipelineOrchestrator:
         return result
 
     async def _open_llm_round(self, model: str, messages: list, tools: list,
-                              track: Optional[list] = None):
+                              track: Optional[list] = None,
+                              quiet: Optional[Callable[[], bool]] = None):
         """
         Start one model round and wait for its first event, under a deadline.
         Returns `(stream, first_event)`; `first_event` is None for an empty
@@ -2440,6 +2447,13 @@ class CascadedPipelineOrchestrator:
             except asyncio.TimeoutError:
                 for stream in opened:
                     await self._close_llm_stream(stream)
+                if quiet is not None and quiet():
+                    # A speculation nobody has claimed yet: if the caller keeps
+                    # talking it is thrown away, and paging Sentry at error
+                    # level for a turn that never happened is a false alarm.
+                    logger.info("🔮 Speculative round: no first token from %s in %.1fs "
+                                "(attempt %d of %d)", use_model, deadline_s, attempt, len(attempts))
+                    continue
                 logger.error(
                     "🔴 [CascadedOrchestrator] No first token from %s in %.1fs "
                     "(attempt %d of %d)", use_model, deadline_s, attempt, len(attempts),
@@ -2562,6 +2576,12 @@ class CascadedPipelineOrchestrator:
         Start round 1 for `transcript` on its own task. Runs on the Deepgram
         read loop, so it never awaits.
         """
+        # Flux can propose the same words twice; the request in flight is
+        # already the right one, and a fresh one would be paid for twice.
+        current = self._speculation
+        if (current is not None and not current.adopted and not current.discarded
+                and current.key == normalise_transcript(transcript)):
+            return
         # A newer proposal supersedes the last, whether or not one starts.
         self._discard_speculation("replaced")
         # Only when the floor is free. While the agent is speaking, these
@@ -2602,7 +2622,11 @@ class CascadedPipelineOrchestrator:
                 spec.fingerprint = self._request_fingerprint(model, messages, tools)
                 spec.sent_at = time.perf_counter()
                 # The real round's own deadline and retry, measured from now.
-                spec.opened = await self._open_llm_round(model, messages, tools, track=spec.streams)
+                spec.opened = await self._open_llm_round(
+                    model, messages, tools, track=spec.streams,
+                    # Quiet until a turn claims it; from then on a missed
+                    # deadline is the caller's, and is reported as one.
+                    quiet=lambda: not spec.claimed_at)
                 spec.first_at = time.perf_counter()
             except Exception as exc:
                 spec.error = exc

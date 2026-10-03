@@ -297,9 +297,22 @@ async def test_flag_comes_from_settings_unless_the_tenant_overrides_it(monkeypat
 
 
 def test_transcripts_match_on_words_not_punctuation():
-    assert normalise_transcript("Yes, that's  right.") == normalise_transcript("yes thats right")
-    assert normalise_transcript("What time is check-in?") == normalise_transcript("what time is check in")
+    assert normalise_transcript("Yes, that's  right.") == normalise_transcript("yes that's right")
+    assert normalise_transcript("A room, for Friday.") == normalise_transcript("a room for friday")
     assert normalise_transcript("Do you have a room?") != normalise_transcript("Do you have a room on Friday?")
+
+
+@pytest.mark.parametrize("eager, final", [
+    ("we'll", "well"),
+    ("we're open", "were open"),
+    ("$40", "40"),
+    ("4.5", "4 5"),
+    ("j.smith@gmail.com", "j smith gmail com"),
+])
+def test_different_words_never_match(eager, final):
+    """Found in review: stripping every mark matched these, and the model then
+    answered words the caller did not finally say."""
+    assert normalise_transcript(eager) != normalise_transcript(final)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -355,7 +368,7 @@ async def test_a_request_that_changed_since_the_speculation_is_not_reused(change
             call.agent.history.append({"role": "system", "content": "The transfer failed."})
         else:
             call.agent.call_state.reservation_on_file = True
-        call.dg.send("EndOfTurn", "What time is check-in?")
+        call.dg.send("EndOfTurn", "What time is check in?")
         await call.turn_done()
 
         assert len(llm.requests) == 2, "the stale speculative answer was used"
@@ -620,3 +633,36 @@ async def test_counters_reach_the_saved_call_record():
     assert meta["speculation"]["used"] == 1
     assert meta["speculation"]["discarded"] == 1
     assert meta["speculation"]["discard_reasons"] == {"resumed": 1}
+
+
+async def test_the_same_words_proposed_twice_are_asked_once():
+    """Found in review: every EagerEndOfTurn replaced the speculation, so Flux
+    proposing the same words twice paid for the same request twice."""
+    llm = FakeOpenAI()
+    async with Call(llm) as call:
+        call.dg.send("EagerEndOfTurn", "is there a spa room")
+        await until(lambda: call.spec and call.spec.ready.is_set())
+        call.dg.send("EagerEndOfTurn", "Is there a spa room.")
+        await call.settle()
+        call.dg.send("EndOfTurn", "Is there a spa room?")
+        await call.turn_done()
+
+        assert len(llm.requests) == 1
+        assert call.agent._speculation_stats["started"] == 1
+
+
+async def test_an_unclaimed_speculation_that_times_out_pages_nobody(monkeypatch):
+    """Found in review: a guess the caller talked past raised an error-level
+    Sentry alert for a turn that never happened."""
+    monkeypatch.setattr(orch_module.settings, "LLM_FIRST_TOKEN_TIMEOUT_S", 0.1)
+    alerts = []
+    monkeypatch.setattr(orch_module.sentry_sdk, "capture_message",
+                        lambda msg, level=None: alerts.append((level, msg)))
+    llm = FakeOpenAI(first_token_s=60)
+    async with Call(llm) as call:
+        call.dg.send("EagerEndOfTurn", "and the")
+        await asyncio.sleep(0.35)             # both attempts miss, nobody has claimed it
+        call.dg.send("TurnResumed")
+        await call.settle()
+
+    assert not [a for a in alerts if "first-token deadline" in a[1]]
