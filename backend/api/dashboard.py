@@ -1101,6 +1101,22 @@ async def _handle_checkout_completed(event: dict, event_id: str, coalcreek_strip
         _spawn_alert(_alert_staff_webhook_failure(
             event_id, reason, booking_ref, subject="Possible double payment — please refund"))
         return {"status": "double_payment_flagged"}
+    if (booking_doc.get("status") or "").lower() == "expired":
+        # Paid through a link whose hold had already lapsed: the room went back
+        # on sale when it expired, so confirming here could double-book it.
+        # The money is real, so a person decides (honour or refund) — 200 so
+        # Stripe stops, loud so nobody misses it.
+        reason = (f"payment {stripe_payment_id or '-'} arrived for a hold that had "
+                  "already EXPIRED — check the room is still free, then confirm or refund")
+        logger.error("Stripe webhook %s: %s (ref=%s)", event_id, reason, booking_ref)
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_message(f"Stripe webhook {event_id}: {reason} (ref={booking_ref})", level="error")
+        except Exception:
+            pass
+        _spawn_alert(_alert_staff_webhook_failure(
+            event_id, reason, booking_ref, subject="Payment on an expired hold — please check"))
+        return {"status": "expired_hold_flagged"}
     if booking_doc.get("payment_status") in done_states:
         logger.info(
             "Stripe webhook %s: %s already %s — duplicate delivery, no side effects",

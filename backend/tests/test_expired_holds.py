@@ -100,3 +100,30 @@ async def test_live_holds_still_offer_a_resend(status):
     result = await handle_lookup_booking({"booking_reference": "CC-55555"}, db, CALLER)
 
     assert "EXPIRED" not in str(result)
+
+
+async def test_correcting_details_on_an_expired_hold_sends_no_new_link():
+    """The reviewer's repro: an email correction on a lapsed hold used to patch
+    it back to pending and mail a fresh checkout for a room back on sale."""
+    from services.voice_agent.functions.coalcreek_handlers import handle_update_guest_info
+    db = MagicMock()
+    db.lookup_motel_reservation = AsyncMock(return_value=[EXPIRED_HOLD])
+    db.update_motel_reservation = AsyncMock(return_value={"$id": "doc1"})
+
+    result = await handle_update_guest_info({"guest_email": "new@example.com"}, db, user_phone=CALLER)
+
+    db.update_motel_reservation.assert_not_called()
+    assert "resent the payment link" not in str(result)
+
+
+async def test_lookup_does_not_call_an_expired_hold_outstanding():
+    db = MagicMock()
+    db.lookup_motel_reservation = AsyncMock(return_value=[dict(
+        EXPIRED_HOLD, payment_link_url="https://checkout.stripe.com/c/pay/cs_test_old")])
+
+    result = await handle_lookup_booking({"booking_reference": "CC-55555"}, db, CALLER)
+
+    text = str(result)
+    assert "'payment_outstanding': False" in text
+    assert "'hold_expired': True" in text
+    assert "cs_test_old" not in text

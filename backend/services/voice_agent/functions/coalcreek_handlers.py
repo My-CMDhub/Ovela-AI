@@ -1208,9 +1208,15 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "status":                 doc.get("status", ""),
             "payment_status":         doc.get("payment_status") or "outstanding",
             "payment_confirmed":      doc.get("payment_status") == "paid",
-            "payment_outstanding":    doc.get("payment_status") not in ("paid", "card_on_file"),
+            # An expired hold is not "outstanding": the prompt answers
+            # payment_outstanding=true with "resend the link", and that link
+            # is dead and its room released. hold_expired says what is true.
+            "payment_outstanding":    (doc.get("payment_status") not in ("paid", "card_on_file")
+                                       and (doc.get("status") or "").lower() != "expired"),
+            "hold_expired":           (doc.get("status") or "").lower() == "expired",
             "payment_link_sent":      bool(doc.get("payment_link_url") or doc.get("payment_link_sent_at")),
-            "payment_link_url":       doc.get("payment_link_url", ""),
+            "payment_link_url":       ("" if (doc.get("status") or "").lower() == "expired"
+                                       else doc.get("payment_link_url", "")),
             "payment_link_sent_at":   doc.get("payment_link_sent_at", ""),
             "payment_link_expires_at":doc.get("payment_expires_at", ""),
             "email_status":           doc.get("payment_status") or "unknown",
@@ -1501,7 +1507,10 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
             for doc in (docs or []):
                 _ps = doc.get("payment_status") or ""
                 _bs = doc.get("status") or ""
-                is_pending = (
+                # Same guard as resend_payment_link: an expired hold keeps
+                # payment_status "pending_payment", and correcting an email on
+                # it would mail a fresh checkout for a room back on sale.
+                is_pending = (_bs or "").lower() != "expired" and (
                     _bs in ("reserved", "pending", "pending_payment", "link_sent")
                     or _ps in ("pending", "pending_payment", "email_failed", "")
                 )

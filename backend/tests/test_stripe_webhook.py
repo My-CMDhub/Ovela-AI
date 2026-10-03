@@ -318,3 +318,18 @@ def test_expiry_of_the_current_session_releases_the_hold(env):
         payment_link_sent_at=datetime.fromtimestamp(1_700_009_000, timezone.utc).isoformat())
     env["post"](_event("checkout.session.expired"))
     env["patch"].assert_awaited_once_with("doc1", {"status": "expired"})
+
+
+def test_a_payment_on_an_expired_hold_is_flagged_not_confirmed(env, monkeypatch):
+    """Its room went back on sale when the hold lapsed; confirming it blind
+    could double-book. Money is real, so a person decides."""
+    from services.email import email_service
+    alerts = AsyncMock(return_value=True)
+    monkeypatch.setattr(email_service, "send_email", alerts, raising=False)
+    env["find"].return_value = dict(DOC, status="expired")
+
+    r = env["post"](_event("checkout.session.completed"))
+
+    assert r.status_code == 200 and r.json()["status"] == "expired_hold_flagged"
+    env["pay"].assert_not_called()
+    assert alerts.await_count == 1
