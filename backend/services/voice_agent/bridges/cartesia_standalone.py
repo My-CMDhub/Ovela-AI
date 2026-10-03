@@ -218,8 +218,20 @@ class CartesiaStandaloneBridge:
         """
         if not self.ws:
             return
+        # The socket this reader is bound to. ensure_connected() may replace
+        # self.ws while a stale reader is still parked on the old one; when the
+        # old socket then closes, that reader must not mark the NEW, open
+        # socket dead — which silently muted the re-synthesis it opened for.
+        ws = self.ws
+
+        def drop(reason: str) -> None:
+            if self.ws is ws:
+                self._report_drop(reason)
+            else:
+                logger.debug(f"[CartesiaStandalone] stale reader ended on a replaced socket: {reason}")
+
         try:
-            async for message in self.ws:
+            async for message in ws:
                 if isinstance(message, str):
                     try:
                         data = json.loads(message)
@@ -230,11 +242,11 @@ class CartesiaStandaloneBridge:
             # the far end (`async for` swallows ConnectionClosedOK). A caller
             # breaking out raises GeneratorExit at the yield and never gets
             # here, so this does not repeat the mistake noted below.
-            self._report_drop("closed cleanly by the server")
+            drop("closed cleanly by the server")
         except websockets.exceptions.ConnectionClosed as e:
-            self._report_drop(f"connection closed ({e})")
+            drop(f"connection closed ({e})")
         except Exception as e:
-            self._report_drop(f"error receiving audio events: {e}")
+            drop(f"error receiving audio events: {e}")
         # NO `finally: is_connected = False` — callers break out of this
         # generator on `done`/barge-in every turn. Finalizing the async
         # generator would then mark a perfectly healthy socket as dead, and

@@ -586,6 +586,13 @@ class CascadedPipelineOrchestrator:
         # `async for` raised AttributeError before a single byte existed and
         # the caller heard nothing at all.
         try:
+            # Mid-call (the failed-transfer line) a previous turn's reader may
+            # still be parked on the one Cartesia socket; a second reader gets
+            # ConcurrencyError and the socket is marked dead. At call start
+            # there is none and this returns at once.
+            await self._stop_audio_reader()
+            if not mine():
+                return
             self.current_context_id = f"greeting_{int(time.time()*1000)}"
             self._audio_bytes_sent = 0
             self._playback_started_at = 0.0
@@ -776,7 +783,15 @@ class CascadedPipelineOrchestrator:
             if self._stt_still_needed():
                 await self._speak_line(STT_DEAF_LINE)
         except asyncio.CancelledError:
-            raise
+            # Only OUR cancellation (stop()) may skip the hang-up. A turn that
+            # was already in flight can cancel the goodbye's pipeline when it
+            # takes the floor, and that CancelledError surfaces here too —
+            # re-raising it left the line open and deaf, the one outcome this
+            # method exists to prevent.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            logger.warning("🟡 [CascadedOrchestrator] Deaf-line goodbye was cut short; hanging up anyway")
         except Exception as exc:
             logger.error(
                 "🔴 [CascadedOrchestrator] Could not say goodbye on a deaf line: %s", exc,
@@ -915,6 +930,12 @@ class CascadedPipelineOrchestrator:
                     self._report_turn_failure(turn)
                     pending = await self._finished_turns.get()
             except asyncio.CancelledError:
+                # Take the in-flight turn down with the worker. Left running, an
+                # orphaned turn could take the floor after whoever cancelled us
+                # (the deaf-line goodbye, stop()) and talk over or cancel it.
+                for task in (turn, nxt):
+                    if not task.done():
+                        task.cancel()
                 raise
             except Exception as exc:
                 # This loop is the only thing draining the queue. If it dies
