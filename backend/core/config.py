@@ -23,6 +23,13 @@ class Settings(BaseSettings):
 
     # OpenAI
     OPENAI_API_KEY: str
+    # Live-call deadlines for each model round (see CascadedPipelineOrchestrator
+    # ._open_llm_round). Conservative on purpose: a normal first token is
+    # ~0.5 s and a tool round ~1.1-1.7 s, so these only fire on a real stall.
+    LLM_FIRST_TOKEN_TIMEOUT_S: float = 6.0
+    LLM_STREAM_GAP_TIMEOUT_S: float = 10.0
+    # Model for the one retry after a missed first token; empty = same model.
+    LLM_FALLBACK_MODEL: str = ""
     
     # Cartesia (Direct TTS Bypass)
     CARTESIA_API_KEY: Optional[str] = ""

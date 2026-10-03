@@ -197,6 +197,25 @@ def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[st
 WARMUP_MAX_TOKENS = 64   # room for a short tool call; see _warm_llm
 MODEL_REQUEST_FIELDS = ("reasoning_effort", "service_tier")   # from voice_settings; see _model_options
 
+# The OpenAI client's own limits. The SDK default is a 600 s timeout with two
+# retries — a caller would hang up long before either. `read` is the gap
+# allowed between bytes, so it bounds a stalled stream as well as a slow
+# response; the per-round deadlines in _open_llm_round are tighter still and
+# are what a caller actually experiences. One retry: a connection that fails
+# twice will not be saved by a third try inside a phone call.
+OPENAI_TIMEOUT = httpx.Timeout(connect=3.0, read=15.0, write=10.0, pool=3.0)
+OPENAI_MAX_RETRIES = 1
+
+# Said when the model could not answer in time. It used to say "I am checking
+# those details right now. Just one moment please." — a promise nothing kept:
+# the turn ended there, and the caller waited in silence for an answer that
+# was never coming. This asks for the one thing that does recover the call.
+LLM_TROUBLE_LINE = "Sorry, I'm having a little trouble on my end. Could you say that again?"
+
+
+class LLMDeadlineExceeded(Exception):
+    """The model missed its first-token or between-tokens deadline."""
+
 
 class CascadedPipelineOrchestrator:
     """
@@ -1980,7 +1999,11 @@ class CascadedPipelineOrchestrator:
         # Fire the caller's booking lookup now so it overlaps the first model
         # round instead of landing inside the turn as a ~250ms tool call.
         self.dispatcher.prefetch_caller_reservation()
-        self._openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self._openai = AsyncOpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            timeout=OPENAI_TIMEOUT,
+            max_retries=OPENAI_MAX_RETRIES,
+        )
         await self._apply_voice_settings()
         self._context_ready = True
         if self.warm_llm_on_start:
@@ -2205,6 +2228,102 @@ class CascadedPipelineOrchestrator:
         self.call_state.observe(name, args, result)
         return result
 
+    async def _open_llm_round(self, model: str, messages: list, tools: list):
+        """
+        Start one model round and wait for its first event, under a deadline.
+        Returns `(stream, first_event)`; `first_event` is None for an empty
+        stream.
+
+        There was no deadline at all: the turn waited on the SDK's 600 s and
+        the caller on silence. A first event that misses
+        LLM_FIRST_TOKEN_TIMEOUT_S gets ONE more attempt — on
+        LLM_FALLBACK_MODEL when that is set — and then the round fails, which
+        the caller hears as LLM_TROUBLE_LINE. Worst case is twice the
+        deadline. The defaults sit well above a normal first token (~0.5 s,
+        tool rounds ~1.1-1.7 s) so a slow-but-fine reply is never cut.
+
+        A retry repeats the request exactly — the same messages, tool results
+        included — so no tool runs twice. The per-model options are sent only
+        to the model they were configured for: gpt-4.1-nano rejects
+        `reasoning_effort`, so carrying a luna option over would turn the
+        fallback into a guaranteed 400.
+        """
+        deadline_s = settings.LLM_FIRST_TOKEN_TIMEOUT_S
+        fallback = settings.LLM_FALLBACK_MODEL or model
+        attempts = (
+            (model, self._model_options()),
+            (fallback, self._model_options() if fallback == model else {}),
+        )
+        for attempt, (use_model, options) in enumerate(attempts, start=1):
+            opened = []
+
+            async def first_event():
+                stream = await self._openai.chat.completions.create(
+                    model=use_model, messages=messages, tools=tools, stream=True,
+                    # Adds a final chunk carrying usage; its `choices` is
+                    # empty, which the round's loop already skips.
+                    stream_options={"include_usage": True},
+                    **options,
+                )
+                opened.append(stream)
+                try:
+                    return stream, await stream.__anext__()
+                except StopAsyncIteration:
+                    return stream, None
+
+            try:
+                return await asyncio.wait_for(first_event(), timeout=deadline_s)
+            except asyncio.TimeoutError:
+                for stream in opened:
+                    await self._close_llm_stream(stream)
+                logger.error(
+                    "🔴 [CascadedOrchestrator] No first token from %s in %.1fs "
+                    "(attempt %d of %d)", use_model, deadline_s, attempt, len(attempts),
+                )
+                sentry_sdk.capture_message(
+                    f"LLM first-token deadline missed ({use_model}, attempt {attempt})",
+                    level="warning" if attempt < len(attempts) else "error",
+                )
+        raise LLMDeadlineExceeded(f"no first token in {len(attempts)} attempts")
+
+    async def _bounded_events(self, stream, first):
+        """
+        The rest of a round's stream, with a deadline between events.
+
+        A stream that stalls mid-reply used to hold the turn open with the
+        caller hearing half a sentence and then nothing. Raising here lands in
+        the callback's error path, which ends the turn with LLM_TROUBLE_LINE.
+        Tool calls are only executed after their round's stream has ENDED, so
+        a stall part-way through streaming a tool call's arguments leaves
+        nothing to run: the truncated call is never dispatched.
+        """
+        if first is None:
+            return
+        yield first
+        gap_s = settings.LLM_STREAM_GAP_TIMEOUT_S
+        while True:
+            try:
+                event = await asyncio.wait_for(stream.__anext__(), timeout=gap_s)
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError:
+                await self._close_llm_stream(stream)
+                raise LLMDeadlineExceeded(f"stream stalled for {gap_s:.1f}s mid-reply") from None
+            yield event
+
+    @staticmethod
+    async def _close_llm_stream(stream) -> None:
+        """Release an abandoned stream's HTTP connection. Never raises."""
+        closer = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+        if closer is None:
+            return
+        try:
+            result = closer()
+            if inspect.isawaitable(result):
+                await asyncio.wait_for(result, timeout=1.0)
+        except Exception as exc:
+            logger.debug("LLM stream close failed: %s", exc)
+
     async def _default_llm_callback(self, history: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
         """
         Generate the agent's reply for this turn with OpenAI.
@@ -2235,6 +2354,8 @@ class CascadedPipelineOrchestrator:
                               if m.get("role") == "assistant"), ""),
         )
 
+        # Read by the error path, which may run before the first round.
+        assistant_text = ""
         try:
             await self._ensure_call_context()
             model, messages, tools = await self._request_prefix()
@@ -2267,13 +2388,7 @@ class CascadedPipelineOrchestrator:
                 # open otherwise — a leaked span in the code that exists to
                 # repair leaked spans.
                 try:
-                    stream = await self._openai.chat.completions.create(
-                        model=model, messages=messages, tools=tools, stream=True,
-                    # Adds a final chunk carrying usage; its `choices` is empty,
-                    # which the guard below already skips.
-                        stream_options={"include_usage": True},
-                        **self._model_options(),
-                    )
+                    stream, first = await self._open_llm_round(model, messages, tools)
                 except Exception:
                     if llm_span:
                         llm_span.finish()
@@ -2282,7 +2397,7 @@ class CascadedPipelineOrchestrator:
                 assistant_text = ""
                 first_event = True
 
-                async for event in stream:
+                async for event in self._bounded_events(stream, first):
                     usage = getattr(event, "usage", None)
                     if usage and self._sentry_transaction:
                         # Proves whether the prompt cache was warm. The first
@@ -2432,7 +2547,17 @@ class CascadedPipelineOrchestrator:
                     return
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] LLM generation failed: {e}", exc_info=True)
-            yield "I am checking those details right now. Just one moment please."
+            sentry_sdk.capture_exception(e)
+            # Honest, and attached to whatever was already said: a reply cut
+            # off mid-sentence gets a full stop first, or the phrase splitter
+            # runs "We have a queen" straight into "Sorry". Nothing half-built
+            # survives this: tool calls in flight lived only in this round's
+            # local `pending`, and `messages` is local to the turn — history
+            # receives only the words actually spoken.
+            tail = assistant_text.rstrip()
+            if tail and tail[-1] not in ".?!":
+                yield "."
+            yield " " + LLM_TROUBLE_LINE
 
     async def _reject_stream(self, why: str) -> None:
         """

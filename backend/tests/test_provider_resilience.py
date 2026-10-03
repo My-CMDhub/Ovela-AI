@@ -407,3 +407,147 @@ async def test_stop_during_the_reconnect_backoff_exits_promptly(monkeypatch):
     assert time.monotonic() - started < 0.5, "the reconnect slept out its backoff after stop()"
     assert dg.connects == 0, "a socket was reopened for a call that had ended"
     agent._hangup_call.assert_not_awaited()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# C. OpenAI
+# ─────────────────────────────────────────────────────────────────────────────
+
+FIRST_TOKEN_S = 0.1
+GAP_S = 0.1
+
+
+@pytest.fixture
+def tight_llm_deadlines(monkeypatch):
+    monkeypatch.setattr(orch_module.settings, "LLM_FIRST_TOKEN_TIMEOUT_S", FIRST_TOKEN_S)
+    monkeypatch.setattr(orch_module.settings, "LLM_STREAM_GAP_TIMEOUT_S", GAP_S)
+    monkeypatch.setattr(orch_module.settings, "LLM_FALLBACK_MODEL", "")
+
+
+def _delta(content=None, tool_calls=None):
+    ev = MagicMock()
+    ev.choices = [MagicMock()]
+    ev.choices[0].delta.content = content
+    ev.choices[0].delta.tool_calls = tool_calls
+    return ev
+
+
+def _tool_delta(name, arguments):
+    tc = MagicMock()
+    tc.index, tc.id = 0, "call_0"
+    tc.function.name = name
+    tc.function.arguments = arguments
+    return _delta(tool_calls=[tc])
+
+
+async def _never(*_a, **_kw):
+    await asyncio.Event().wait()        # OpenAI accepted the request and went quiet
+    yield _delta(content="too late")
+
+
+def _llm_agent(*rounds, model="gpt-4.1-nano", options=None):
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.is_running = True
+    agent._context_ready = True
+    agent.tenant_config = {"voice_settings": {"llm_model": model, **(options or {})}}
+    agent.dispatcher = MagicMock(caller_reservation=AsyncMock(return_value=[]))
+    agent.dispatcher.execute = AsyncMock(return_value={"ok": True})
+    agent._openai = MagicMock()
+    agent._openai.chat.completions.create = AsyncMock(side_effect=[r() for r in rounds])
+    return agent
+
+
+async def _reply(agent, said="do you have a queen room friday?"):
+    return [c async for c in agent._default_llm_callback([{"role": "user", "content": said}])]
+
+
+async def test_no_first_token_retries_once_then_says_so_honestly(tight_llm_deadlines):
+    agent = _llm_agent(_never, _never)
+    started = time.monotonic()
+    chunks = await asyncio.wait_for(_reply(agent), timeout=5)
+    elapsed = time.monotonic() - started
+
+    assert agent._openai.chat.completions.create.await_count == 2, "no retry, or more than one"
+    assert "".join(chunks).strip() == orch_module.LLM_TROUBLE_LINE
+    assert "checking those details" not in "".join(chunks)
+    assert elapsed < 2 * FIRST_TOKEN_S + 0.5, f"took {elapsed:.2f}s — the deadline does not bound the turn"
+
+
+async def test_the_retry_answers_when_the_first_attempt_hangs(tight_llm_deadlines):
+    async def answers(*_a, **_kw):
+        yield _delta(content="Yes, a queen is free on Friday.")
+
+    agent = _llm_agent(_never, answers)
+    assert await _reply(agent) == ["Yes, a queen is free on Friday."]
+
+
+async def test_the_retry_uses_the_fallback_model_without_the_first_models_options(
+        tight_llm_deadlines, monkeypatch):
+    monkeypatch.setattr(orch_module.settings, "LLM_FALLBACK_MODEL", "gpt-4.1-nano")
+
+    async def answers(*_a, **_kw):
+        yield _delta(content="Yes.")
+
+    agent = _llm_agent(_never, answers, model="gpt-5.6-luna",
+                       options={"reasoning_effort": "none"})
+    assert await _reply(agent) == ["Yes."]
+    first, retry = (c.kwargs for c in agent._openai.chat.completions.create.await_args_list)
+    assert first["model"] == "gpt-5.6-luna" and first["reasoning_effort"] == "none"
+    assert retry["model"] == "gpt-4.1-nano"
+    assert "reasoning_effort" not in retry, "nano rejects reasoning_effort — the retry would 400"
+
+
+async def test_a_stall_mid_reply_ends_with_the_honest_line(tight_llm_deadlines):
+    async def stalls(*_a, **_kw):
+        yield _delta(content="We have a queen room")
+        await asyncio.Event().wait()
+        yield _delta(content=" for you.")
+
+    agent = _llm_agent(stalls)
+    started = time.monotonic()
+    chunks = await asyncio.wait_for(_reply(agent), timeout=5)
+
+    assert chunks == ["We have a queen room", ".", " " + orch_module.LLM_TROUBLE_LINE]
+    assert time.monotonic() - started < GAP_S + 0.5
+
+
+async def test_a_stall_inside_a_tool_call_never_runs_the_truncated_call(tight_llm_deadlines):
+    async def stalls_mid_tool(*_a, **_kw):
+        yield _tool_delta("create_booking_request", '{"guest_name": "Ja')
+        await asyncio.Event().wait()
+        yield _tool_delta("create_booking_request", 'ne"}')
+
+    agent = _llm_agent(stalls_mid_tool)
+    chunks = await asyncio.wait_for(_reply(agent), timeout=5)
+
+    agent.dispatcher.execute.assert_not_awaited()
+    assert agent._tools_called == []
+    assert chunks[-1] == " " + orch_module.LLM_TROUBLE_LINE
+
+
+async def test_a_normal_fast_stream_is_untouched(tight_llm_deadlines):
+    async def fast(*_a, **_kw):
+        for part in ("Hello! ", "How can I help today?"):
+            await asyncio.sleep(GAP_S / 4)
+            yield _delta(content=part)
+
+    agent = _llm_agent(fast)
+    assert await _reply(agent) == ["Hello! ", "How can I help today?"]
+    assert agent._openai.chat.completions.create.await_count == 1
+
+
+async def test_the_openai_client_has_explicit_limits():
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.warm_llm_on_start = False
+    with patch("services.appwrite.db_service") as db, \
+            patch("services.voice_agent.abuse_protection.AbuseProtection"), \
+            patch("services.voice_agent.memory.CallerMemoryBank"), \
+            patch("services.voice_agent.functions.CoalCreekFunctionDispatcher"), \
+            patch("openai.AsyncOpenAI") as client:
+        db.get_tenant_config = AsyncMock(return_value={})
+        await agent._build_call_context()
+
+    kwargs = client.call_args.kwargs
+    assert kwargs["max_retries"] == 1
+    timeout = kwargs["timeout"]
+    assert timeout.connect <= 5 and timeout.read <= 20, timeout
