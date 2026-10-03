@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Model for the one retry after a missed first token; empty = same model.
     LLM_FALLBACK_MODEL: str = ""
     
+    # Start the first model round on Deepgram Flux's EagerEndOfTurn and keep it
+    # if EndOfTurn confirms the same words (see CascadedPipelineOrchestrator
+    # ._start_speculation). Off by default: it spends tokens on every eager
+    # turn the caller then carries on from. A tenant can override it with
+    # voice_settings.speculative_eot.
+    SPECULATIVE_EOT_ENABLED: bool = False
+
     # Cartesia (Direct TTS Bypass)
     CARTESIA_API_KEY: Optional[str] = ""
 

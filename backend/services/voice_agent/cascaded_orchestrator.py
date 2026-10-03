@@ -13,8 +13,11 @@ Decoupled real-time voice orchestration pipeline that coordinates:
 
 import asyncio
 import base64
+import copy
+import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 import inspect
@@ -217,6 +220,45 @@ class LLMDeadlineExceeded(Exception):
     """The model missed its first-token or between-tokens deadline."""
 
 
+def normalise_transcript(text: str) -> str:
+    """Lowercase, punctuation gone, whitespace collapsed. Flux re-punctuates
+    between EagerEndOfTurn and EndOfTurn ("yes" / "Yes."), and that alone
+    must not throw a speculation away; any difference in the WORDS must.
+    Apostrophes join ("that's" = "thats"), other marks separate ("check-in"
+    = "check in")."""
+    joined = re.sub(r"['’]", "", (text or "").lower())
+    return " ".join(re.sub(r"[^\w\s]", " ", joined).split())
+
+
+class _Speculation:
+    """
+    One first model round started on EagerEndOfTurn, before the caller's turn
+    is confirmed. It owns nothing but an HTTP stream: no history entry, no
+    call_state change, no tool, no audio. See `_start_speculation`.
+
+    Exactly one of `adopted` / `discarded` ends it, and both are final. The
+    task holds the stream open after the first event until one of them
+    happens, and closes it itself unless it was adopted — so discarding is a
+    plain `task.cancel()`, safe from the read loop, and every exit path closes
+    the stream in the same place.
+    """
+
+    def __init__(self, transcript: str):
+        self.transcript = transcript
+        self.key = normalise_transcript(transcript)
+        self.task: Optional[asyncio.Task] = None
+        self.streams: list = []                 # every stream it opened
+        self.fingerprint: Optional[str] = None  # of the request it sent
+        self.opened = None                      # (stream, first_event)
+        self.error: Optional[Exception] = None
+        self.ready = asyncio.Event()            # `opened` or `error` is final
+        self.sent_at = 0.0
+        self.first_at = 0.0
+        self.claimed_at = 0.0
+        self.adopted = False
+        self.discarded = False
+
+
 class CascadedPipelineOrchestrator:
     """
     Orchestrates the decoupled STT -> LLM -> TTS pipeline for real-time Twilio calls.
@@ -354,6 +396,19 @@ class CascadedPipelineOrchestrator:
         # that has ended.
         self._stopped: asyncio.Event = asyncio.Event()
 
+        # Speculative first round (see _start_speculation). `_speculation` is
+        # the one waiting for its EndOfTurn; once a turn claims it, it belongs
+        # to that turn, so a later Deepgram event cannot pull it from under
+        # the reply. `_claimed_speculation` remembers it only so stop() can
+        # close it too. The counters go into the saved call record:
+        # every discarded speculation is tokens spent for nothing, and this is
+        # where the owner sees whether the hit rate pays for it.
+        self._speculation: Optional[_Speculation] = None
+        self._claimed_speculation: Optional[_Speculation] = None
+        self._speculation_stats: Dict[str, Any] = {
+            "started": 0, "used": 0, "discarded": 0, "saved_ms": 0, "discard_reasons": {},
+        }
+
         # Sentry transaction and span tracking
         self._sentry_transaction = None
         self._span_1 = None
@@ -430,6 +485,9 @@ class CascadedPipelineOrchestrator:
         logger.info(f"🛑 [CascadedOrchestrator] Barge-in triggered ({reason}). Cutting audio!")
         self.state = ConversationState.AWAITING_INPUT
         self._barge_ins += 1
+        # Below, history gains the heard part of this reply and loses the
+        # rest, so a speculation built before now asked the wrong question.
+        self._discard_speculation("barge-in")
 
         # 1. Cancel ongoing Cartesia TTS generation
         if self.current_context_id:
@@ -865,12 +923,17 @@ class CascadedPipelineOrchestrator:
 
             elif turn_state == "EagerEndOfTurn":
                 logger.info("⚡ [CascadedOrchestrator] EagerEndOfTurn received. Pre-warming LLM...")
+                # Off by default, and then this branch is the log line above
+                # and nothing else. On, it only creates a task: this loop
+                # must never wait on the model.
+                if transcript and self._speculation_enabled():
+                    self._start_speculation(transcript)
 
             elif turn_state == "TurnResumed":
                 # The caller paused and carried on, so Flux withdraws the end
-                # of turn it had proposed. There is nothing of ours to undo:
-                # the EagerEndOfTurn branch above only logs, so no speculative
-                # work was ever started.
+                # of turn it had proposed. The only thing of ours to undo is a
+                # speculative round started on that proposal (flag on), which
+                # this cancels. A turn being spoken is never touched here.
                 #
                 # This branch used to cancel `_pending_llm_task`, which was
                 # also the handle for the live turn — so it could cancel the
@@ -885,6 +948,7 @@ class CascadedPipelineOrchestrator:
                 # no-op. It is a hazard that fix created, not one it found —
                 # and the repeated question on call 2 is explained by the
                 # backlog, not by this.
+                self._discard_speculation("resumed")
                 logger.info("🔄 [CascadedOrchestrator] TurnResumed — caller is still talking.")
 
             elif turn_state in ("EndOfTurn", "SpeechEnded", "Results"):
@@ -1007,6 +1071,7 @@ class CascadedPipelineOrchestrator:
             )
             self._speech_frames = 0
             self._backchannels_held += 1
+            self._discard_speculation("backchannel")
             return
 
         # A short but genuine interruption — "stop", "no, wait" — never reaches
@@ -1069,15 +1134,31 @@ class CascadedPipelineOrchestrator:
         # Not awaiting it at all was worse: two turns then shared one
         # orchestrator, and every piece of per-turn state on `self` became a
         # race. The worker reads ahead and this awaits, so neither happens.
+        #
+        # A speculative first round for exactly these words, if one is
+        # running, is handed to this turn as an argument — the same way the
+        # turn's context id is, and for the same reason. Claimed only now,
+        # after the old turn has let go and with no await between here and
+        # the `finally`, so it can never be stranded unclosed.
+        speculation = self._claim_speculation(transcript)
         self._turn_task = asyncio.create_task(
             self._run_parallel_streaming_pipeline(
                 my_turn,
                 context_id=self.current_context_id,
                 transaction=self._sentry_transaction,
                 span_1=self._span_1,
+                speculation=speculation,
             )
         )
-        await self._turn_task
+        try:
+            await self._turn_task
+        finally:
+            if speculation is not None:
+                # No-op once the model round adopted it; otherwise the turn
+                # ended or was cancelled before getting that far.
+                self._discard_speculation("unused", speculation)
+                if self._claimed_speculation is speculation:
+                    self._claimed_speculation = None
 
     async def _run_parallel_streaming_pipeline(
         self,
@@ -1086,6 +1167,7 @@ class CascadedPipelineOrchestrator:
         transaction=None,
         span_1=None,
         scripted: Optional[str] = None,
+        speculation: Optional[_Speculation] = None,
     ) -> None:
         """
         Coordinates parallel LLM token generation, phrase extraction,
@@ -1107,7 +1189,10 @@ class CascadedPipelineOrchestrator:
         wakes up, sees "speaking", and keeps working for a turn that is over.
 
         `scripted` speaks that text instead of asking the model (see
-        `_speak_line`).
+        `_speak_line`). `speculation` is a first round already started for
+        this turn's words (see `_claim_speculation`); only ever set when the
+        model is `_default_llm_callback`, the one place that knows how to
+        adopt it.
         """
         start_time = time.time()
         llm_queue = asyncio.Queue()
@@ -1125,7 +1210,12 @@ class CascadedPipelineOrchestrator:
 
         async def llm_producer():
             try:
-                res = self.llm_callback(self.history) if scripted is None else say_scripted()
+                if scripted is not None:
+                    res = say_scripted()
+                elif speculation is not None:
+                    res = self._default_llm_callback(self.history, speculation=speculation)
+                else:
+                    res = self.llm_callback(self.history)
                 first_token = True
                 if hasattr(res, "__anext__") or inspect.isasyncgen(res):
                     async for token in res:
@@ -1896,6 +1986,11 @@ class CascadedPipelineOrchestrator:
                     "availability_quoted": state.availability,
                     "heard_email": state.heard_email,
                     "heard_name": state.heard_name,
+                    # Hit rate and cost of the speculative first round; absent
+                    # on a call that never started one, so a call with the
+                    # flag off saves exactly what it always did.
+                    **({"speculation": self._speculation_stats}
+                       if self._speculation_stats["started"] else {}),
                 },
             )
             logger.info(
@@ -1923,6 +2018,18 @@ class CascadedPipelineOrchestrator:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+        # A speculative round has no turn to end it now. Discarding cancels
+        # its task, which closes its stream; awaited, so no request outlives
+        # the call. Before the save, so the record counts it.
+        for spec in (self._speculation, self._claimed_speculation):
+            if spec is None:
+                continue
+            self._discard_speculation("call ended", spec)
+            try:
+                await spec.task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._speculation = self._claimed_speculation = None
         await self._save_transcript()
         await self.deepgram.close()
         await self.cartesia.close()
@@ -2270,7 +2377,8 @@ class CascadedPipelineOrchestrator:
         self.call_state.observe(name, args, result)
         return result
 
-    async def _open_llm_round(self, model: str, messages: list, tools: list):
+    async def _open_llm_round(self, model: str, messages: list, tools: list,
+                              track: Optional[list] = None):
         """
         Start one model round and wait for its first event, under a deadline.
         Returns `(stream, first_event)`; `first_event` is None for an empty
@@ -2289,6 +2397,9 @@ class CascadedPipelineOrchestrator:
         to the model they were configured for: gpt-4.1-nano rejects
         `reasoning_effort`, so carrying a luna option over would turn the
         fallback into a guaranteed 400.
+
+        `track`, when given, collects every stream opened, so a caller that
+        can be cancelled mid-round (a speculation) can close them itself.
         """
         deadline_s = settings.LLM_FIRST_TOKEN_TIMEOUT_S
         fallback = settings.LLM_FALLBACK_MODEL or model
@@ -2308,6 +2419,8 @@ class CascadedPipelineOrchestrator:
                     **options,
                 )
                 opened.append(stream)
+                if track is not None:
+                    track.append(stream)
                 try:
                     return stream, await stream.__anext__()
                 except StopAsyncIteration:
@@ -2366,7 +2479,235 @@ class CascadedPipelineOrchestrator:
         except Exception as exc:
             logger.debug("LLM stream close failed: %s", exc)
 
-    async def _default_llm_callback(self, history: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
+    async def _turn_messages(self, history: List[Dict[str, Any]], call_state: CallState):
+        """
+        The request a turn sends. One builder for the real turn and the
+        speculative one, so the two can only differ where the call itself
+        has moved on — which the fingerprint then catches — and never because
+        two copies of this logic drifted apart, which would read as a 0% hit
+        rate with nothing to say why.
+        """
+        model, messages, tools = await self._request_prefix()
+        # Only the recent transcript goes in verbatim; what the older
+        # turns *established* is in the call-state note, which is placed
+        # immediately before the caller's latest words because that is
+        # where the model actually attends to it. Fourteen turns back, it
+        # did not.
+        messages += recent_transcript(history)
+        state_note = call_state.as_note()
+        if state_note and len(messages) > 1:
+            messages.insert(len(messages) - 1, {"role": "system", "content": state_note})
+        return model, messages, tools
+
+    def _request_fingerprint(self, model: str, messages: list, tools: list) -> str:
+        """
+        A hash of everything a model round sends. Hashing the whole request
+        rather than a summary of it (length, last message) is ~0.2 ms for the
+        full prompt, and it cannot miss a change a summary would: a pruned
+        reply, a call-state fact, the prompt's clock ticking over a minute.
+
+        Exact everywhere but the caller's latest words, which go in as
+        normalised words: the speculation sent the eager transcript, the turn
+        has the final one, and `_claim_speculation` has already required
+        those to be the same words. Flux re-punctuating "yes" as "Yes." must
+        not count as the call having changed.
+        """
+        if messages and messages[-1].get("role") == "user":
+            messages = messages[:-1] + [
+                {"role": "user", "content": normalise_transcript(messages[-1].get("content"))}]
+        return hashlib.sha256(json.dumps(
+            [model, self._model_options(), messages, tools], sort_keys=True, default=str,
+        ).encode()).hexdigest()
+
+    # ── Speculative first round on Flux EagerEndOfTurn ─────────────────────
+    #
+    # Flux says "probably done" (EagerEndOfTurn) a few hundred ms before it
+    # says "done" (EndOfTurn), and the model's first token takes ~0.5 s. Asking
+    # on the first and keeping the answer if the second confirms the same
+    # words takes up to that gap off every turn — Deepgram's own guidance.
+    #
+    # What a speculation may do is exactly one thing: open round 1's stream
+    # and wait for its first event. It reads no further, so there is no second
+    # reader and no second deadline implementation; what the model sends
+    # meanwhile waits in the connection's buffer and is read at once on
+    # adoption. It never touches history, call_state, tools or audio — those
+    # all live after the seam in `_default_llm_callback`, which only runs once
+    # EndOfTurn has confirmed the turn. A first event that is a tool call is
+    # kept like any other: the request is fingerprint-identical, so that tool
+    # call IS the round-1 answer the turn would have got, and the normal path
+    # runs the tool, once, after confirmation.
+
+    def _speculation_enabled(self) -> bool:
+        """SPECULATIVE_EOT_ENABLED, unless the tenant's voice_settings say
+        otherwise with `speculative_eot`."""
+        vs = (self.tenant_config or {}).get("voice_settings") or {}
+        flag = vs.get("speculative_eot")
+        if flag is None:
+            return bool(settings.SPECULATIVE_EOT_ENABLED)
+        if isinstance(flag, str):
+            return flag.strip().lower() in ("1", "true", "yes", "on")
+        return bool(flag)
+
+    def _start_speculation(self, transcript: str) -> None:
+        """
+        Start round 1 for `transcript` on its own task. Runs on the Deepgram
+        read loop, so it never awaits.
+        """
+        # A newer proposal supersedes the last, whether or not one starts.
+        self._discard_speculation("replaced")
+        # Only when the floor is free. While the agent is speaking, these
+        # words will either cut it — barge-in rewrites history, so the request
+        # would differ — or be held as a backchannel and never answered:
+        # tokens spent either way for an answer nobody can use. A custom model
+        # callback (tests, harnesses) has no round to hand over.
+        if not (self.is_running and self._context_ready and self._openai is not None
+                and self.state == ConversationState.AWAITING_INPUT
+                and not self._hangup_triggered
+                and self.llm_callback == self._default_llm_callback):
+            return
+        spec = _Speculation(transcript)
+        spec.task = asyncio.create_task(self._speculate(spec))
+        self._speculation = spec
+        self._speculation_stats["started"] += 1
+
+    async def _speculate(self, spec: _Speculation) -> None:
+        """
+        The speculation's task: build the request this turn WOULD send if
+        confirmed, send it, wait for the first event, then hold the stream
+        until it is adopted or discarded (both end this by cancelling it).
+        """
+        try:
+            try:
+                # Copies, never the originals. history gets the caller's
+                # words the way handle_user_turn_complete will append them,
+                # and call_state hears them the way the callback will — so an
+                # unchanged call produces a byte-identical request.
+                history = self.history + [{"role": "user", "content": spec.transcript}]
+                call_state = copy.deepcopy(self.call_state)
+                call_state.hear_caller(
+                    spec.transcript,
+                    agent_asked=next((m.get("content", "") for m in reversed(history)
+                                      if m.get("role") == "assistant"), ""),
+                )
+                model, messages, tools = await self._turn_messages(history, call_state)
+                spec.fingerprint = self._request_fingerprint(model, messages, tools)
+                spec.sent_at = time.perf_counter()
+                # The real round's own deadline and retry, measured from now.
+                spec.opened = await self._open_llm_round(model, messages, tools, track=spec.streams)
+                spec.first_at = time.perf_counter()
+            except Exception as exc:
+                spec.error = exc
+                return
+            finally:
+                spec.ready.set()
+            await asyncio.Event().wait()
+        finally:
+            # Every exit but adoption: the stream is nobody's, so close it,
+            # including one cancelled mid-open, before its first event.
+            if not spec.adopted:
+                for stream in spec.streams:
+                    await self._close_llm_stream(stream)
+
+    def _discard_speculation(self, reason: str, spec: Optional[_Speculation] = None) -> None:
+        """
+        Drop a speculation — the waiting one by default. Synchronous, so it is
+        safe on the read loop and inside barge-in: cancelling the task is all
+        it takes, and the task closes its own stream. Idempotent, and an
+        adopted speculation belongs to its turn and is left alone.
+        """
+        if spec is None:
+            spec = self._speculation
+        if spec is not None and spec is self._speculation:
+            self._speculation = None
+        if spec is None or spec.adopted or spec.discarded:
+            return
+        spec.discarded = True
+        if spec.task is not None:
+            spec.task.cancel()
+        stats = self._speculation_stats
+        stats["discarded"] += 1
+        stats["discard_reasons"][reason] = stats["discard_reasons"].get(reason, 0) + 1
+        logger.info("🔮 [CascadedOrchestrator] Speculative first round discarded (%s)", reason)
+
+    def _claim_speculation(self, transcript: str) -> Optional[_Speculation]:
+        """
+        EndOfTurn confirmed `transcript`. The waiting speculation goes to this
+        turn if it was started on the same words, and is dropped otherwise.
+        The slot is empty either way: this EndOfTurn closes the eager/resumed
+        cycle the speculation belonged to.
+        """
+        spec, self._speculation = self._speculation, None
+        if spec is None:
+            return None
+        if spec.discarded or spec.key != normalise_transcript(transcript):
+            self._discard_speculation("different words", spec)
+            return None
+        if self.llm_callback != self._default_llm_callback:
+            self._discard_speculation("custom model callback", spec)
+            return None
+        spec.claimed_at = time.perf_counter()
+        self._claimed_speculation = spec
+        return spec
+
+    async def _adopt_speculation(self, spec: _Speculation, model: str, messages: list, tools: list):
+        """
+        Round 1's `(stream, first_event)` from the speculation, or None to
+        open a fresh round as if it had never existed.
+
+        Used only if it sent byte-for-byte the request this turn is about to
+        send. Deadlines are unchanged: a first event already in hand has met
+        the first-token deadline; one still pending is under the speculation's
+        own `_open_llm_round` deadline and retry, which started earlier, so
+        the caller never waits longer than without it. The gap deadline is
+        `_bounded_events`, applied by the caller to this stream as to any.
+        """
+        if spec.adopted or spec.discarded:
+            return None
+        if spec.fingerprint != self._request_fingerprint(model, messages, tools):
+            self._discard_speculation(
+                "request changed" if spec.fingerprint else "not sent yet", spec)
+            return None
+        decided_at = time.perf_counter()
+        waited = not spec.ready.is_set()
+        try:
+            await spec.ready.wait()
+        except asyncio.CancelledError:
+            self._discard_speculation("unused", spec)
+            raise
+        if spec.discarded:           # barge-in or stop() while we waited
+            return None
+        if spec.error is not None:
+            if waited:
+                # It failed on the caller's time, exactly as this round would
+                # have: same outcome, and a second full deadline here would
+                # double the silence.
+                self._discard_speculation("failed", spec)
+                raise spec.error
+            # It failed before anyone was waiting; a fresh round costs the
+            # caller nothing they would not have paid without speculation.
+            self._discard_speculation("failed before EndOfTurn", spec)
+            return None
+        spec.adopted = True
+        spec.task.cancel()           # ends the hold; adopted, so it closes nothing
+        # Without it, the first token would have come one model latency after
+        # this point; with it, at the later of now and when it actually came.
+        model_ms = (spec.first_at - spec.sent_at) * 1000
+        saved_ms = max(0.0, min((decided_at - spec.sent_at) * 1000, model_ms))
+        after_eot_ms = max(0.0, (max(spec.first_at, decided_at)
+                                 - (spec.claimed_at or decided_at)) * 1000)
+        stats = self._speculation_stats
+        stats["used"] += 1
+        stats["saved_ms"] += int(round(saved_ms))
+        logger.info(
+            "🔮 [CascadedOrchestrator] Speculative first round used | first token %.0f ms "
+            "after EndOfTurn | model took %.0f ms, asked %.0f ms early | saved ~%.0f ms",
+            after_eot_ms, model_ms, (decided_at - spec.sent_at) * 1000, saved_ms,
+        )
+        return spec.opened
+
+    async def _default_llm_callback(
+        self, history: List[Dict[str, Any]], speculation: Optional[_Speculation] = None,
+    ) -> AsyncGenerator[str, None]:
         """
         Generate the agent's reply for this turn with OpenAI.
 
@@ -2400,16 +2741,7 @@ class CascadedPipelineOrchestrator:
         assistant_text = ""
         try:
             await self._ensure_call_context()
-            model, messages, tools = await self._request_prefix()
-            # Only the recent transcript goes in verbatim; what the older
-            # turns *established* is in the call-state note, which is placed
-            # immediately before the caller's latest words because that is
-            # where the model actually attends to it. Fourteen turns back, it
-            # did not.
-            messages += recent_transcript(history)
-            state_note = self.call_state.as_note()
-            if state_note and len(messages) > 1:
-                messages.insert(len(messages) - 1, {"role": "system", "content": state_note})
+            model, messages, tools = await self._turn_messages(history, self.call_state)
             # Bounded so a tool-calling loop can never stall the voice turn.
             # Whether the caller has heard anything this turn. A tool round
             # with nothing said first is dead air for as long as the tool and
@@ -2430,7 +2762,19 @@ class CascadedPipelineOrchestrator:
                 # open otherwise — a leaked span in the code that exists to
                 # repair leaked spans.
                 try:
-                    stream, first = await self._open_llm_round(model, messages, tools)
+                    # THE seam for a speculative first round, and the only
+                    # one: round 1 takes a stream already opened for this
+                    # exact request instead of opening its own. Everything
+                    # from here down — content, tool calls, acks, the gap
+                    # deadline, the error path — runs exactly as it would on
+                    # a stream opened here, because it is the same object in
+                    # the same state. Tools still run only below, in this
+                    # turn, after EndOfTurn confirmed it.
+                    adopted = None
+                    if _round == 0 and speculation is not None:
+                        adopted = await self._adopt_speculation(
+                            speculation, model, messages, tools)
+                    stream, first = adopted or await self._open_llm_round(model, messages, tools)
                 except Exception:
                     if llm_span:
                         llm_span.finish()
