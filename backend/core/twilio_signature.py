@@ -72,9 +72,16 @@ async def verify_twilio_signature(request: Request) -> None:
     else:
         # Starlette caches the parsed form on the request, so the route's own
         # Form(...) parameters read the same body without consuming it twice.
-        params = await request.form() if request.method == "POST" else {}
-        valid = RequestValidator(settings.TWILIO_AUTH_TOKEN).validate(url, params, signature)
-        verdict = "valid" if valid else "invalid"
+        # Guarded: this runs in front of /twilio/voice on every live call, and
+        # in "report" mode a parsing or validator error must cost a log line,
+        # never the call itself.
+        try:
+            params = await request.form() if request.method == "POST" else {}
+            valid = RequestValidator(settings.TWILIO_AUTH_TOKEN).validate(url, params, signature)
+            verdict = "valid" if valid else "invalid"
+        except Exception as e:
+            logger.error("🔐 [TwilioSig] validation raised on %s: %s", path, e)
+            verdict = "error"
 
     logger.info("🔐 [TwilioSig] verdict=%s mode=%s path=%s", verdict, mode, path)
     if verdict == "valid":
