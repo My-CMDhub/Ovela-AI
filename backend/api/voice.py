@@ -16,6 +16,8 @@ from services.appwrite import db_service
 from services.email import email_service
 from services.magic_links import generate_demo_approval_url, verify_action_token
 from rules.whitelist import is_whitelisted
+# Phone numbers are PII and logs ship off-box: always log them through mask_phone.
+from core.utils import mask_phone
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -70,7 +72,7 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     # WHITELISTED PHONES: Immediate call (bypass approval)
     # ============================================================
     if is_whitelisted(request.phone):
-        logger.info(f"Whitelisted phone {request.phone} - immediate call")
+        logger.info(f"Whitelisted phone {mask_phone(request.phone)} - immediate call")
         try:
             call = _trigger_demo_call(request.name, request.business_name, request.phone, request.tenant_id)
             
@@ -107,7 +109,7 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
             }
         )
         
-        logger.info(f"Demo request {lead_id} pending approval for {request.phone}")
+        logger.info(f"Demo request {lead_id} pending approval for {mask_phone(request.phone)}")
     
     return {
         "status": "pending", 
@@ -204,7 +206,7 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
             "call_sid": call.sid
         })
         
-        logger.info(f"Demo approved and call triggered for {phone}")
+        logger.info(f"Demo approved and call triggered for {mask_phone(phone)}")
         
         return HTMLResponse(
             content=f"""
@@ -324,7 +326,7 @@ def _trigger_demo_call(name: str, business_name: str, phone: str, tenant_id: str
         machine_detection="Enable"
     )
     
-    logger.info(f"Triggered demo call to {phone} (tenant={tenant_id}), SID: {call.sid}")
+    logger.info(f"Triggered demo call to {mask_phone(phone)} (tenant={tenant_id}), SID: {call.sid}")
     return call
 
 
@@ -364,7 +366,7 @@ async def get_twiml(request: Request, background_tasks: BackgroundTasks):
     if user_phone != "unknown":
         is_allowed, limit_reason = await db_service.check_voice_rate_limit(user_phone, tenant_id)
         if not is_allowed:
-            logger.warning(f"🚫 Call from {user_phone} blocked by rate limiting: {limit_reason}")
+            logger.warning(f"🚫 Call from {mask_phone(user_phone)} blocked by rate limiting: {limit_reason}")
             # Log blocked attempt as a transcript record
             await db_service.save_call_transcript(
                 tenant_id=tenant_id,
@@ -390,7 +392,7 @@ async def get_twiml(request: Request, background_tasks: BackgroundTasks):
     
     # Handle Answering Machines (AMD)
     if "machine" in answered_by.lower():
-        logger.info(f"AMD detected machine ({answered_by}) for {user_phone} - leaving message")
+        logger.info(f"AMD detected machine ({answered_by}) for {mask_phone(user_phone)} - leaving message")
         response.say("Hi, this is Ovela. I missed you, but I've sent you an email with the demo details. Chat soon!")
         response.hangup()
         return HTMLResponse(content=str(response), media_type="application/xml")

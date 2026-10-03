@@ -26,8 +26,23 @@ from services.motel_knowledge_base import set_tenant_context
 from services.voice_agent.text_utils import normalize_phone_number
 from services.knowledge_base.coalcreek import COALCREEK_DATA
 from core.config import settings
+from core.utils import mask_email, mask_phone
 
 logger = logging.getLogger(__name__)
+
+# Tool args carry guest names, emails and phone numbers. Logs ship to a third
+# party and outlive any booking, so never log `args` itself — only its keys
+# plus the few scalar fields that identify nobody.
+_LOGGABLE_ARG_VALUES = frozenset({
+    "check_in_date", "check_out_date", "check_in", "check_out",
+    "room_type", "num_nights", "num_guests", "has_user_confirmed_summary",
+})
+
+
+def _args_for_log(args) -> dict:
+    if not isinstance(args, dict):
+        return {}
+    return {k: (args[k] if k in _LOGGABLE_ARG_VALUES else "<redacted>") for k in sorted(args)}
 
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 WEEKDAY_INDEX = {
@@ -96,7 +111,7 @@ def not_your_booking(tool: str, doc: dict, caller_phone: str, what: str) -> dict
     logger.warning(
         "🔒 Privacy boundary: %s refused — caller '%s' owns none of the bookings "
         "found%s.",
-        tool, caller_phone,
+        tool, mask_phone(caller_phone),
         f" (nearest: {doc.get('booking_reference')})" if doc.get("booking_reference") else "",
     )
     return {
@@ -542,7 +557,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                         logger.info(f"✅ Scraping success on attempt {attempt}")
                         break
                     else:
-                        logger.warning("ARGS DUMP: %s", args); logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
+                        logger.debug("tool args: %s", _args_for_log(args)); logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
                         
                 except Exception as scrape_err:
                     logger.error(f"⚠️ Scraping exception on attempt {attempt}: {scrape_err}")
@@ -784,10 +799,10 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     has_confirmed_val = args.get("has_user_confirmed_summary", "NO")
     has_confirmed = (str(has_confirmed_val).upper() == "YES" or has_confirmed_val is True)
     if not has_confirmed:
-        logger.warning("ARGS DUMP: %s", args); logger.warning(
+        logger.debug("tool args: %s", _args_for_log(args)); logger.warning(
             "N1 gate: create_booking_request called WITHOUT caller summary confirmation — rejecting. "
-            "guest=%s email=%s check_in=%s room=%s",
-            guest_name, guest_email, check_in, room_type
+            "guest_name_given=%s email=%s check_in=%s room=%s",
+            bool(guest_name), mask_email(guest_email), check_in, room_type
         )
         return {
             "success": False,
@@ -1170,9 +1185,9 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                     normalized_doc_phone = doc_phone
             
             if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
-                logger.warning("ARGS DUMP: %s", args); logger.warning(
-                    "🔒 Privacy boundary triggered: Caller phone '%s' attempted to access booking for '%s' (phone: '%s'). Refusing access.",
-                    caller_phone, doc.get("guest_name"), doc_phone
+                logger.debug("tool args: %s", _args_for_log(args)); logger.warning(
+                    "🔒 Privacy boundary triggered: Caller phone '%s' attempted to access booking %s (phone: '%s'). Refusing access.",
+                    mask_phone(caller_phone), doc.get("booking_reference") or "?", mask_phone(doc_phone)
                 )
                 return {
                     "found": False,
@@ -1460,7 +1475,7 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
     guest_phone = user_phone or args.get("guest_phone", "") or ""
     guest_email = args.get("guest_email", "")
     
-    logger.info(f"Captured Guest Info: {guest_name} - {guest_phone}")
+    logger.info("Captured Guest Info: name_given=%s phone=%s", bool(guest_name), mask_phone(guest_phone))
 
     # ── Correction path: patch reservation + resend Stripe link ──
     email_resent = False
@@ -2312,7 +2327,7 @@ class CoalCreekFunctionDispatcher:
                 try:
                     await asyncio.wait_for(email_notify_event.wait(), timeout=6.0)
                 except asyncio.TimeoutError:
-                    logger.warning("ARGS DUMP: %s", args); logger.warning("N2: Email dispatch timeout (6s) for %s — continuing", booking_ref)
+                    logger.debug("tool args: %s", _args_for_log(args)); logger.warning("N2: Email dispatch timeout (6s) for %s — continuing", booking_ref)
 
                 # N2: If email failed propagate the error into the function result
                 # so the AI is forced to tell the caller immediately.
@@ -2326,7 +2341,7 @@ class CoalCreekFunctionDispatcher:
                         "booking_reference": booking_ref,
                         "_email_bounce": True,
                     }
-                    logger.warning("ARGS DUMP: %s", args); logger.warning("N2: SMTP bounce injected into function result for %s", booking_ref)
+                    logger.debug("tool args: %s", _args_for_log(args)); logger.warning("N2: SMTP bounce injected into function result for %s", booking_ref)
 
                 # ── Task 3: ADK Cold Path session state update ─────────────────
                 if self.call_sid:
@@ -2427,7 +2442,7 @@ class CoalCreekFunctionDispatcher:
              negation_words = {"no", "dont", "don't", "stop", "never", "cancel"}
              words = set(re.sub(r'[^\w\s]', '', user_utt).split())
              if negation_words & words or user_utt in ("no", "no no", "no thanks", "no thank you"):
-                 logger.warning("ARGS DUMP: %s", args); logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
+                 logger.debug("tool args: %s", _args_for_log(args)); logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
                  return {
                      "success": False,
                      "error": "The user explicitly said NO to the transfer. Do not transfer them. Ask how else you can help.",
