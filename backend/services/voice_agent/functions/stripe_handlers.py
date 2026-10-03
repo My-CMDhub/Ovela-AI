@@ -42,16 +42,18 @@ if _STRIPE_CONFIGURED:
 # The SDK default is an 80s per-attempt timeout with 2 retries. Even off the
 # event loop that pins a worker thread and leaves the guest without a payment
 # link for minutes; a checkout create normally answers in well under 2s.
-# Process-global, so only set it when nobody has installed a client already.
+# Process-global and installed unconditionally: the SDK creates its own 80s
+# client on first use, so a "only if unset" guard lost to any dashboard Stripe
+# call made before the first voice booking imported this module. main.py
+# imports this module at startup for the same reason.
 _STRIPE_TIMEOUT_S = 10
 stripe.max_network_retries = 1
 try:
-    if getattr(stripe, "default_http_client", None) is None:
-        stripe.default_http_client = stripe.new_default_http_client(
-            timeout=_STRIPE_TIMEOUT_S,
-            verify_ssl_certs=stripe.verify_ssl_certs,
-            proxy=stripe.proxy,
-        )
+    stripe.default_http_client = stripe.new_default_http_client(
+        timeout=_STRIPE_TIMEOUT_S,
+        verify_ssl_certs=stripe.verify_ssl_certs,
+        proxy=stripe.proxy,
+    )
 except Exception as _exc:  # older SDK layout — keep its defaults, never break import
     logger.warning("💳 Could not set Stripe HTTP timeout: %s", _exc)
 

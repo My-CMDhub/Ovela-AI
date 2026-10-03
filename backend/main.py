@@ -68,6 +68,10 @@ app = FastAPI(title=settings.PROJECT_NAME)
 # Scheduler for background jobs
 from services.scheduled_jobs.scheduler import start_scheduler, shutdown_scheduler
 
+# Imported for its side effect: installs the Stripe HTTP client with a 10s
+# timeout before any route can make the SDK create its own 80s default.
+import services.voice_agent.functions.stripe_handlers  # noqa: E402,F401
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on application startup."""

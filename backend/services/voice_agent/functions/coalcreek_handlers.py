@@ -2430,6 +2430,15 @@ class CoalCreekFunctionDispatcher:
              except Exception as e:
                  logger.error(f"Live search failed: {e}")
                  return {"success": False, "error": str(e), "message": "My search service is currently unavailable."}
+             finally:
+                 # The async path opens its own HTTP session per client; close
+                 # it rather than leave one per search for the GC to find.
+                 _client = locals().get("client")
+                 if _client is not None:
+                     try:
+                         await _client.aio.aclose()
+                     except Exception:
+                         pass
 
 
         # Human / Reporting
