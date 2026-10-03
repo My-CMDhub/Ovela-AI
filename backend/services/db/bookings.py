@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 from appwrite.id import ID
 from zoneinfo import ZoneInfo
 import logging
@@ -293,37 +294,88 @@ class BookingsMixin:
             logger.error(f"Error fetching motel rooms: {e}")
             return []
 
-    async def get_motel_reservations(self, start_date: str, end_date: str, tenant_id: str = "coalcreek") -> list:
+    # Page size and page cap for the availability read. See get_motel_reservations.
+    _RESERVATION_PAGE_SIZE = 500
+    _RESERVATION_MAX_PAGES = 10
+
+    async def get_motel_reservations(self, start_date: str, end_date: str, tenant_id: str = "coalcreek") -> Optional[list]:
         """
-        Get all motel reservations overlapping with the date range.
+        Get all live motel reservations overlapping [start_date, end_date).
         An overlap occurs if check_in < end_date AND check_out > start_date.
-        We fetch a broad range and filter accurately in python since Appwrite doesn't support complex OR overlap natively easily.
+
+        Returns a list (possibly empty: "nothing booked") or None ("could not
+        read"). The two used to be the same `[]`: `_make_request` swallows every
+        Appwrite error into None, this method turned that into "no
+        reservations", and the availability check then saw every room free and
+        auto-assigned one — an outage became a double booking. Callers MUST
+        treat None as "availability unknown", never as "empty".
+
+        Why page instead of one `limit(500)`: the old single page had no order,
+        and Appwrite's default order is oldest-first, so once the collection
+        passed 500 rows the NEWEST bookings — the ones overlapping future
+        stays — silently fell off the end. A server-side overlap filter on
+        check_in_date/check_out_date would be cheaper, but the repo has no
+        schema for those attributes (string vs datetime, indexed or not), and a
+        filter Appwrite rejects would turn every availability check into
+        "unknown". `$createdAt` and cursors are system features that need no
+        schema, so: newest-first, cursor-paged, overlap filtered in Python.
         """
+        path = f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
+        page_size = self._RESERVATION_PAGE_SIZE
+        all_res: list = []
+        cursor = None
         try:
-            path = f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
-            queries = [
-                self.Query.equal("tenant_id", tenant_id),
-                self.Query.limit(500) # Fetch up to 500 upcoming bookings
-            ]
-            
-            result = await self._make_request("GET", path, params={"queries": queries})
-            all_res = result.get("documents", []) if result else []
-            
-            # Filter in memory for precise overlap
-            overlapping = []
-            for res in all_res:
-                status = res.get("status", "")
-                if status in ["cancelled", "rejected"]:
-                    continue
-                c_in = res.get("check_in_date")
-                c_out = res.get("check_out_date")
-                if c_in and c_out:
-                    if c_in < end_date and c_out > start_date:
-                        overlapping.append(res)
-            return overlapping
+            for _ in range(self._RESERVATION_MAX_PAGES):
+                queries = [
+                    self.Query.equal("tenant_id", tenant_id),
+                    self.Query.order_desc("$createdAt"),
+                    self.Query.limit(page_size),
+                ]
+                if cursor:
+                    queries.append(self.Query.cursor_after(cursor))
+                result = await self._make_request("GET", path, params={"queries": queries})
+                docs = result.get("documents") if isinstance(result, dict) else None
+                if docs is None:
+                    # None from _make_request = HTTP/network error (already logged
+                    # there). A partial read is as dangerous as no read: a booking
+                    # on the missing page is a room we would hand out twice.
+                    logger.error(
+                        "🚨 Reservation read failed (tenant=%s, %s→%s, after %d rows) — "
+                        "availability is UNKNOWN, not empty.",
+                        tenant_id, start_date, end_date, len(all_res),
+                    )
+                    return None
+                all_res.extend(docs)
+                if len(docs) < page_size:
+                    break
+                cursor = docs[-1].get("$id")
+                if not cursor:
+                    logger.error("🚨 Reservation page has no $id to page from — availability UNKNOWN.")
+                    return None
+            else:
+                # Every page was full and we ran out of pages: there may be more
+                # rows we never saw. Refuse rather than answer from a partial view.
+                # If this fires, the fix is a server-side date filter (see above).
+                logger.error(
+                    "🚨 motel_reservations for %s exceeds %d rows; availability read "
+                    "refused as UNKNOWN. Add a server-side check_out_date filter.",
+                    tenant_id, page_size * self._RESERVATION_MAX_PAGES,
+                )
+                return None
         except Exception as e:
             logger.error(f"Error fetching motel reservations for availability: {e}")
-            return []
+            return None
+
+        # Same live filter the identity lookups use (case-insensitive), so a
+        # "Cancelled" row puts the room back on sale just as "cancelled" does.
+        overlapping = []
+        for res in _live_only(all_res):
+            c_in = res.get("check_in_date")
+            c_out = res.get("check_out_date")
+            if c_in and c_out:
+                if c_in < end_date and c_out > start_date:
+                    overlapping.append(res)
+        return overlapping
 
 
     # ==================== MOTEL RESERVATION UPDATES ====================

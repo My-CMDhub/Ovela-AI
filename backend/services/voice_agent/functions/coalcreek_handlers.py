@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import asyncio
 import re
+import weakref
 from zoneinfo import ZoneInfo
 
 # Import knowledge base services
@@ -293,97 +294,135 @@ def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utteranc
 
     return None, None, "unresolved"
 
+def _map_room_type(raw_type) -> str:
+    """Map a raw DB room_type to the display names used throughout the system.
+    Null-safe; any unrecognised room_type passes through as-is (safe fallback)."""
+    mapped_type = (raw_type or "").title()
+    if mapped_type == "Queen":
+        return "Double Room"
+    if mapped_type == "Twin":
+        return "Twin Room"
+    if mapped_type == "Family":
+        return "Family Suite"
+    if mapped_type in ("Spa", "Deluxe", "Suite"):
+        return "Deluxe Spa Suite"
+    return mapped_type
+
+
 async def _check_appwrite_availability(db_service, check_in_str: str, check_out_str: str, room_type: str = None) -> dict:
     """
     Check availability purely from Appwrite DB.
     Mimics the scraper output format.
+
+    A room type is available only if ONE room of that type is free on EVERY
+    night. It used to be "some room of the type is free each night", and the
+    booking path then took night 1's sample room: room 1 free Fri / booked Sat
+    plus room 2 free both nights read as available and assigned room 1 — a
+    Saturday double booking. Nobody moves rooms mid-stay at a motel, so the
+    unit of availability is the room, not the type.
+
+    Return keys (all pre-existing ones keep their shape):
+      available_all_nights  bool — `room_type` (or any type) bookable in one room
+      available_rooms       [type] — types with >=1 room free all nights
+      per_night_results     {date: [one sample room per type free that night]};
+                            the sample prefers a room free ALL nights, so
+                            night-1 pricing quotes a room we would actually give
+      rooms_free_all_nights {type: [room, ...]} — NEW: what the booking path
+                            assigns from; never infer a room from per_night
+      blocked_dates         nights with nothing free of `room_type` (or of any
+                            type when none given) — same meaning as the scraper
+    On failure returns success=False; callers already map that to "unknown".
     """
     try:
         tenant_id = "coalcreek"
         rooms = await db_service.get_motel_rooms(tenant_id)
         reservations = await db_service.get_motel_reservations(check_in_str, check_out_str, tenant_id)
-        
+
+        # Fail CLOSED. None means "couldn't read", not "nothing booked": treating
+        # it as empty is how an Appwrite outage showed every room free and the
+        # booking path assigned one anyway.
+        if reservations is None:
+            return {"success": False, "error": "reservations_unreadable"}
+        # get_motel_rooms still folds errors into [] (its contract is tested
+        # elsewhere). A motel with no rooms is never true, so empty inventory is
+        # a failed read too — otherwise an outage is told to callers as "fully
+        # booked", which loses the booking just as wrongly.
+        if not rooms:
+            return {"success": False, "error": "room_inventory_unreadable"}
+
         # Parse dates
         start_date = datetime.strptime(check_in_str, "%Y-%m-%d").date()
         end_date = datetime.strptime(check_out_str, "%Y-%m-%d").date()
         nights = (end_date - start_date).days
         if nights <= 0:
             return {"success": False, "error": "Invalid date range"}
-            
+
+        night_strs = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(nights)]
+
         # Filter active rooms
         active_rooms = [r for r in rooms if r.get("status") == "available"]
-        
+
+        # Room numbers booked on each night. A reservation covers night D when
+        # check-in is on/before D and check-out is strictly after D.
+        booked_by_night = {
+            night: {res.get("room_number") for res in reservations
+                    if res.get("room_number")
+                    and res.get("check_in_date") <= night
+                    and res.get("check_out_date") > night}
+            for night in night_strs
+        }
+
+        candidates = []  # (room dict, set of nights it is free)
+        for room in active_rooms:
+            room_num = room.get("room_number")
+            candidates.append((
+                {
+                    "room_type": _map_room_type(room.get("room_type")),
+                    "room_number": room_num,
+                    # CRITICAL: use `or` not .get(key, default) because Appwrite stores
+                    # null values as None even when the key exists — .get() returns None,
+                    # not the default, when the key is present but null.
+                    "price_per_night": room.get("base_rate") or 150,
+                    "available": True,
+                },
+                {night for night in night_strs if room_num not in booked_by_night[night]},
+            ))
+
+        # The per-room answer: rooms free on every night of the stay, by type,
+        # in inventory order (deterministic, so the room quoted is the room
+        # assigned).
+        rooms_free_all_nights: Dict[str, List[dict]] = {}
+        for r, free_nights in candidates:
+            if len(free_nights) == nights:
+                rooms_free_all_nights.setdefault(r["room_type"], []).append(r)
+
+        # Free-all-nights rooms first (stable sort keeps inventory order), so the
+        # per-night sample for a type is a room we would actually hand out.
+        ordered = sorted(candidates, key=lambda c: len(c[1]) != nights)
         per_night_results = {}
-        available_all_nights = True
-        all_available_room_types = set()
-        
-        for i in range(nights):
-            current_date = start_date + timedelta(days=i)
-            current_date_str = current_date.strftime("%Y-%m-%d")
-            
-            # Find reservations that overlap with this specific night
-            # Check-in on current_date or earlier, AND check-out strictly after current_date
-            night_res = [res for res in reservations 
-                         if res.get("check_in_date") <= current_date_str 
-                         and res.get("check_out_date") > current_date_str]
-                         
-            booked_room_numbers = set(res.get("room_number") for res in night_res if res.get("room_number"))
-            available_this_night = []
-
-            for room in active_rooms:
-                room_num = room.get("room_number")
-                r_type = room.get("room_type") or ""
-
-                # Map raw DB room_type to the display names used throughout the system.
-                # Handles null-safe: r_type is coerced to "" above.
-                mapped_type = r_type.title()
-                if mapped_type == "Queen":
-                    mapped_type = "Double Room"
-                elif mapped_type == "Twin":
-                    mapped_type = "Twin Room"
-                elif mapped_type == "Family":
-                    mapped_type = "Family Suite"
-                elif mapped_type in ("Spa", "Deluxe", "Suite"):
-                    mapped_type = "Deluxe Spa Suite"
-                # Any unrecognised room_type passes through as-is (safe fallback)
-
-                # CRITICAL: use `or` not .get(key, default) because Appwrite stores
-                # null values as None even when the key exists — .get() returns None,
-                # not the default, when the key is present but null.
-                base_rate = room.get("base_rate") or 150
-
-                if room_num not in booked_room_numbers:
-                    available_this_night.append({
-                        "room_type":      mapped_type,
-                        "room_number":    room_num,
-                        "price_per_night": base_rate,
-                        "available":      True
-                    })
-            
-            # Aggregate available room types for this night
+        blocked_dates = []
+        for night in night_strs:
             night_types = {}
-            for r in available_this_night:
-                rtype = r["room_type"]
-                if rtype not in night_types:
-                    night_types[rtype] = r
-            
-            per_night_results[current_date_str] = list(night_types.values())
-            
-            if i == 0:
-                all_available_room_types = set(night_types.keys())
-            else:
-                all_available_room_types = all_available_room_types.intersection(set(night_types.keys()))
-        
+            for r, free_nights in ordered:
+                if night in free_nights and r["room_type"] not in night_types:
+                    night_types[r["room_type"]] = dict(r)
+            per_night_results[night] = list(night_types.values())
+            if (room_type not in night_types) if room_type else not night_types:
+                blocked_dates.append(night)
+
+        available_types = list(rooms_free_all_nights.keys())
         if room_type:
-            available_all_nights = room_type in all_available_room_types
+            available_all_nights = room_type in rooms_free_all_nights
         else:
-            available_all_nights = len(all_available_room_types) > 0
+            available_all_nights = len(available_types) > 0
 
         return {
             "success": True,
             "available_all_nights": available_all_nights,
-            "available_rooms": list(all_available_room_types),
-            "per_night_results": per_night_results
+            "available_rooms": available_types,
+            "per_night_results": per_night_results,
+            "rooms_free_all_nights": rooms_free_all_nights,
+            "blocked_dates": blocked_dates,
         }
     except Exception as e:
         logger.error(f"Appwrite DB availability error: {e}", exc_info=True)
@@ -637,8 +676,24 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
         else:
             # NOT available - explain why
             if target_room:
-                # Specific room requested but blocked
+                # Specific room requested but blocked. The scrape is always for
+                # ALL rooms, so `blocked_dates` is "nights with nothing free at
+                # all" — not this type's nights (and the PMS path never set it,
+                # so the model was told "sold out on ."). Derive this type's own
+                # blocked nights from the per-night lists both sources return.
+                per_night = result.get("per_night_results") or {}
+                blocked_dates = [
+                    night for night, night_rooms in per_night.items()
+                    if not any(r.get("room_type") == target_room and r.get("available")
+                               for r in (night_rooms or []))
+                ] or blocked_dates
                 blocked_str = ", ".join(blocked_dates)
+                if blocked_str:
+                    why = f"it's sold out on {blocked_str}"
+                else:
+                    # Every night has a {target_room} free, just never the same
+                    # one: we won't hold a stay that means changing rooms.
+                    why = "there isn't one room free for the whole stay"
                 payload = {
                     "available": False,
                     "verified": True,
@@ -647,7 +702,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                     "check_in": check_in,
                     "check_out": check_out,
                     "nights": nights,
-                    "ai_should_say": f"I'm sorry, the {target_room} isn't available for all {nights} night{'s' if nights > 1 else ''} - it's sold out on {blocked_str}. However, I have other room types available. Would you like to hear those options?"
+                    "ai_should_say": f"I'm sorry, the {target_room} isn't available for all {nights} night{'s' if nights > 1 else ''} - {why}. However, I have other room types available. Would you like to hear those options?"
                 }
                 if isinstance(availability_cache, dict):
                     availability_cache[cache_key] = copy.deepcopy(payload)
@@ -655,6 +710,9 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
             else:
                 # All rooms sold out
                 blocked_str = ", ".join(blocked_dates)
+                # Empty means every night has something free but no single room
+                # spans the stay (per-room availability) — don't say "booked on ."
+                sold_out = f"fully booked on {blocked_str}" if blocked_str else "unable to offer one room for the whole stay"
                 payload = {
                     "available": False,
                     "verified": True,
@@ -662,7 +720,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                     "check_in": check_in,
                     "check_out": check_out,
                     "nights": nights,
-                    "ai_should_say": f"I'm sorry, we're fully booked on {blocked_str}. Would you like to check different dates, or can I have someone call you if we get a cancellation?"
+                    "ai_should_say": f"I'm sorry, we're {sold_out}. Would you like to check different dates, or can I have someone call you if we get a cancellation?"
                 }
                 if isinstance(availability_cache, dict):
                     availability_cache[cache_key] = copy.deepcopy(payload)
@@ -682,6 +740,20 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
         if isinstance(availability_cache, dict):
             availability_cache[cache_key] = copy.deepcopy(payload)
         return payload
+
+
+# In-process booking locks, keyed (tenant, room type) and scoped per event
+# loop. asyncio.Lock binds to the loop it first waits on, so one lock shared
+# across loops (pytest runs a loop per test; a worker could run several) would
+# raise "bound to a different event loop". Weak keys drop a loop's locks when
+# the loop is collected; per loop the dict is bounded by the number of types.
+_BOOKING_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[tuple, asyncio.Lock]]" = weakref.WeakKeyDictionary()
+
+
+def _booking_lock(tenant_id: str, room_type: str) -> asyncio.Lock:
+    """The lock serialising check-then-save for one tenant's room type."""
+    per_loop = _BOOKING_LOCKS.setdefault(asyncio.get_running_loop(), {})
+    return per_loop.setdefault((tenant_id, room_type), asyncio.Lock())
 
 
 async def handle_create_booking_request(args: dict, user_phone: str, save_reservation_fn, db_service=None) -> dict:
@@ -869,53 +941,78 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         "tenant_id": "coalcreek"
     }
 
-    if not settings.USE_LIVE_SCRAPING:
-        # P11-F: Skip redundant Appwrite re-check if availability was already confirmed
-        # in this session (availability_cache passed via args from check_availability call).
-        # Falls back to a fresh check if no cached result available.
-        _avail_cache = args.get("_availability_cache") or {}
-        _cache_key = f"{check_in}|{check_out}|{room_data['name']}"
-        _cached = _avail_cache.get(_cache_key) if isinstance(_avail_cache, dict) else None
-        if _cached and _cached.get("available") is True:
-            avail_res = {"success": True, "available_all_nights": True, "per_night_results": _cached.get("per_night_results", {})}
-            logger.info("♻️ PMS booking: skipping re-check — using session availability cache for %s", _cache_key)
-        else:
-            avail_res = await _check_appwrite_availability(db_service, check_in, check_out, room_data["name"])
-        if avail_res.get("success") and avail_res.get("available_all_nights"):
-            per_night = avail_res.get("per_night_results", {})
-            first_night_date = list(per_night.keys())[0] if per_night else None
-            if first_night_date:
-                rooms_for_night = per_night[first_night_date]
-                for r in rooms_for_night:
-                    if r["room_type"] == room_data["name"] and r["available"]:
-                        reservation_data["room_number"] = r["room_number"]
-                        reservation_data["status"] = "reserved"
-                        reservation_data["source"] = "voice_ai_pms_auto"
-                        logger.info(f"✅ PMS Mode: Auto-assigned room {r['room_number']} to {booking_ref}")
-                        break
-        else:
+    async def _save() -> Optional[dict]:
+        """Persist the hold. Returns the refusal to send back, or None on success."""
+        if not save_reservation_fn:
+            return None  # test mode: nothing to write
+        save_res = await save_reservation_fn(reservation_data)
+        if save_res is None or not save_res.get("success"):
+            err_detail = (save_res or {}).get("error", "unknown") if save_res else "None returned"
+            logger.error(f"Failed to save reservation: {err_detail}")
             return {
                 "success": False,
-                "message": f"Unfortunately, the {room_data['name']} is no longer available for those dates."
+                "message": "There was a system error securing your hold. Please try again or contact reception."
             }
-    
-    try:
-        # Save to DB (if saving function provided)
-        if save_reservation_fn:
-            save_res = await save_reservation_fn(reservation_data)
-            
-            if save_res is None or not save_res.get("success"):
-                err_detail = (save_res or {}).get("error", "unknown") if save_res else "None returned"
-                logger.error(f"Failed to save reservation: {err_detail}")
-                return {
-                    "success": False,
-                    "message": "There was a system error securing your hold. Please try again or contact reception."
-                }
+        # P11-C: Capture saved doc $id so cold-path skips race-prone re-fetch
+        saved_doc_id = (save_res.get("document") or {}).get("$id")
+        if saved_doc_id:
+            reservation_data["_saved_doc_id"] = saved_doc_id
+        return None
 
-            # P11-C: Capture saved doc $id so cold-path skips race-prone re-fetch
-            saved_doc_id = (save_res.get("document") or {}).get("$id")
-            if saved_doc_id:
-                reservation_data["_saved_doc_id"] = saved_doc_id
+    try:
+        if not settings.USE_LIVE_SCRAPING:
+            # Always a fresh check, never the per-call memo: the memo (P11-F
+            # used to read it from args) cannot see a room taken since it was
+            # filled, and the check below is what makes the write safe.
+            #
+            # Check and write happen under one in-process lock per room type.
+            # Without it two calls on this dyno can both read "room 2 free",
+            # both pick room 2 and both save — the last room sold twice. Rooms
+            # are only ever assigned to bookings of their own type, so a
+            # per-type lock is as safe as a per-tenant one and lets different
+            # types book in parallel. It does NOT cover two dynos; that needs a
+            # unique constraint in the DB.
+            async with _booking_lock("coalcreek", room_data["name"]):
+                avail_res = await _check_appwrite_availability(db_service, check_in, check_out, room_data["name"])
+                if not avail_res.get("success"):
+                    # Fail CLOSED. We could not read the calendar, so we neither
+                    # assign a room nor claim one is free, and we do not save a
+                    # hold that would send a payment link for a room that may not
+                    # exist. Same "unknown → offer reception" path that
+                    # check_availability takes when the calendar is unreachable.
+                    logger.error(
+                        "🚨 PMS booking refused for %s: availability unknown (%s)",
+                        booking_ref, avail_res.get("error"),
+                    )
+                    return {
+                        "success": False,
+                        "available": "unknown",
+                        "verified": False,
+                        "message": (
+                            "Sorry, I couldn't confirm that room on the live calendar just now, "
+                            "so I haven't placed the hold. If you'd like, I can put you through to reception."
+                        ),
+                    }
+                # Assign only a room free on EVERY night of the stay — never a
+                # night-1 sample, which may be booked later in the stay.
+                free_rooms = (avail_res.get("rooms_free_all_nights") or {}).get(room_data["name"]) or []
+                if not free_rooms:
+                    return {
+                        "success": False,
+                        "message": f"Unfortunately, the {room_data['name']} is no longer available for those dates."
+                    }
+                room = free_rooms[0]
+                reservation_data["room_number"] = room["room_number"]
+                reservation_data["status"] = "reserved"
+                reservation_data["source"] = "voice_ai_pms_auto"
+                logger.info(f"✅ PMS Mode: Auto-assigned room {room['room_number']} to {booking_ref}")
+                # Save while still holding the lock: releasing first would let a
+                # waiter re-check before this row exists and take the same room.
+                refusal = await _save()
+        else:
+            refusal = await _save()
+        if refusal:
+            return refusal
 
         # Speak the booking reference — natural cadence: "CC, AB 1 2 3 4"
         # Split on dash: "CC-AB1234" → prefix="CC", suffix="AB1234"
