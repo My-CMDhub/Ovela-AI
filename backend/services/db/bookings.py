@@ -313,6 +313,53 @@ class BookingsMixin:
     _RESERVATION_PAGE_SIZE = 500
     _RESERVATION_MAX_PAGES = 10
 
+    async def _read_reservation_pages(self, tenant_id: str, start_date: str, end_date: str,
+                                      extra: Optional[list] = None) -> Optional[list]:
+        """Every reservation row matching the queries, newest first, or None if
+        any page could not be read (a partial read is as dangerous as none)."""
+        path = f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
+        page_size = self._RESERVATION_PAGE_SIZE
+        all_res: list = []
+        cursor = None
+        try:
+            for _ in range(self._RESERVATION_MAX_PAGES):
+                queries = [
+                    self.Query.equal("tenant_id", tenant_id),
+                    *(extra or []),
+                    self.Query.order_desc("$createdAt"),
+                    self.Query.limit(page_size),
+                ]
+                if cursor:
+                    queries.append(self.Query.cursor_after(cursor))
+                result = await self._make_request("GET", path, params={"queries": queries})
+                docs = result.get("documents") if isinstance(result, dict) else None
+                if docs is None:
+                    # None from _make_request = HTTP/network error (already logged
+                    # there). A booking on a missing page is a room handed out twice.
+                    logger.error(
+                        "🚨 Reservation read failed (tenant=%s, %s→%s, after %d rows) — "
+                        "availability is UNKNOWN, not empty.",
+                        tenant_id, start_date, end_date, len(all_res),
+                    )
+                    return None
+                all_res.extend(docs)
+                if len(docs) < page_size:
+                    return all_res
+                cursor = docs[-1].get("$id")
+                if not cursor:
+                    logger.error("🚨 Reservation page has no $id to page from — availability UNKNOWN.")
+                    return None
+            # Every page was full and we ran out of pages: rows we never saw.
+            logger.error(
+                "🚨 motel_reservations for %s exceeds %d matching rows; availability "
+                "read refused as UNKNOWN.",
+                tenant_id, page_size * self._RESERVATION_MAX_PAGES,
+            )
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching motel reservations for availability: {e}")
+            return None
+
     async def get_motel_reservations(self, start_date: str, end_date: str, tenant_id: str = "coalcreek") -> Optional[list]:
         """
         Get all live motel reservations overlapping [start_date, end_date).
@@ -328,57 +375,27 @@ class BookingsMixin:
         Why page instead of one `limit(500)`: the old single page had no order,
         and Appwrite's default order is oldest-first, so once the collection
         passed 500 rows the NEWEST bookings — the ones overlapping future
-        stays — silently fell off the end. A server-side overlap filter on
-        check_in_date/check_out_date would be cheaper, but the repo has no
-        schema for those attributes (string vs datetime, indexed or not), and a
-        filter Appwrite rejects would turn every availability check into
-        "unknown". `$createdAt` and cursors are system features that need no
-        schema, so: newest-first, cursor-paged, overlap filtered in Python.
+        stays — silently fell off the end. Now: filtered server-side to rows
+        checking out after the stay starts (falling back to an unfiltered read
+        if Appwrite rejects that filter), newest-first by `$createdAt`,
+        cursor-paged, and the exact overlap test done in Python.
         """
-        path = f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
-        page_size = self._RESERVATION_PAGE_SIZE
-        all_res: list = []
-        cursor = None
-        try:
-            for _ in range(self._RESERVATION_MAX_PAGES):
-                queries = [
-                    self.Query.equal("tenant_id", tenant_id),
-                    self.Query.order_desc("$createdAt"),
-                    self.Query.limit(page_size),
-                ]
-                if cursor:
-                    queries.append(self.Query.cursor_after(cursor))
-                result = await self._make_request("GET", path, params={"queries": queries})
-                docs = result.get("documents") if isinstance(result, dict) else None
-                if docs is None:
-                    # None from _make_request = HTTP/network error (already logged
-                    # there). A partial read is as dangerous as no read: a booking
-                    # on the missing page is a room we would hand out twice.
-                    logger.error(
-                        "🚨 Reservation read failed (tenant=%s, %s→%s, after %d rows) — "
-                        "availability is UNKNOWN, not empty.",
-                        tenant_id, start_date, end_date, len(all_res),
-                    )
-                    return None
-                all_res.extend(docs)
-                if len(docs) < page_size:
-                    break
-                cursor = docs[-1].get("$id")
-                if not cursor:
-                    logger.error("🚨 Reservation page has no $id to page from — availability UNKNOWN.")
-                    return None
-            else:
-                # Every page was full and we ran out of pages: there may be more
-                # rows we never saw. Refuse rather than answer from a partial view.
-                # If this fires, the fix is a server-side date filter (see above).
-                logger.error(
-                    "🚨 motel_reservations for %s exceeds %d rows; availability read "
-                    "refused as UNKNOWN. Add a server-side check_out_date filter.",
-                    tenant_id, page_size * self._RESERVATION_MAX_PAGES,
-                )
-                return None
-        except Exception as e:
-            logger.error(f"Error fetching motel reservations for availability: {e}")
+        # Ask Appwrite for only the rows that can overlap (checking out after
+        # the stay starts) — the whole history grows without bound, and paging
+        # all of it would one day hit the page cap and fail every availability
+        # check closed. The attribute's type is not in the repo, so if Appwrite
+        # rejects the filter (no index, unexpected type) fall back to reading
+        # everything rather than refusing; the overlap test below is exact
+        # either way, so the filter can only narrow what Python has to scan.
+        all_res = await self._read_reservation_pages(
+            tenant_id, start_date, end_date,
+            extra=[self.Query.greater_than("check_out_date", start_date)],
+        )
+        if all_res is None:
+            logger.warning(
+                "⚠️ Filtered reservation read failed for %s — retrying unfiltered", tenant_id)
+            all_res = await self._read_reservation_pages(tenant_id, start_date, end_date)
+        if all_res is None:
             return None
 
         # Case-insensitive like the identity lookups' `_live_only`, so a

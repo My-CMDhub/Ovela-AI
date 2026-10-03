@@ -296,3 +296,29 @@ class TestTheLastRoomIsSoldOnce:
 
         assert a["success"] and b["success"]
         assert sorted(s["room_number"] for s in db.saved) == ["1", "5"]
+
+
+class TestReservationReadIsFilteredServerSide:
+    """History grows forever; only rows checking out after the stay starts can
+    overlap it, so that is what is asked for — with a fallback if Appwrite
+    rejects the filter, because refusing would stop every booking."""
+
+    def _svc(self, make_request):
+        return TestGetMotelReservationsContract._svc(None, make_request)
+
+    async def test_asks_only_for_rows_checking_out_after_the_start(self):
+        req = AsyncMock(return_value={"documents": [dict(_res("1", FRI, SUN), **{"$id": "a"})]})
+        rows = await self._svc(req).get_motel_reservations(FRI, SUN)
+        assert [r["room_number"] for r in rows] == ["1"]
+        sent = " ".join(str(q) for q in req.await_args.kwargs["params"]["queries"])
+        assert "greaterThan" in sent and "check_out_date" in sent and FRI in sent
+
+    async def test_a_rejected_filter_falls_back_to_the_full_read(self):
+        req = AsyncMock(side_effect=[None, {"documents": [dict(_res("2", FRI, SUN), **{"$id": "b"})]}])
+        rows = await self._svc(req).get_motel_reservations(FRI, SUN)
+        assert [r["room_number"] for r in rows] == ["2"]
+        assert "greaterThan" not in " ".join(str(q) for q in req.await_args_list[1].kwargs["params"]["queries"])
+
+    async def test_both_reads_failing_is_still_unknown(self):
+        req = AsyncMock(return_value=None)
+        assert await self._svc(req).get_motel_reservations(FRI, SUN) is None
