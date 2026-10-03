@@ -1481,7 +1481,16 @@ class CascadedPipelineOrchestrator:
             # measured at 15.4 SECONDS of dead air after a barge-in whenever
             # the cancelled context happened not to emit a trailing chunk.
             # Whether it does is a provider detail this code must not bet on.
-            if not mine():
+            #
+            # A cancelled turn has lost the floor too, even while mine() still
+            # says otherwise: when the caller overtakes a reply, the worker
+            # cancels this turn BEFORE the next turn's barge-in flips the
+            # state, so mine() was still true here and the teardown waited out
+            # the full 15 s below — dead air after "actually, do you have
+            # parking?". (Reproduced in review; present since the worker.)
+            current = asyncio.current_task()
+            overtaken = current is not None and current.cancelling() > 0
+            if overtaken or not mine():
                 for task in (producer_task, receiver_task):
                     if not task.done():
                         task.cancel()
