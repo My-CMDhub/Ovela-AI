@@ -110,30 +110,52 @@ def tool_acknowledgement(tool_name: Optional[str], already_spoken: int) -> Optio
     return options[already_spoken % len(options)] + " "
 
 
+# Words whose own full stop does not end the phrase. Small on purpose: a miss
+# here only merges two phrases, it never mangles one.
+_NO_BREAK_AFTER = frozenset({"mr.", "mrs.", "ms.", "dr.", "st.", "a.m.", "p.m.", "e.g.", "i.e.", "etc."})
+
+
+def _phrase_end(text_buffer: str, is_final: bool) -> int:
+    """Index of the punctuation mark that ends the first phrase, or -1."""
+    for i, char in enumerate(text_buffer):
+        if char not in ".?!,;:":
+            continue
+        if i == len(text_buffer) - 1:
+            # The next token decides: "$129." may yet become "$129.50".
+            return i if is_final else -1
+        if not text_buffer[i + 1].isspace():
+            continue    # "129.50", "2:30", "1,000", "ada@example.com", "p.m"
+        if char == "." and text_buffer[:i + 1].split()[-1].lstrip("(\"'").lower() in _NO_BREAK_AFTER:
+            continue
+        return i
+    return -1
+
+
 def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[str], str]:
     """
     Split text_buffer into phrases based on punctuation or length (>= 6 words).
     Returns list of phrases and the remaining text_buffer.
+
+    Each phrase is normalised by prepare_for_tts on its own, so a split inside
+    a token is spoken wrong. Splitting at the first . , : anywhere turned
+    "$129.50 per night" into "129 dollars." + "50 per night", gave the email
+    rewrite "ada@example." + "com" so it never matched, and cut "2:30 p.m."
+    into four pieces — on the booking read-back, where the prompt has the
+    model say exactly those. So punctuation ends a phrase only when whitespace
+    follows it or the stream has ended, and a length split only counts words a
+    space has closed off: the last word of a streaming buffer may still grow.
     """
     phrases = []
-    punctuation_marks = ['.', '?', '!', ',', ';', ':']
-    
+
     while text_buffer:
-        first_punc_idx = -1
-        for char in punctuation_marks:
-            idx = text_buffer.find(char)
-            if idx != -1:
-                if first_punc_idx == -1 or idx < first_punc_idx:
-                    first_punc_idx = idx
-        
-        if first_punc_idx != -1:
-            phrase = text_buffer[:first_punc_idx + 1]
-            text_buffer = text_buffer[first_punc_idx + 1:]
-            phrases.append(phrase)
+        end = _phrase_end(text_buffer, is_final)
+        if end != -1:
+            phrases.append(text_buffer[:end + 1])
+            text_buffer = text_buffer[end + 1:]
             continue
-            
+
         words = text_buffer.split()
-        if len(words) >= 6:
+        if len(words) > 6 or (len(words) == 6 and (is_final or text_buffer[-1].isspace())):
             phrase_words = words[:6]
             phrase = " ".join(phrase_words)
             idx = text_buffer.find(phrase)
@@ -1962,6 +1984,14 @@ class CascadedPipelineOrchestrator:
                         said_this_turn = True
                         yield delta.content
                     for tc in (delta.tool_calls or []):
+                        # The phrase splitter holds a trailing "." until the
+                        # next token shows it is not "$129.50" — and the next
+                        # token comes after the tool, without a leading space.
+                        # Unmarked, "Let me check those dates." waited out the
+                        # lookup and then ran into "Great news" as one word.
+                        if assistant_text and not assistant_text[-1].isspace():
+                            assistant_text += " "
+                            yield " "
                         # Acknowledge the moment the model reaches for a tool,
                         # not when it has finished writing the call. Done in
                         # code: the prompt asks for this and the model rarely
