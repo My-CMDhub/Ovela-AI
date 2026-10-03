@@ -191,8 +191,10 @@ async def handle_incoming_call(
         # Resolve tenant from To number
         tenant_id = settings.PHONE_TO_TENANT_MAP.get(To.replace(" ", "").strip()) or settings.TENANT_ID or "coalcreek"
         
-        # Get business phone from Tenant settings
-        business_settings = db_service.get_tenant_settings(tenant_id)
+        # Get business phone from Tenant settings. get_tenant_settings is async:
+        # un-awaited, `.get` on the coroutine raised and every forwarded call
+        # fell through to the "technical difficulties" hangup below.
+        business_settings = await db_service.get_tenant_settings(tenant_id)
         business_phone = business_settings.get("business_phone") if business_settings else None
         
         if not business_phone:
