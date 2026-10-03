@@ -270,7 +270,8 @@ class TestTransferCallRestFailure:
         kw = schedule.call_args.kwargs
         assert kw["caller_phone"] == CALLER and kw["call_sid"] == SID and kw["tenant_id"] == "coalcreek"
         assert {"role": "system", "content": TRANSFER_FAILED_NOTE} in agent.history
-        speak.assert_called_once_with(TRANSFER_NOT_STARTED_LINE, clip=None)
+        speak.assert_called_once_with(TRANSFER_NOT_STARTED_LINE, clip=None,
+                                      expected_turn=agent._turn_id)
 
     async def test_does_not_talk_over_a_turn_that_started_meanwhile(self, failing):
         agent, schedule, speak = failing
@@ -339,3 +340,52 @@ class TestNotifyFailedTransfer:
         assert task in tf._in_flight
         await task
         assert task not in tf._in_flight
+
+
+class TestReviewFollowUps:
+    async def test_a_timed_out_transfer_request_is_not_announced_as_failed(self, orchestrator):
+        """A read timeout means Twilio got the request and the answer was lost:
+        staff may already be ringing. No 'missed transfer' text, no apology."""
+        import httpx
+        orchestrator.call_sid = SID
+        client = AsyncMock()
+        client.post = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=client)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        schedule, speak = MagicMock(), AsyncMock()
+        with patch("services.voice_agent.cascaded_orchestrator.httpx.AsyncClient", return_value=ctx), \
+             patch.object(tf, "schedule_failed_transfer_notification", schedule), \
+             patch.object(orchestrator, "trigger_initial_greeting", speak):
+            await orchestrator._transfer_call("+61399990000")
+            await asyncio.sleep(0)
+        schedule.assert_not_called()
+        speak.assert_not_called()
+        assert orchestrator.is_running is True
+
+    async def test_a_scripted_line_yields_to_a_turn_that_started_first(self, orchestrator):
+        orchestrator._turn_id = 7
+        before = list(orchestrator.history)
+        await orchestrator.trigger_initial_greeting("Sorry about that.", clip=None, expected_turn=6)
+        assert orchestrator._turn_id == 7
+        assert orchestrator.history == before
+
+    async def test_a_mid_call_line_starts_with_a_fresh_mark_tracker(self, orchestrator):
+        reset = MagicMock()
+        orchestrator.mark_tracker.reset = reset
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+        with patch.object(orchestrator.cartesia, "receive_audio_events", lambda: _empty()):
+            task = asyncio.create_task(
+                orchestrator.trigger_initial_greeting("Sorry about that.", clip=None))
+            await asyncio.sleep(0)
+            task.cancel()
+            try:
+                await task
+            except BaseException:
+                pass
+        reset.assert_called()
+
+
+async def _empty():
+    if False:
+        yield {}

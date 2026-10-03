@@ -472,7 +472,8 @@ class CascadedPipelineOrchestrator:
         self.mark_tracker.reset()
 
     async def trigger_initial_greeting(
-        self, greeting: Optional[str] = None, clip: Optional[str] = "smart_greeting"
+        self, greeting: Optional[str] = None, clip: Optional[str] = "smart_greeting",
+        expected_turn: Optional[int] = None,
     ) -> None:
         """
         Streams pre-recorded zero-latency greeting audio clip (`smart_greeting.mulaw.raw`)
@@ -483,6 +484,13 @@ class CascadedPipelineOrchestrator:
         from an unanswered transfer — or, with clip=None, synthesise any short
         system line.
         """
+        # Scheduled with create_task, so it starts a tick after it was asked
+        # for. If the caller's next turn took the floor in that tick, this line
+        # must not take it back: claiming `_turn_id` below would make that
+        # turn's mine() false and silently drop the caller's reply.
+        if expected_turn is not None and self._turn_id != expected_turn:
+            logger.info("🗣️ [CascadedOrchestrator] Scripted line skipped — a newer turn holds the floor")
+            return
         greeting = greeting or "Hello! Thanks for calling Coal Creek Accommodation. How can I help you today?"
         logger.info(f"🗣️ [CascadedOrchestrator] Triggering initial greeting: '{greeting}'")
         self.history.append({"role": "assistant", "content": greeting})
@@ -503,6 +511,10 @@ class CascadedPipelineOrchestrator:
         self._turn_id += 1
         my_turn = self._turn_id
         self._turn_task = asyncio.current_task()
+        # Mid-call (the failed-transfer line) the tracker still holds the last
+        # reply's confirmed words; a barge-in would prune history against them
+        # and record words as heard that this line never played.
+        self.mark_tracker.reset()
 
         def mine() -> bool:
             return (self.is_running
@@ -1710,6 +1722,14 @@ class CascadedPipelineOrchestrator:
             logger.info("✅ [CascadedOrchestrator] Transfer initiated")
             # Stop generating AI audio into a leg that now belongs to staff.
             self.is_running = False
+        except httpx.ReadTimeout as e:
+            # The request reached Twilio and the answer did not come back, so the
+            # <Dial> may well be ringing staff right now. Announcing a failure
+            # and texting "missed transfer" here would be wrong half the time,
+            # and /transfer-status reports a real no-answer anyway. If the
+            # update never landed, the call simply carries on with the AI.
+            logger.warning(f"🟡 [CascadedOrchestrator] Transfer request timed out; outcome unknown: {e}")
+            sentry_sdk.capture_message("Twilio transfer update timed out — outcome unknown", level="warning")
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] Transfer failed: {e}")
             sentry_sdk.capture_exception(e)
@@ -1736,7 +1756,8 @@ class CascadedPipelineOrchestrator:
             # has spoken since; a newer turn already has the note in history.
             if self.is_running and self._turn_id == floor:
                 asyncio.create_task(
-                    self.trigger_initial_greeting(TRANSFER_NOT_STARTED_LINE, clip=None)
+                    self.trigger_initial_greeting(TRANSFER_NOT_STARTED_LINE, clip=None,
+                                                  expected_turn=floor)
                 )
 
     async def _await_playback(self, interrupted: bool, turn_id: int = 0) -> None:
