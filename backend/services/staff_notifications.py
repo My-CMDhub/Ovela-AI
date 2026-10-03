@@ -21,10 +21,14 @@ class StaffNotificationService:
                                         customer_phone: str, 
                                         customer_name: str, 
                                         reason: str,
-                                        urgency: str = "medium") -> bool:
+                                        urgency: str = "medium",
+                                        tenant_id: str = None) -> bool:
         """
         Notify staff that a customer requested a callback.
         Also saves to database for tracking, and includes magic link action buttons.
+
+        tenant_id: the row's tenant. Omitted, it stays create_staff_notification's
+        default ("coalcreek"), so existing callers are unchanged.
         """
         try:
             # 1. Save to database first (for tracking)
@@ -33,7 +37,8 @@ class StaffNotificationService:
                 customer_name=customer_name,
                 customer_phone=customer_phone,
                 reason=reason,
-                urgency=urgency
+                urgency=urgency,
+                tenant_id=tenant_id or "coalcreek",
             )
             
             # Get the notification ID for magic links

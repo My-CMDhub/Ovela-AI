@@ -99,7 +99,11 @@ class Settings(BaseSettings):
     STAFF_PHONE_NUMBER: str = ""  # set via env
     
     # Demo Settings
-    TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
+    # Seconds the staff phone rings on a transfer before the caller is handed
+    # back to the AI (and a callback request is recorded). 10s is only ~2-3
+    # rings — short on purpose so nobody waits in silence, but tunable via env
+    # (TRANSFER_TIMEOUT=20) if staff need longer to reach the phone.
+    TRANSFER_TIMEOUT: int = 10
     
     # Phone to Tenant Mapping (Ingress)
     # Maps Twilio 'To' number -> Tenant ID (Can be set via env var as JSON)

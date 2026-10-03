@@ -4,6 +4,7 @@ Twilio Webhooks for Voice Calls
 from fastapi import APIRouter, Request, Form, BackgroundTasks, Depends
 from fastapi.responses import Response
 from xml.sax.saxutils import escape
+from urllib.parse import quote
 from core.config import settings
 from core.stream_auth import issue_stream_token
 from core.twilio_signature import verify_twilio_signature
@@ -72,8 +73,23 @@ async def handle_voice_webhook(
             tenant_id = settings.TENANT_ID or "coalcreek"
             logger.info(f"⚠️ Unknown Ingress Number {cleaned_to} -> Fallback to {tenant_id}")
 
-    # Enforce Abuse Prevention & Rate Limiting
-    is_allowed, limit_reason = await db_service.check_voice_rate_limit(From, tenant_id)
+    # Enforce Abuse Prevention & Rate Limiting — except on the leg returning
+    # from a failed staff transfer. That leg is the SAME call (Twilio keeps
+    # the CallSid across the <Redirect>) and was admitted already, but its
+    # first leg is now counted, so a caller on their 2nd call of the day was
+    # told "you have reached our call limit" and hung up on because staff
+    # didn't answer. The query flag alone is spoofable, so the exemption is
+    # bound to a transcript already existing for this CallSid; without one
+    # (e.g. the first leg's save failed) the normal check runs as before.
+    returning_from_transfer = (
+        transfer_failed == "true"
+        and await db_service.call_already_recorded(CallSid, tenant_id)
+    )
+    if returning_from_transfer:
+        logger.info(f"↩️ {CallSid} returning from a failed transfer — rate limit not re-applied")
+        is_allowed, limit_reason = True, "transfer_return"
+    else:
+        is_allowed, limit_reason = await db_service.check_voice_rate_limit(From, tenant_id)
     if not is_allowed:
         logger.warning(f"🚫 Call from {mask_phone(From)} blocked by rate limiting: {limit_reason}")
         # Log blocked attempt as a transcript record with status='blocked'
@@ -308,8 +324,11 @@ async def handle_incoming_sms(
 
 @router.post("/transfer-status")
 async def handle_transfer_status(
+    request: Request,
+    background_tasks: BackgroundTasks,
     CallSid: str = Form(...),
     From: str = Form(...),
+    To: str = Form(default=None),
     DialCallStatus: str = Form(default=None),
     DialCallDuration: str = Form(default="0")
 ):
@@ -321,20 +340,57 @@ async def handle_transfer_status(
     - "no-answer": Staff didn't answer within timeout
     - "busy": Staff line was busy
     - "failed": Call failed to connect
+    - "canceled": The dial was cancelled before it connected
+
+    Anything but a connected call returns the caller to the AI AND records a
+    staff callback request.
     """
     logger.info(f"📞 Transfer status: {CallSid} - DialCallStatus: {DialCallStatus}")
     
-    if DialCallStatus == "completed":
+    # "answered" is Twilio's other connected outcome; counting it as a failure
+    # would text staff about a call they just took.
+    if DialCallStatus in ("completed", "answered"):
         # Transfer succeeded, call ended normally
         logger.info(f"✅ Transfer completed successfully for {mask_phone(From)}")
         return Response(content="<Response><Hangup/></Response>", media_type="application/xml")
     
-    # Transfer failed - return caller to AI
+    # Transfer failed (no-answer / busy / failed / canceled) - return caller to AI
     logger.info(f"⚠️ Transfer failed ({DialCallStatus}) - returning to AI for {mask_phone(From)}")
-    
-    twiml = """<?xml version="1.0" encoding="UTF-8"?>
+
+    # Same tenant resolution as /voice: the orchestrator puts ?tenant_id= on
+    # the <Dial> action URL; older calls fall back to the ingress number.
+    tenant_id = (
+        request.query_params.get("tenant_id")
+        or settings.PHONE_TO_TENANT_MAP.get((To or "").replace(" ", "").strip())
+        or settings.TENANT_ID
+        or "coalcreek"
+    )
+
+    # Staff must hear about it: the caller asked for a person and got nobody.
+    # A background task runs after this response is sent, so Twilio gets its
+    # TwiML immediately; notify_failed_transfer never raises, and scheduling
+    # it is guarded too, because nothing here may stop the redirect below.
+    try:
+        from services.transfer_fallback import notify_failed_transfer
+        background_tasks.add_task(
+            notify_failed_transfer,
+            caller_phone=From,
+            tenant_id=tenant_id,
+            call_sid=CallSid,
+            reason=f"staff line {DialCallStatus or 'unknown'}",
+        )
+    except Exception as e:
+        logger.error(f"🔴 Could not schedule failed-transfer notification: {e}")
+
+    # tenant_id rides along so the returning leg reaches the same tenant even
+    # when it was chosen by query param rather than by number. Escaped: it is
+    # request input going into XML.
+    redirect = "/twilio/voice?transfer_failed=true"
+    if request.query_params.get("tenant_id"):
+        redirect += f"&tenant_id={quote(tenant_id, safe='')}"
+    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-    <Redirect method="POST">/twilio/voice?transfer_failed=true</Redirect>
+    <Redirect method="POST">{escape(redirect)}</Redirect>
 </Response>"""
     
     return Response(content=twiml, media_type="application/xml")

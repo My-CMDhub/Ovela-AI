@@ -426,12 +426,19 @@ class CascadedPipelineOrchestrator:
         self.history = prune_conversation_history(self.history, confirmed_word_index=confirmed_idx)
         self.mark_tracker.reset()
 
-    async def trigger_initial_greeting(self) -> None:
+    async def trigger_initial_greeting(
+        self, greeting: Optional[str] = None, clip: Optional[str] = "smart_greeting"
+    ) -> None:
         """
         Streams pre-recorded zero-latency greeting audio clip (`smart_greeting.mulaw.raw`)
         immediately upon call connect, falling back to Cartesia TTS if missing.
+
+        `greeting`/`clip` let the same floor-taking, interruptible path speak a
+        different opening — the `transfer_failed` clip when the caller is back
+        from an unanswered transfer — or, with clip=None, synthesise any short
+        system line.
         """
-        greeting = "Hello! Thanks for calling Coal Creek Accommodation. How can I help you today?"
+        greeting = greeting or "Hello! Thanks for calling Coal Creek Accommodation. How can I help you today?"
         logger.info(f"🗣️ [CascadedOrchestrator] Triggering initial greeting: '{greeting}'")
         self.history.append({"role": "assistant", "content": greeting})
         self.state = ConversationState.AGENT_SPEAKING
@@ -463,11 +470,11 @@ class CascadedPipelineOrchestrator:
         self.vad.arm_immunity(duration_s=3.0)
 
         # Check for pre-recorded cached audio clip to eliminate cold-start TTS latency
-        audio_clip_path = Path(__file__).resolve().parent / "audio" / "f786b574-daa5-4673-aa0c-cbe3e8534c02" / "smart_greeting.mulaw.raw"
-        if audio_clip_path.exists():
+        audio_clip_path = Path(__file__).resolve().parent / "audio" / "f786b574-daa5-4673-aa0c-cbe3e8534c02" / f"{clip}.mulaw.raw"
+        if clip and audio_clip_path.exists():
             try:
                 raw_bytes = audio_clip_path.read_bytes()
-                logger.info(f"⚡ [CascadedOrchestrator] Playing zero-latency cached smart_greeting ({len(raw_bytes)} bytes)")
+                logger.info(f"⚡ [CascadedOrchestrator] Playing zero-latency cached {clip} ({len(raw_bytes)} bytes)")
                 
                 # Stream in 1600-byte (200ms) chunks to Twilio
                 chunk_size = 1600
@@ -1374,21 +1381,31 @@ class CascadedPipelineOrchestrator:
 
         If nobody answers within TRANSFER_TIMEOUT, Twilio falls through to the
         redirect and the caller lands back on the AI rather than on dead air.
+        If the update itself fails, the caller is told so and staff are asked
+        to call back — see the except below.
         """
         if not self.call_sid:
             logger.warning("🟡 [CascadedOrchestrator] Cannot transfer: no Call SID")
             return
+        # Who held the floor when the transfer was asked for. The request can
+        # take up to 5 s; if the caller has started another turn by the time
+        # it fails, that turn must not be talked over.
+        floor = self._turn_id
 
         masked = f"{'*' * max(len(transfer_to) - 4, 0)}{transfer_to[-4:]}"
         logger.info(f"📞 [CascadedOrchestrator] Transferring call to {masked}")
         try:
             from twilio.twiml.voice_response import VoiceResponse, Dial
+            from urllib.parse import quote
 
             twiml = VoiceResponse()
             dial = Dial(
                 timeout=settings.TRANSFER_TIMEOUT,
                 caller_id=settings.TWILIO_PHONE_NUMBER,
-                action=f"{settings.BACKEND_URL}/twilio/transfer-status",
+                # tenant_id rides along so a failed transfer's callback request
+                # and return leg land on this tenant, not the default one.
+                action=f"{settings.BACKEND_URL}/twilio/transfer-status"
+                       f"?tenant_id={quote(self.tenant_id or '', safe='')}",
             )
             dial.number(transfer_to)
             twiml.append(dial)
@@ -1413,6 +1430,31 @@ class CascadedPipelineOrchestrator:
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] Transfer failed: {e}")
             sentry_sdk.capture_exception(e)
+            # The caller has just heard "transferring you" and, before this,
+            # got silence: no <Dial> was ever placed, so no transfer-status
+            # callback will come to record anything either. Do it here.
+            # `is_running` stays True — the AI still owns the call.
+            from services.transfer_fallback import (
+                TRANSFER_FAILED_NOTE, TRANSFER_NOT_STARTED_LINE,
+                schedule_failed_transfer_notification,
+            )
+            try:
+                schedule_failed_transfer_notification(
+                    caller_phone=self.user_phone,
+                    tenant_id=self.tenant_id,
+                    call_sid=self.call_sid,
+                    reason=f"transfer could not be started: {type(e).__name__}",
+                )
+            except Exception as notify_error:
+                logger.error(f"🔴 [CascadedOrchestrator] Callback request not scheduled: {notify_error}")
+            self.history.append({"role": "system", "content": TRANSFER_FAILED_NOTE})
+            # Spoken as its own floor-taking turn (the greeting path, synthesised),
+            # so the caller can interrupt it like any other — but only if nobody
+            # has spoken since; a newer turn already has the note in history.
+            if self.is_running and self._turn_id == floor:
+                asyncio.create_task(
+                    self.trigger_initial_greeting(TRANSFER_NOT_STARTED_LINE, clip=None)
+                )
 
     async def _await_playback(self, interrupted: bool, turn_id: int = 0) -> None:
         """
@@ -1484,7 +1526,9 @@ class CascadedPipelineOrchestrator:
                 text = (message.get("content") or "").strip()
                 if not text:
                     continue
-                lines.append(f"{'Caller' if message.get('role') == 'user' else 'Agent'}: {text}")
+                # A system note (e.g. a failed transfer) was never spoken.
+                who = {"user": "Caller", "system": "Note"}.get(message.get("role"), "Agent")
+                lines.append(f"{who}: {text}")
             if not lines:
                 return
 
@@ -2192,7 +2236,22 @@ class CascadedPipelineOrchestrator:
                         # so voice_settings are live before the first synthesis
                         # instead of arriving a turn late.
                         asyncio.create_task(self._ensure_call_context())
-                        asyncio.create_task(self.trigger_initial_greeting())
+                        # Back from an unanswered transfer (/twilio/transfer-status
+                        # redirects with transfer_failed=true; staff have already
+                        # been sent a callback request). A fresh "Hello! Thanks
+                        # for calling" here sounded like the call had restarted,
+                        # and the model, seeing no trace of the failure, offered
+                        # the same transfer again. Acknowledge it instead, and
+                        # leave the model a note it reads but the caller never hears.
+                        if str(params.get("transfer_failed", "")).lower() == "true":
+                            from services.transfer_fallback import (
+                                TRANSFER_FAILED_LINE, TRANSFER_FAILED_NOTE,
+                            )
+                            self.history.append({"role": "system", "content": TRANSFER_FAILED_NOTE})
+                            asyncio.create_task(self.trigger_initial_greeting(
+                                TRANSFER_FAILED_LINE, clip="transfer_failed"))
+                        else:
+                            asyncio.create_task(self.trigger_initial_greeting())
                     elif event_type == "media":
                         payload = data["media"].get("payload")
                         if payload:
