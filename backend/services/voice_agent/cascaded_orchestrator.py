@@ -29,6 +29,7 @@ from sentry_sdk.ai import set_conversation_id
 from fastapi import WebSocket
 
 from core.config import settings
+from core.stream_auth import check_stream_start, stream_auth_mode
 # is_backchannel_word is applied through route_transcript, not here — the
 # decision belongs with the state it depends on.
 from services.voice_agent.vad import VadProcessor, ConversationState
@@ -2119,6 +2120,19 @@ class CascadedPipelineOrchestrator:
             logger.error(f"🔴 [CascadedOrchestrator] LLM generation failed: {e}", exc_info=True)
             yield "I am checking those details right now. Just one moment please."
 
+    async def _reject_stream(self, why: str) -> None:
+        """
+        Close the Twilio socket as a policy violation (1008). The caller breaks
+        out of run_loop, whose `finally` runs stop() — that cancels the turn
+        worker and closes the bridges, so nothing is left running.
+        """
+        logger.warning("🔐 [CascadedOrchestrator] Rejecting stream: %s", why)
+        self.is_running = False
+        try:
+            await self.twilio_ws.close(code=1008)
+        except Exception:
+            pass
+
     async def run_loop(self) -> None:
         """
         Main WebSocket loop for Twilio connection when running in cascaded mode.
@@ -2130,6 +2144,11 @@ class CascadedPipelineOrchestrator:
 
         dg_task = asyncio.create_task(self.process_deepgram_events())
         self._turn_worker_task = asyncio.create_task(self._turn_worker())
+        # Whether this socket has presented a start we accept. Twilio always
+        # sends `connected` then `start` before any audio, so under "enforce"
+        # anything else arriving first is not Twilio: rejected before it can
+        # feed Deepgram or drive a turn on our bill.
+        admitted = False
         try:
             async for message in self.twilio_ws.iter_text():
                 if not self.is_running:
@@ -2137,7 +2156,19 @@ class CascadedPipelineOrchestrator:
                 try:
                     data = json.loads(message)
                     event_type = data.get("event")
+                    if (not admitted and event_type in ("media", "mark")
+                            and stream_auth_mode() == "enforce"):
+                        await self._reject_stream(f"{event_type} before an authenticated start")
+                        break
                     if event_type == "start":
+                        # First, before the identity below is believed: an
+                        # unverified user_phone is what the privacy gates key
+                        # on. Under "enforce" a bad token never reaches the
+                        # greeting, the caller lookup or the LLM warm-up.
+                        if not check_stream_start(data["start"]):
+                            await self._reject_stream("invalid or missing stream_token")
+                            break
+                        admitted = True
                         self.stream_sid = data["start"].get("streamSid", self.stream_sid)
                         # Twilio <Parameter> values: user_phone (privacy-bound
                         # lookups), tenant_id (voice_settings), user_to.

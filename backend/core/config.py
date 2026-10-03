@@ -67,7 +67,23 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_PHONE_NUMBER: str = ""  # set via env
-    
+
+    # Inbound authentication for Twilio traffic. Each is "off" | "report" |
+    # "enforce". "report" only logs (and alerts Sentry) on a missing/invalid
+    # credential and lets the call through, so the checks can ship without
+    # risking a real call; flip to "enforce" once the logs show verdict=valid
+    # on live calls. Unknown values behave as "report".
+    #  - STREAM_AUTH_MODE: the signed `stream_token` <Parameter> that ties a
+    #    Media Stream socket to the TwiML we issued (core/stream_auth.py).
+    #  - TWILIO_SIGNATURE_MODE: X-Twilio-Signature on the Twilio webhooks
+    #    (core/twilio_signature.py). Needs TWILIO_AUTH_TOKEN.
+    # The stream token is only as strong as the webhook that hands it out:
+    # an unsigned /twilio/voice will mint a token for any From. Enforce both.
+    STREAM_AUTH_MODE: str = "report"
+    TWILIO_SIGNATURE_MODE: str = "report"
+    # Optional. Unset -> derived from the magic-link secret (domain-separated).
+    STREAM_TOKEN_SECRET: str = ""
+
 
     # Personal Assistant Target Number
     MY_NUMBER: Optional[str] = None

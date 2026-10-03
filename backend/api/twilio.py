@@ -1,9 +1,12 @@
 """
 Twilio Webhooks for Voice Calls
 """
-from fastapi import APIRouter, Request, Form, BackgroundTasks
+from fastapi import APIRouter, Request, Form, BackgroundTasks, Depends
 from fastapi.responses import Response
+from xml.sax.saxutils import escape
 from core.config import settings
+from core.stream_auth import issue_stream_token
+from core.twilio_signature import verify_twilio_signature
 from services.appwrite import db_service
 from services.email import email_service
 from datetime import datetime
@@ -11,7 +14,10 @@ import logging
 import asyncio
 from twilio.rest import Client
 
-router = APIRouter()
+# Every route here is a Twilio callback (voice, incoming-call, recording-,
+# call- and transfer-status, sms), so the signature check sits on the router:
+# a route added later cannot forget it. It only rejects in "enforce" mode.
+router = APIRouter(dependencies=[Depends(verify_twilio_signature)])
 logger = logging.getLogger(__name__)
 
 twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
@@ -91,16 +97,25 @@ async def handle_voice_webhook(
     # Return TwiML that connects to the AI stream
     # Pass tenant_id to the WebSocket via Parameter
     stream_url = f"wss://{settings.BACKEND_URL.replace('https://', '')}/api/voice/stream"
+    # Signed over the raw values below — Twilio unescapes the XML and echoes
+    # them back in the stream's `start`, where core/stream_auth verifies them.
+    stream_token = issue_stream_token(CallSid, From, tenant_id)
 
-    
+    # Every value is escaped for a double-quoted attribute. From/To/tenant_id
+    # and transfer_failed are request input: a From of `"/><Hangup/>` used to
+    # rewrite this TwiML. Ordinary values come out byte-identical.
+    def attr(value) -> str:
+        return escape(str(value), {'"': "&quot;"})
+
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="{stream_url}">
-            <Parameter name="user_phone" value="{From}" />
-            <Parameter name="tenant_id" value="{tenant_id}" />
-            <Parameter name="user_to" value="{To}" />
-            <Parameter name="transfer_failed" value="{transfer_failed}" />
+        <Stream url="{attr(stream_url)}">
+            <Parameter name="user_phone" value="{attr(From)}" />
+            <Parameter name="tenant_id" value="{attr(tenant_id)}" />
+            <Parameter name="user_to" value="{attr(To)}" />
+            <Parameter name="transfer_failed" value="{attr(transfer_failed)}" />
+            <Parameter name="stream_token" value="{attr(stream_token)}" />
         </Stream>
     </Connect>
     <Say voice="Polly.Nicole">I'm sorry, we seem to have lost connection. Please call back. Goodbye!</Say>

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request, BackgroundTasks
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request, BackgroundTasks, Depends
 from datetime import datetime
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
@@ -10,6 +10,8 @@ from urllib.parse import quote
 from twilio.twiml.voice_response import VoiceResponse, Connect
 from twilio.rest import Client
 from core.config import settings
+from core.stream_auth import issue_stream_token
+from core.twilio_signature import verify_twilio_signature
 from services.voice_agent import VoiceAgentHandler
 from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestrator
 from services.appwrite import db_service
@@ -343,7 +345,9 @@ async def _enable_recording(call_sid: str):
     except Exception as e:
         logger.warning(f"Failed to start recording for {call_sid}: {e}")
 
-@router.post("/twiml")
+# Twilio fetches this for outbound demo calls (_trigger_demo_call), so it is
+# signed like the /twilio webhooks; rejects only in TWILIO_SIGNATURE_MODE=enforce.
+@router.post("/twiml", dependencies=[Depends(verify_twilio_signature)])
 async def get_twiml(request: Request, background_tasks: BackgroundTasks):
     """
     Returns TwiML instructions to connect the call to our WebSocket stream.
@@ -414,6 +418,9 @@ async def get_twiml(request: Request, background_tasks: BackgroundTasks):
     stream.parameter(name="tenant_id", value=tenant_id)
     stream.parameter(name="demo_type", value=demo_type)
     stream.parameter(name="is_demo", value=is_demo)
+    # Binds the socket to this call's identity; checked on the stream's
+    # `start` (core/stream_auth). The library XML-escapes every value.
+    stream.parameter(name="stream_token", value=issue_stream_token(call_sid, user_phone, tenant_id))
     
     response.append(connect)
     response.say("Sorry, I lost the connection. Please try again later.")
