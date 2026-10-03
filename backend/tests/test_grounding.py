@@ -87,21 +87,21 @@ class TestTheThingsWorthCatching:
 
 class TestThePipelineTrap:
     def test_the_check_runs_on_the_model_text_not_the_spoken_text(self):
-        """prepare_for_tts rewrites the text before Cartesia sees it, and it
-        rewrites dates past recognition: "2026-09-19" becomes "2026-9th-19".
-        Point this check at that end of the pipeline and every invented date
-        goes quiet — a green light meaning only that the patterns stopped
-        matching. (Money happens to survive, "$412" becoming "412 dollars",
-        which is worse rather than better: a check that half works is the kind
-        you trust.)"""
+        """prepare_for_tts rewrites the text before Cartesia sees it. It used
+        to rewrite dates past recognition ("2026-09-19" became "2026-9th-19"),
+        so a check pointed at that end went quiet on every invented date. The
+        rewrite now reads ISO dates as dates ("September 19th, 2026"), and the
+        check finds the same claim at both ends — but it still runs on the
+        model's text, which is the end this pins: the spoken form is free to
+        change again, and the next rewrite may not be so kind."""
         from services.voice_agent.text_utils import prepare_for_tts
 
         model_text = "Your stay starts 2026-09-19."
         spoken_text, _ = prepare_for_tts(model_text)
 
         assert unsourced_claims(model_text, [LOOKUP]) == [("date", "19/09")]
-        assert spoken_text != model_text
-        assert unsourced_claims(spoken_text, [LOOKUP]) == []   # the trap, pinned
+        assert spoken_text == "Your stay starts September 19th, 2026."
+        assert unsourced_claims(spoken_text, [LOOKUP]) == [("date", "19/09")]
 
 
 class TestThePromptCarriesNoRealGuest:

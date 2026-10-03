@@ -1504,8 +1504,8 @@ class CascadedPipelineOrchestrator:
                     # find out whether a real phone line says otherwise.
                     # NOTE: full_response_parts holds the MODEL's text. The
                     # spoken text is rewritten by prepare_for_tts, which turns
-                    # "2026-09-19" into "2026-9th-19" — checking that end finds
-                    # nothing, forever.
+                    # "2026-09-19" into "September 19th, 2026" and "$135" into
+                    # "135 dollars" — checking that end finds nothing, forever.
                     try:
                         for kind, claim in unsourced_claims(
                                 full_text,
