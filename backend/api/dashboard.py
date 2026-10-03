@@ -12,6 +12,7 @@ Routes:
 - POST /api/motel/reservations - Create reservation
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -883,13 +884,64 @@ _SECURED_PAYMENT_STATUSES = ("paid", "card_on_file")
 _SUPERSEDED_LINK_GRACE_S = 120
 
 
+# Events whose failed write has already been escalated by this process. Stripe
+# redelivers for up to three days; one alert per event is enough, and losing
+# this set on a restart costs at most one repeat email.
+_ESCALATED_EVENTS: set = set()
+# Strong references to fire-and-forget alert tasks, so none is collected mid-send.
+_ALERT_TASKS: set = set()
+
+
+def _spawn_alert(coro) -> None:
+    task = asyncio.create_task(coro)
+    _ALERT_TASKS.add(task)
+    task.add_done_callback(_ALERT_TASKS.discard)
+
+
 def _webhook_retry(event_id: str, reason: str, booking_ref: str = None) -> JSONResponse:
-    """Answer 503 so Stripe redelivers the event later."""
-    logger.error(
-        "Stripe webhook %s: %s (ref=%s) — answering 503 so Stripe retries",
-        event_id, reason, booking_ref,
-    )
+    """Answer 503 so Stripe redelivers the event later — and say so loudly.
+
+    `_make_request` folds every Appwrite failure into None, so a transient
+    outage and a permanent rejection (an attribute the schema lacks) look the
+    same here. Retrying covers the first; only a person covers the second, so
+    every retry also reaches Sentry and, once per event, the staff inbox.
+    """
+    msg = f"Stripe webhook {event_id}: {reason} (ref={booking_ref}) — answering 503 so Stripe retries"
+    logger.error(msg)
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_message(msg, level="error")
+    except Exception:
+        pass  # Telemetry must never change the answer Stripe gets.
+    if event_id and event_id not in _ESCALATED_EVENTS:
+        _ESCALATED_EVENTS.add(event_id)
+        _spawn_alert(_alert_staff_webhook_failure(event_id, reason, booking_ref))
     return JSONResponse(status_code=503, content={"status": "retry", "reason": reason})
+
+
+async def _alert_staff_webhook_failure(event_id: str, reason: str, booking_ref: str = None,
+                                       subject: str = "Stripe payment needs a manual check") -> None:
+    """Best effort: a payment event the system could not record, in a person's inbox."""
+    try:
+        from services.email import email_service
+        send = getattr(email_service, "send_email", None)
+        if send is None:
+            logger.error("No send_email on email_service — staff alert for %s not sent", event_id)
+            return
+        from html import escape
+        html = (
+            "<p>A Stripe event could not be recorded automatically.</p>"
+            f"<p>Booking reference: <b>{escape(booking_ref or 'unknown')}</b><br>"
+            f"Stripe event: {escape(event_id)}<br>Reason: {escape(reason)}</p>"
+            "<p>Please check this booking in the Stripe dashboard and the reservations "
+            "list, and update or refund it by hand if needed.</p>"
+        )
+        # Same address the payment notifications use for this tenant.
+        result = send(to_email="officialcoalcreek@gmail.com", subject=subject, html_content=html)
+        if asyncio.iscoroutine(result):
+            await result
+    except Exception as e:
+        logger.error("Staff alert for Stripe event %s failed: %s", event_id, e)
 
 
 def _report_unmatched_payment(event_id: str, booking_ref: str, stripe_session_id: str) -> None:
@@ -917,6 +969,16 @@ def _superseded_by_newer_link(doc: dict, session: dict) -> bool:
     writes local time without an offset) cannot be compared safely, so it does
     not count as evidence either way.
     """
+    # Exact answer first: a Checkout URL carries its session id
+    # (checkout.stripe.com/c/pay/cs_...), and both the voice and staff flows
+    # store the URL of the link they last sent. If that URL is not this
+    # session's, a newer link is live. The time-based rule below guessed, and
+    # guessed wrong for a resend inside its two-minute grace.
+    link = doc.get("payment_link_url") or ""
+    session_id = session.get("id") or ""
+    if session_id and "/cs_" in link:
+        return session_id not in link
+
     created = session.get("created")
     sent_at = doc.get("payment_link_sent_at")
     if not created or not sent_at:
@@ -1020,6 +1082,25 @@ async def _handle_checkout_completed(event: dict, event_id: str, coalcreek_strip
     # either writes can still both send; Stripe does not deliver concurrently in
     # practice, and closing that needs a conditional write Appwrite lacks.
     done_states = _SECURED_PAYMENT_STATUSES if mode == "setup" else ("paid",)
+    already_paid_by = booking_doc.get("stripe_payment_id") or ""
+    if (mode != "setup" and booking_doc.get("payment_status") == "paid"
+            and already_paid_by and stripe_payment_id and already_paid_by != stripe_payment_id):
+        # Paid already, by a DIFFERENT payment: the guest paid two live links
+        # (a resend creates a new checkout session and the old one stays
+        # payable). Not a redelivery — money taken twice, and only a person can
+        # refund it. Recorded as handled (200) so Stripe stops, but loudly.
+        reason = (f"second payment {stripe_payment_id} on booking already paid by "
+                  f"{already_paid_by} — refund one of them")
+        msg = f"Stripe webhook {event_id}: {reason} (ref={booking_ref})"
+        logger.error(msg)
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_message(msg, level="error")
+        except Exception:
+            pass
+        _spawn_alert(_alert_staff_webhook_failure(
+            event_id, reason, booking_ref, subject="Possible double payment — please refund"))
+        return {"status": "double_payment_flagged"}
     if booking_doc.get("payment_status") in done_states:
         logger.info(
             "Stripe webhook %s: %s already %s — duplicate delivery, no side effects",

@@ -253,3 +253,68 @@ async def test_lookup_returns_doc(monkeypatch):
     from services.appwrite import db_service
     monkeypatch.setattr(db_service, "_motel_request", AsyncMock(return_value={"documents": [DOC]}))
     assert (await db_service.find_booking_for_payment("CC-ABC123"))["$id"] == "doc1"
+
+
+# ── review follow-ups: loud retries, double payments, exact supersession ──────
+
+def test_a_failed_write_alerts_staff_once_however_often_stripe_retries(env, monkeypatch):
+    """A permanent Appwrite rejection looks exactly like an outage, so 503 keeps
+    Stripe retrying — but a person must hear about it, and only once."""
+    from api import dashboard
+    from services.email import email_service
+    alerts = AsyncMock(return_value=True)
+    monkeypatch.setattr(email_service, "send_email", alerts, raising=False)
+    monkeypatch.setattr(dashboard, "_ESCALATED_EVENTS", set())
+    env["pay"].return_value = None
+
+    codes = [env["post"](_event("checkout.session.completed")).status_code for _ in range(3)]
+
+    assert codes == [503, 503, 503]
+    assert alerts.await_count == 1
+    assert "CC-ABC123" in alerts.await_args.kwargs["html_content"]
+    env["guest_email"].assert_not_called()
+
+
+def test_a_second_different_payment_is_flagged_not_swallowed(env, monkeypatch):
+    from services.email import email_service
+    alerts = AsyncMock(return_value=True)
+    monkeypatch.setattr(email_service, "send_email", alerts, raising=False)
+    env["find"].return_value = dict(DOC, payment_status="paid", status="confirmed",
+                                    stripe_payment_id="pi_OLD")
+
+    r = env["post"](_event("checkout.session.completed", payment_intent="pi_NEW"))
+
+    assert r.status_code == 200 and r.json()["status"] == "double_payment_flagged"
+    assert alerts.await_count == 1 and "refund" in alerts.await_args.kwargs["subject"].lower()
+    env["pay"].assert_not_called()
+
+
+def test_the_same_payment_redelivered_is_still_a_quiet_duplicate(env, monkeypatch):
+    from services.email import email_service
+    alerts = AsyncMock(return_value=True)
+    monkeypatch.setattr(email_service, "send_email", alerts, raising=False)
+    env["find"].return_value = dict(DOC, payment_status="paid", stripe_payment_id="pi_1")
+
+    r = env["post"](_event("checkout.session.completed"))
+
+    assert r.json()["status"] == "duplicate"
+    alerts.assert_not_called()
+
+
+def test_expiry_of_an_old_session_keeps_a_hold_whose_newer_link_is_live(env):
+    """Resent 90s after the first link: inside the old two-minute grace, which
+    released this hold while the guest could still pay the new link."""
+    env["find"].return_value = dict(
+        DOC, payment_link_url="https://checkout.stripe.com/c/pay/cs_test_NEW#abc",
+        payment_link_sent_at=datetime.fromtimestamp(1_700_000_090, timezone.utc).isoformat())
+    r = env["post"](_event("checkout.session.expired"))
+    assert r.json()["reason"] == "superseded_session"
+    env["patch"].assert_not_called()
+
+
+def test_expiry_of_the_current_session_releases_the_hold(env):
+    env["find"].return_value = dict(
+        DOC, payment_link_url="https://checkout.stripe.com/c/pay/cs_test_1#abc",
+        payment_link_sent_at=datetime.fromtimestamp(1_700_009_000, timezone.utc).isoformat())
+    env["post"](_event("checkout.session.expired"))
+    env["patch"].assert_awaited_once_with("doc1", {"status": "expired"})
