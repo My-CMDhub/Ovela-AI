@@ -1036,6 +1036,7 @@ class CascadedPipelineOrchestrator:
 
         text_buffer = ""
         is_first_phrase = True
+        context_open = False    # sent with continue=True, not yet closed
 
         try:
             while True:
@@ -1101,8 +1102,26 @@ class CascadedPipelineOrchestrator:
                         transcript=clean_phrase_stripped,
                         continue_stream=not is_last_phrase,
                     )
+                    context_open = not is_last_phrase
 
                 if is_final:
+                    # The peek above only sees the sentinel if it is already
+                    # queued, and with include_usage OpenAI ends the stream one
+                    # network read after the last token — so the last phrase
+                    # usually went with continue=True and nothing ever closed
+                    # the context. Cartesia then sent `done` only on its own
+                    # timeout, the agent stayed AGENT_SPEAKING meanwhile, and a
+                    # caller's "yes" in that window was dropped as a
+                    # backchannel. An empty transcript with continue=false is
+                    # Cartesia's way to close a context. Turn-local id, and only
+                    # while the floor is ours, for the reasons given at the send.
+                    if context_open and mine():
+                        await self.cartesia.send_transcript_chunk(
+                            context_id=context_id,
+                            transcript="",
+                            continue_stream=False,
+                        )
+                        context_open = False
                     break
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] Phrase streaming error: {e}", exc_info=True)
