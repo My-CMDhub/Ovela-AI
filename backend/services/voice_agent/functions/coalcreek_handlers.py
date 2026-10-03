@@ -1893,7 +1893,7 @@ async def _handle_stripe_and_guest_email(
             if existing_stripe_url:
                 logger.info("💳 Existing Stripe URL is expired or expiring soon. Forcing new session generation.")
                 existing_stripe_url = None  # Ensure we PATCH Appwrite with the new link
-            stripe_url, stripe_session_id = create_checkout_session(
+            stripe_url, stripe_session_id = await create_checkout_session(
                 amount_aud=int(total_amt),
                 room_type=room_type,
                 booking_ref=booking_ref,
@@ -2370,7 +2370,12 @@ class CoalCreekFunctionDispatcher:
                  project = os.getenv("GOOGLE_CLOUD_PROJECT", "project-bd29d7f8-c65f-4597-b7b")
                  location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
                  client = genai.Client(vertexai=True, project=project, location=location)
-                 response = client.models.generate_content(
+                 # MUST be the async client (`.aio`). The sync call blocked the
+                 # event loop for the whole search (up to the 8s timeout), which
+                 # froze audio on EVERY concurrent call on this dyno and stopped
+                 # execute()'s wait_for from firing. The per-request
+                 # http_options timeout below is honoured by the async path too.
+                 response = await client.aio.models.generate_content(
                      model="gemini-2.5-flash-lite",
                      contents=query,
                      config=genai_types.GenerateContentConfig(
