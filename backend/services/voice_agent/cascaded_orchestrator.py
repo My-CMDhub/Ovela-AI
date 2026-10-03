@@ -270,6 +270,10 @@ class CascadedPipelineOrchestrator:
         self._unsourced: List[str] = []
         self._barge_ins: int = 0
         self._backchannels_held: int = 0
+        # Replies the model wrote that never reached the caller as audio. Kept
+        # out of history (the agent must not believe it said them) and counted
+        # here so the call's record still shows they happened.
+        self._silent_turns: int = 0
 
         # True once this turn's first audio chunk has reached Twilio. Barge-in
         # stays disarmed until then so LLM think-time can't be interrupted.
@@ -953,17 +957,30 @@ class CascadedPipelineOrchestrator:
         # websockets 15.0.1 server, not a mock).
         await self._stop_audio_reader()
 
+        # A dropped Cartesia socket used to stay dropped: every later turn ran
+        # the model, `send_transcript_chunk` returned at its first line, and
+        # the call went on in silence. Checked here — after the old reader is
+        # gone, before this turn's reader opens — so the reader below is the
+        # one and only consumer of whichever socket this leaves in place. A
+        # failed reconnect is not fatal here; the silent-turn check in the
+        # teardown is the backstop.
+        try:
+            await self._ensure_tts_connected()
+        except asyncio.CancelledError:
+            producer_task.cancel()      # nothing else would ever stop it
+            raise
+
         self._current_turn_parts = []
         full_response_parts = self._current_turn_parts
         self._audio_bytes_sent = 0
         self._playback_started_at = 0.0
 
-        async def audio_receiver():
+        # After a barge-in cancel the killed context still emits trailing
+        # chunks and a `done`; without the context filter that stale `done`
+        # breaks the next turn's receiver and the caller hears silence. A
+        # parameter so the silent-turn retry below can read its own context.
+        async def audio_receiver(turn_context_id: str = context_id):
             first_chunk_ingested = False
-            # After a barge-in cancel the killed context still emits trailing
-            # chunks and a `done`; without this filter that stale `done` breaks
-            # the next turn's receiver and the caller hears silence.
-            turn_context_id = context_id
             try:
                 async for audio_evt in self.cartesia.receive_audio_events():
                     if not mine():
@@ -1173,6 +1190,43 @@ class CascadedPipelineOrchestrator:
                 except Exception as e:
                     logger.error(f"🔴 [CascadedOrchestrator] {name} task failed: {e}", exc_info=True)
 
+            # Words went to Cartesia, not one byte came back, and the socket
+            # is what failed: the caller heard nothing. Say it again, ONCE,
+            # into a fresh context on a reopened socket, before the playback
+            # wait below — so that wait, barge-in and the history append all
+            # see the retry's audio exactly as they would a first attempt.
+            #
+            # Only for a dead socket. Cartesia alive and answering `error` (a
+            # bad voice_id) or nothing at all would fail the same way again,
+            # after another 15 s of dead air. Safe for the one-reader rule:
+            # this turn's reader has finished or is stopped below before the
+            # retry's reader opens, and the retry reader is registered as
+            # `_audio_reader` so the next turn's `_stop_audio_reader` finds it.
+            # Our own cancellation is not swallowed here — a caller who spoke
+            # meanwhile owns the floor, and barge-in records what was heard.
+            if (mine() and total_words_sent and not self._audio_bytes_sent
+                    and not self.cartesia.is_connected):
+                logger.warning(
+                    "🟡 [CascadedOrchestrator] Turn %s: TTS socket dropped before any "
+                    "audio reached the caller — reconnecting to say it once more", my_turn,
+                )
+                if await self._ensure_tts_connected() and mine():
+                    retry_context = f"{context_id}_retry"
+                    self.current_context_id = retry_context     # what barge-in cancels
+                    await self._stop_audio_reader()
+                    receiver_task = asyncio.create_task(audio_receiver(retry_context))
+                    self._audio_reader = receiver_task
+                    retry_text, _ = prepare_for_tts(" ".join(full_response_parts))
+                    await self.cartesia.send_transcript_chunk(
+                        context_id=retry_context,
+                        transcript=retry_text.strip(),
+                        continue_stream=False,
+                    )
+                    try:
+                        await asyncio.wait_for(asyncio.shield(receiver_task), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        receiver_task.cancel()
+
             # Swept only once the producer and the receiver have stopped, so
             # nothing can write to a finished span afterwards. Sweeping first
             # meant that on a short uninterrupted turn — where the text is
@@ -1211,7 +1265,25 @@ class CascadedPipelineOrchestrator:
             if not interrupted:
                 full_text = " ".join(full_response_parts).strip()
                 self._current_turn_parts = []
-                if full_text:
+                if full_text and total_words_sent and not self._audio_bytes_sent:
+                    # Written, synthesised, never heard. This used to go into
+                    # history and the transcript as if spoken, so the model
+                    # built its next answer on a reply the caller never got
+                    # ("as I said...") and the saved call read as normal.
+                    # History gets nothing: the caller's question stands
+                    # unanswered, which is the truth, and the model answers it
+                    # again when they say "hello?".
+                    self._silent_turns += 1
+                    logger.error(
+                        "🔇 [CascadedOrchestrator] Turn %s produced no audio: %d words "
+                        "sent to TTS, 0 bytes reached the caller — reply NOT recorded "
+                        "as spoken", my_turn, total_words_sent,
+                    )
+                    sentry_sdk.capture_message(
+                        "Turn produced no audio: reply generated but never reached the caller",
+                        level="error",
+                    )
+                elif full_text:
                     self.history.append({"role": "assistant", "content": full_text})
                     # Did any price, date or reference in that come from
                     # nowhere? Logged, never blocked. Measured over ten replays
@@ -1325,6 +1397,18 @@ class CascadedPipelineOrchestrator:
                 raise          # ours, not the reader's — see _abandon_current_turn
         except Exception:
             pass
+
+    async def _ensure_tts_connected(self) -> bool:
+        """
+        Reopen the Cartesia socket if it has dropped. Never raises: a failed
+        reconnect costs this turn its audio, which the silent-turn check
+        reports; it must not also cost the turn itself.
+        """
+        try:
+            return bool(await self.cartesia.ensure_connected())
+        except Exception as exc:
+            logger.warning(f"🟡 [CascadedOrchestrator] TTS reconnect check failed: {exc}")
+            return False
 
     @staticmethod
     async def _call_owned(action) -> None:
@@ -1563,6 +1647,7 @@ class CascadedPipelineOrchestrator:
                     # an interrupted reply was dropped from the agent's memory.
                     "barge_ins": self._barge_ins,
                     "backchannels_held": self._backchannels_held,
+                    "silent_turns": self._silent_turns,
                     "turns": sum(1 for m in self.history if m.get("role") == "user"),
                     "tools": dict(tools),
                     "refusals": self._refusals,
