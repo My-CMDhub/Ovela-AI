@@ -294,6 +294,9 @@ class CascadedPipelineOrchestrator:
         # follow-up, gets it answered, and the call ends.
         self._pending_hangup: bool = False
         self._pending_transfer: Optional[str] = None
+        # True on the leg Twilio redirects back after an unanswered transfer.
+        # Same CallSid as the first leg, so its transcript needs its own id.
+        self._transfer_return_leg: bool = False
         self._pending_turn: int = 0
 
         # The single Cartesia reader. One socket, one consumer — see
@@ -1549,6 +1552,10 @@ class CascadedPipelineOrchestrator:
                 status="completed",
                 room_type=state.room_type or "",
                 customer_name=state.guest_name or state.heard_name or "Not provided",
+                # "CA" + 32 hex is 34 chars; "-r" keeps it within Appwrite's 36.
+                document_id=(f"{self.call_sid}-r"
+                             if self._transfer_return_leg and self.call_sid
+                             and len(self.call_sid) <= 34 else None),
                 metadata={
                     # The things that turned out to matter when reading these
                     # calls by hand. Barge-ins first: seventeen of them in one
@@ -2244,6 +2251,7 @@ class CascadedPipelineOrchestrator:
                         # the same transfer again. Acknowledge it instead, and
                         # leave the model a note it reads but the caller never hears.
                         if str(params.get("transfer_failed", "")).lower() == "true":
+                            self._transfer_return_leg = True
                             from services.transfer_fallback import (
                                 TRANSFER_FAILED_LINE, TRANSFER_FAILED_NOTE,
                             )

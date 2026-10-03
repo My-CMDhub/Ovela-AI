@@ -119,13 +119,20 @@ class TranscriptsMixin:
         room_type: str = None,
         metadata: dict = None,
         call_summary: str = None,
-        customer_name: str = None
+        customer_name: str = None,
+        document_id: str = None
     ) -> dict:
-        """Save a call transcript to tenant-specific collection."""
+        """Save a call transcript to tenant-specific collection.
+
+        `document_id` overrides the CallSid-derived id. A call that comes back
+        from an unanswered transfer keeps its CallSid, so saving the second
+        leg under the same id upserted over the first and erased everything
+        the caller said before asking for a person.
+        """
         try:
             MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
             collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
-            doc_id = call_sid if (call_sid and len(call_sid) <= 36) else ID.unique()
+            doc_id = document_id or (call_sid if (call_sid and len(call_sid) <= 36) else ID.unique())
             now = datetime.now(MELBOURNE_TZ).isoformat()
 
             if tenant_id == "coalcreek":

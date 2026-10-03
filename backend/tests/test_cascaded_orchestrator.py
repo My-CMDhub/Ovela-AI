@@ -983,6 +983,29 @@ class TestTheCallWritesItselfDown:
         assert kw["metadata"]["tools"] == {"lookup_booking": 2, "check_availability": 1}
 
     @pytest.mark.asyncio
+    async def test_the_leg_back_from_a_failed_transfer_does_not_overwrite_the_first(self, orchestrator):
+        """Twilio keeps the CallSid across the redirect, and the save upserts by
+        id — so the return leg used to erase everything said before the transfer."""
+        orchestrator.call_sid = "CA" + "0" * 32
+        orchestrator._transfer_return_leg = True
+        orchestrator.history = [{"role": "user", "content": "ok, a callback then"}]
+        saved = AsyncMock(return_value={"ok": True})
+        with patch("services.appwrite.db_service.save_call_transcript", saved):
+            await orchestrator._save_transcript()
+        kw = saved.await_args.kwargs
+        assert kw["document_id"] == "CA" + "0" * 32 + "-r"
+        assert kw["call_sid"] == "CA" + "0" * 32
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_call_keeps_its_callsid_as_the_id(self, orchestrator):
+        orchestrator.call_sid = "CA" + "1" * 32
+        orchestrator.history = [{"role": "user", "content": "hello"}]
+        saved = AsyncMock(return_value={"ok": True})
+        with patch("services.appwrite.db_service.save_call_transcript", saved):
+            await orchestrator._save_transcript()
+        assert saved.await_args.kwargs["document_id"] is None
+
+    @pytest.mark.asyncio
     async def test_it_is_written_once_even_if_teardown_runs_twice(self, orchestrator):
         orchestrator.history = [{"role": "user", "content": "hello"}]
         saved = AsyncMock(return_value={"ok": True})
