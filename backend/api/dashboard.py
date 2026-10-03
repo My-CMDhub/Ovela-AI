@@ -1168,10 +1168,12 @@ async def _handle_checkout_expired(event: dict, event_id: str):
         logger.info("Stripe webhook %s: %s has a newer payment link — hold kept", event_id, booking_ref)
         return {"status": "ignored", "reason": "superseded_session"}
 
-    # link_sent keeps its historical "expired". Voice holds become "cancelled":
-    # that is the only status get_motel_reservations and _live_only skip, so it is
-    # what actually gives the room back. ("expired" still blocks availability.)
-    new_status = "expired" if status == "link_sent" else "cancelled"
+    # Every unpaid hold becomes "expired", voice and staff flow alike.
+    # Availability skips it (RELEASED_STATUSES), so the room goes back on sale;
+    # guest lookups still find it, so a caller ringing about it hears that the
+    # hold lapsed. "cancelled" would hide the booking from lookups entirely, and
+    # the prompt forbids telling a guest "cancelled" unless they cancelled.
+    new_status = "expired"
     written = await _db.update_motel_reservation(doc.get("$id"), {"status": new_status})
     if not written:
         return _webhook_retry(event_id, f"booking {doc.get('$id')} expiry update returned no document", booking_ref)

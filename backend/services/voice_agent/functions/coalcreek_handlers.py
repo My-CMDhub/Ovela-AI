@@ -1231,6 +1231,16 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                 "Card securely saved (pre-authorisation). "
                 "Payment will be charged at check-in. Booking is confirmed."
             )
+        elif _bstatus == "expired":
+            # Checked before the pending branch: an expired hold still carries
+            # payment_status "pending_payment", and that branch would offer to
+            # resend a link for a room that has already gone back on sale.
+            result["payment_status_message"] = (
+                "The hold on this booking EXPIRED because payment was not completed, "
+                "and the room was released. Do NOT resend the payment link and do NOT "
+                "say 'cancelled'. Tell the caller the hold lapsed, then offer to check "
+                "availability for the same dates and make a new booking."
+            )
         elif _pstatus == "email_failed":
             result["payment_status_message"] = (
                 "Payment link was generated but the email FAILED to deliver. "
@@ -1763,7 +1773,10 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
             # - 'pending' / 'pending_payment' (explicit payment pending statuses)
             # - 'link_sent' (link was sent but not paid)
             # - null/empty payment_status (pipeline glitch — treat as outstanding)
-            is_pending = (
+            # An expired hold keeps payment_status "pending_payment", so the
+            # status check has to come first: a fresh link would take money for
+            # a room that was released when the old link lapsed.
+            is_pending = _bs != "expired" and (
                 _bs in ("reserved", "pending", "pending_payment", "link_sent")
                 or _ps in ("pending", "pending_payment", "email_failed", "")
             )
@@ -1779,6 +1792,18 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
                 if doc.get("payment_status") == "paid":
                     paid_doc = doc
                     break
+            expired_doc = next((d for d in (docs or []) if d.get("status") == "expired"), None)
+            if expired_doc and not paid_doc:
+                return {
+                    "success": False,
+                    "hold_expired": True,
+                    "booking_reference": expired_doc.get("booking_reference", ""),
+                    "error": (
+                        "This booking's hold EXPIRED unpaid and the room was released, so "
+                        "the old payment link cannot be resent. Do NOT say 'cancelled'. "
+                        "Offer to check availability for the same dates and make a new booking."
+                    ),
+                }
             if paid_doc:
                 return {
                     "success": False,

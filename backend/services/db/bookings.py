@@ -50,6 +50,11 @@ def normalise_lookup_value(field: str, value):
 
 
 INACTIVE_STATUSES = {"cancelled", "rejected"}
+# Statuses that no longer hold a room. Wider than INACTIVE_STATUSES on purpose:
+# an "expired" hold (payment link lapsed unpaid) gives the room back, but the
+# guest must still be FOUND when they ring about it — dropping it from lookups
+# too would turn "your hold lapsed, shall I rebook?" into "I can't find you".
+RELEASED_STATUSES = INACTIVE_STATUSES | {"expired"}
 
 
 def _live_only(docs: list) -> list:
@@ -376,10 +381,13 @@ class BookingsMixin:
             logger.error(f"Error fetching motel reservations for availability: {e}")
             return None
 
-        # Same live filter the identity lookups use (case-insensitive), so a
-        # "Cancelled" row puts the room back on sale just as "cancelled" does.
+        # Case-insensitive like the identity lookups' `_live_only`, so a
+        # "Cancelled" row puts the room back on sale just as "cancelled" does —
+        # but against RELEASED_STATUSES, so an expired unpaid hold does too.
         overlapping = []
-        for res in _live_only(all_res):
+        for res in all_res:
+            if (res.get("status") or "").lower() in RELEASED_STATUSES:
+                continue
             c_in = res.get("check_in_date")
             c_out = res.get("check_out_date")
             if c_in and c_out:

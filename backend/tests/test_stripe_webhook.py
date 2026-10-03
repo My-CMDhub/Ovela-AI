@@ -191,7 +191,7 @@ def test_expired_session_releases_unpaid_voice_hold(env, hold_status):
     env["find"].return_value = dict(DOC, status=hold_status)
     r = env["post"](_event("checkout.session.expired"))
     assert r.status_code == 200 and r.json()["status"] == "received"
-    env["patch"].assert_awaited_once_with("doc1", {"status": "cancelled"})
+    env["patch"].assert_awaited_once_with("doc1", {"status": "expired"})
 
 
 def test_expired_session_keeps_staff_flow_expired_status(env):
@@ -204,7 +204,8 @@ def test_expired_session_keeps_staff_flow_expired_status(env):
     dict(DOC, status="confirmed", payment_status="paid"),
     dict(DOC, status="pending", payment_status="paid"),          # status lagging the payment
     dict(DOC, status="reserved", payment_status="card_on_file"),
-    dict(DOC, status="cancelled"),                               # redelivery after release
+    dict(DOC, status="cancelled"),                               # guest cancelled
+    dict(DOC, status="expired"),                                 # redelivery after release
 ])
 def test_expired_session_never_touches_paid_or_settled_booking(env, doc):
     env["find"].return_value = doc
