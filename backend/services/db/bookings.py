@@ -69,6 +69,16 @@ def _live_only(docs: list) -> list:
             if (d.get("status") or "").lower() not in INACTIVE_STATUSES]
 
 
+class BookingLookupError(RuntimeError):
+    """Appwrite could not be asked, as opposed to answering "no such booking".
+
+    The Stripe webhook has to tell these apart: a failed request deserves a 5xx so
+    Stripe redelivers the payment, while a definite miss (a test event for a
+    booking that never existed) must get a 200 or Stripe retries it for 3 days.
+    The plain lookups collapse both into None, so they cannot be used for that.
+    """
+
+
 class BookingsMixin:
     """
     Handles all Booking related operations.
@@ -446,6 +456,10 @@ class BookingsMixin:
     ) -> dict:
         """
         Update payment status for a booking in motel_reservations.
+
+        Returns the patched document, or None if the write did not happen (Appwrite
+        error or exception — both are swallowed). The Stripe webhook treats None as
+        "not persisted" and answers 5xx so Stripe redelivers, so keep that contract.
         """
         try:
             now = datetime.now(ZoneInfo("Australia/Melbourne")).isoformat()
@@ -584,6 +598,49 @@ class BookingsMixin:
         except Exception as e:
             logger.error("Error finding booking by stripe_session_id %s: %s", stripe_session_id, e)
             return None
+
+    async def find_booking_for_payment(
+        self,
+        booking_ref: str,
+        stripe_session_id: str = None,
+        tenant_id: str = "coalcreek",
+    ) -> dict:
+        """
+        Webhook lookup: the booking doc, None if it definitely does not exist, or
+        BookingLookupError if Appwrite could not be asked.
+
+        _make_request turns every failure into None, while a successful empty
+        search still returns {"documents": [], ...}; that difference is the only
+        signal left, so this queries directly instead of reusing
+        get_booking_by_reference (which flattens both to None).
+
+        Only the booking_reference query is strict. The stripe_session_id fallback
+        stays best-effort via get_booking_by_stripe_session: that attribute is
+        not in the Appwrite schema yet (see coalcreek_handlers), so the query can
+        fail on every call, and treating that as transient would make Stripe
+        retry an unknown booking for three days.
+        """
+        if booking_ref:
+            result = await self._motel_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                params={"queries": [
+                    self.Query.equal("booking_reference", booking_ref),
+                    self.Query.equal("tenant_id", tenant_id),
+                ]},
+            )
+            if result is None:
+                raise BookingLookupError(f"Appwrite lookup failed for booking_ref={booking_ref}")
+            docs = result.get("documents") or []
+            if docs:
+                return docs[0]
+        if stripe_session_id:
+            logger.warning(
+                "⚠️ Webhook: booking_ref lookup missed for %s — falling back to stripe_session_id",
+                booking_ref,
+            )
+            return await self.get_booking_by_stripe_session(stripe_session_id, tenant_id=tenant_id)
+        return None
 
     # A cancelled booking is not a booking. get_motel_reservations already drops
     # these before the availability check sees them; the identity lookups did
