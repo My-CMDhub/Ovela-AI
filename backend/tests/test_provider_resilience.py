@@ -222,3 +222,188 @@ async def test_ensure_connected_does_not_reopen_a_socket_closed_by_stop():
     await bridge.close()
     assert await bridge.ensure_connected() is False
     bridge.connect.assert_not_awaited()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# B. Deepgram
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DroppableDeepgram:
+    """
+    Deepgram's shape: one socket at a time, read by one consumer, which ends
+    when the socket closes. Each successful `connect()` is a fresh socket.
+    `connect_results` scripts the reconnects (True/False), default success;
+    `flap` makes every new socket die as soon as it opens.
+    """
+
+    def __init__(self, connect_results=None, flap=False):
+        self.socket: asyncio.Queue = asyncio.Queue()
+        self.connect_results = list(connect_results or [])
+        self.flap = flap
+        self.connects = 0
+        self.readers = 0
+        self.close = AsyncMock()
+        self.send_audio = AsyncMock()
+
+    async def receive_events(self):
+        socket = self.socket
+        self.readers += 1
+        assert self.readers == 1, "two readers on one Deepgram socket"
+        try:
+            while True:
+                event = await socket.get()
+                if event is None:
+                    return              # the socket closed
+                yield event
+        finally:
+            self.readers -= 1
+
+    async def connect(self):
+        self.connects += 1
+        ok = self.connect_results.pop(0) if self.connect_results else True
+        if ok:
+            self.socket = asyncio.Queue()
+            if self.flap:
+                self.socket.put_nowait(None)
+        return ok
+
+    def drop(self):
+        self.socket.put_nowait(None)
+
+    def say(self, transcript):
+        self.socket.put_nowait({"type": "TurnInfo", "event": "EndOfTurn", "transcript": transcript})
+
+
+@pytest.fixture
+def fast_stt_backoff(monkeypatch):
+    monkeypatch.setattr(orch_module, "STT_RECONNECT_BACKOFF_S", (0.01,) * 5)
+
+
+def _speaking_cartesia():
+    cartesia = MagicMock()
+    cartesia.ensure_connected = AsyncMock(return_value=True)
+    cartesia.send_transcript_chunk = AsyncMock()
+    cartesia.cancel_stream = AsyncMock()
+    cartesia.close = AsyncMock()
+    cartesia.is_connected = True
+
+    async def audio():
+        yield {"type": "chunk", "data": "QUJDRA=="}
+        yield {"type": "done"}
+
+    cartesia.receive_audio_events = audio
+    return cartesia
+
+
+async def _until(condition, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while not condition():
+        assert time.monotonic() < deadline, "condition never became true"
+        await asyncio.sleep(0.01)
+
+
+async def test_a_deepgram_drop_mid_call_reconnects_and_later_turns_are_heard(fast_stt_backoff):
+    handled = []
+
+    async def pipeline(*_a, **_kw):
+        handled.append(agent.history[-1]["content"])
+        agent.state = ConversationState.AWAITING_INPUT
+
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.is_running = True
+    agent._run_parallel_streaming_pipeline = pipeline
+    agent.deepgram = dg = DroppableDeepgram()
+
+    reader = asyncio.create_task(agent.process_deepgram_events())
+    worker = asyncio.create_task(agent._turn_worker())
+    try:
+        with patch.object(orch_module.sentry_sdk, "capture_message") as sentry:
+            dg.say("what rooms do you have?")
+            await _until(lambda: handled == ["what rooms do you have?"])
+
+            dg.drop()
+            await _until(lambda: dg.connects == 1)
+            dg.say("and the price?")
+            await _until(lambda: len(handled) == 2)
+
+        assert handled == ["what rooms do you have?", "and the price?"]
+        assert not reader.done(), "the read loop ended — the call is deaf again"
+        assert any("reconnected" in str(c.args[0]) for c in sentry.call_args_list)
+    finally:
+        reader.cancel()
+        worker.cancel()
+
+
+async def test_an_event_the_loop_cannot_handle_is_recovered_like_a_drop(fast_stt_backoff):
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.is_running = True
+    agent.deepgram = dg = DroppableDeepgram()
+
+    reader = asyncio.create_task(agent.process_deepgram_events())
+    try:
+        dg.socket.put_nowait(["not", "a", "dict"])       # .get() raises on this
+        await _until(lambda: dg.connects == 1)
+        dg.say("are you there?")
+        await _until(lambda: not agent._finished_turns.empty())
+        assert agent._finished_turns.get_nowait() == "are you there?"
+        dg.close.assert_awaited()                       # the old socket, before the new
+    finally:
+        reader.cancel()
+
+
+async def test_deepgram_that_never_comes_back_ends_the_call_politely(fast_stt_backoff):
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.is_running = True
+    agent.call_sid = "CA1"
+    agent.cartesia = _speaking_cartesia()
+    agent._hangup_call = AsyncMock()
+    agent.deepgram = dg = DroppableDeepgram(connect_results=[False] * 10)
+    agent._turn_worker_task = asyncio.create_task(agent._turn_worker())
+
+    reader = asyncio.create_task(agent.process_deepgram_events())
+    dg.drop()
+    # Returns, rather than raising out of the Deepgram task.
+    await asyncio.wait_for(reader, timeout=10)
+
+    assert dg.connects == len(orch_module.STT_RECONNECT_BACKOFF_S)
+    spoken = [c.kwargs["transcript"] for c in agent.cartesia.send_transcript_chunk.await_args_list]
+    assert any("can't hear you" in t for t in spoken), f"the caller was not told: {spoken}"
+    agent._hangup_call.assert_awaited_once()
+    assert agent.is_running is False
+    assert agent._turn_worker_task.done()
+
+
+async def test_a_socket_that_keeps_dying_is_given_up_on(fast_stt_backoff):
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.is_running = True
+    agent.cartesia = _speaking_cartesia()
+    agent._hangup_call = AsyncMock()
+    agent.deepgram = dg = DroppableDeepgram(flap=True)
+
+    reader = asyncio.create_task(agent.process_deepgram_events())
+    dg.drop()
+    await asyncio.wait_for(reader, timeout=10)
+
+    assert dg.connects == orch_module.STT_MAX_SHORT_LIVED
+    agent._hangup_call.assert_awaited_once()
+
+
+async def test_stop_during_the_reconnect_backoff_exits_promptly(monkeypatch):
+    monkeypatch.setattr(orch_module, "STT_RECONNECT_BACKOFF_S", (5.0,) * 5)
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZtest")
+    agent.is_running = True
+    agent.cartesia = _speaking_cartesia()
+    agent._hangup_call = AsyncMock()
+    agent.deepgram = dg = DroppableDeepgram()
+
+    reader = asyncio.create_task(agent.process_deepgram_events())
+    dg.drop()
+    await asyncio.sleep(0.05)               # inside the first 5 s backoff
+
+    started = time.monotonic()
+    await agent.stop()
+    await asyncio.wait_for(reader, timeout=1.0)
+
+    assert time.monotonic() - started < 0.5, "the reconnect slept out its backoff after stop()"
+    assert dg.connects == 0, "a socket was reopened for a call that had ended"
+    agent._hangup_call.assert_not_awaited()

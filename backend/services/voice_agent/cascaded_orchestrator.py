@@ -88,6 +88,21 @@ PLAYBACK_DRAIN_GRACE_S = 0.8
 # counting elapsed playback as heard (see trigger_barge_in).
 PLAYBACK_START_DELAY_S = 0.3
 
+# Reopening a dropped Deepgram socket (see process_deepgram_events). The waits
+# before each attempt; the whole effort is also capped at the budget, after
+# which the call is ended rather than left deaf. Audio arriving in the gap is
+# dropped — a second or two of the caller is the price of hearing the rest.
+STT_RECONNECT_BACKOFF_S = (0.25, 0.5, 1.0, 2.0, 2.0)
+STT_RECONNECT_BUDGET_S = 10.0
+STT_CONNECT_TIMEOUT_S = 3.0
+# A socket that keeps dying within the budget of being reopened is not
+# recovering, it is flapping: after this many in a row, stop and hang up.
+STT_MAX_SHORT_LIVED = 3
+# Said when the line can no longer hear the caller. The agent can still speak
+# through Cartesia, so the caller is told rather than left talking to nobody.
+STT_DEAF_LINE = ("I'm sorry, I can't hear you on this line any more. "
+                 "Please give us a call back. Goodbye.")
+
 
 # What the agent says, in code, when the model reaches for a tool without
 # having said anything: the same move as Pipecat's on_function_calls_started
@@ -315,6 +330,10 @@ class CascadedPipelineOrchestrator:
         self._finished_turns: asyncio.Queue = asyncio.Queue()
         self._turn_worker_task: Optional[asyncio.Task] = None
         self._hangup_triggered: bool = False
+        # Set by stop(), so a Deepgram reconnect sleeping out its backoff
+        # wakes and gives up at once instead of reopening a socket for a call
+        # that has ended.
+        self._stopped: asyncio.Event = asyncio.Event()
 
         # Sentry transaction and span tracking
         self._sentry_transaction = None
@@ -611,7 +630,158 @@ class CascadedPipelineOrchestrator:
 
     async def process_deepgram_events(self) -> None:
         """
-        Process conversational events from Deepgram Flux v2.
+        Read Deepgram for the life of the call, reopening the socket if it dies.
+
+        The read loop used to just end when the socket closed, and
+        `send_audio` no-ops on a dead socket — so a single drop left the call
+        deaf until the caller gave up: the agent heard nothing, said nothing,
+        and logged one INFO line. This stays the ONLY reader of the socket:
+        the reconnect happens here, between reads, never alongside one.
+        """
+        short_lived = 0
+        while True:
+            opened_at = time.monotonic()
+            try:
+                await self._read_deepgram_events()
+            except Exception as exc:
+                # An event we could not handle ends the read exactly as a dead
+                # socket does, so it is recovered the same way: the old socket
+                # is closed before a new one opens, keeping one reader.
+                logger.error(
+                    "🔴 [CascadedOrchestrator] Deepgram read loop failed: %s", exc, exc_info=True)
+            if not self._stt_still_needed():
+                return          # the call ended, and closing the socket ended the read
+            short_lived = (short_lived + 1
+                           if time.monotonic() - opened_at < STT_RECONNECT_BUDGET_S else 0)
+            logger.error(
+                "🔴 [CascadedOrchestrator] Deepgram stream ended mid-call — the agent "
+                "cannot hear the caller. Reconnecting."
+            )
+            sentry_sdk.capture_message("Deepgram STT stream ended mid-call", level="error")
+            if short_lived <= STT_MAX_SHORT_LIVED and await self._reconnect_deepgram():
+                continue
+            if self._stt_still_needed():
+                await self._end_deaf_call()
+            return
+
+    def _stt_still_needed(self) -> bool:
+        return self.is_running and not self._hangup_triggered
+
+    async def _reconnect_deepgram(self) -> bool:
+        """
+        Reopen Deepgram with backoff, within STT_RECONNECT_BUDGET_S. Reuses the
+        bridge's current attributes, so the tenant's turn-taking thresholds
+        (set by `_apply_voice_settings`) go back on the new connect URL.
+
+        Re-checks the call after every await: `stop()` can land at any of
+        them, and a socket opened after it has closed the bridges would be
+        leaked open for the life of the process.
+        """
+        deadline = time.monotonic() + STT_RECONNECT_BUDGET_S
+        try:
+            await asyncio.wait_for(self.deepgram.close(), timeout=1.0)   # the dead one
+        except Exception:
+            pass
+        for attempt, delay in enumerate(STT_RECONNECT_BACKOFF_S, start=1):
+            try:
+                await asyncio.wait_for(self._stopped.wait(), timeout=delay)
+                return False                    # stop() was called while we waited
+            except asyncio.TimeoutError:
+                pass
+            remaining = deadline - time.monotonic()
+            if not self._stt_still_needed() or remaining <= 0:
+                return False
+            try:
+                ok = await asyncio.wait_for(
+                    self.deepgram.connect(), timeout=min(STT_CONNECT_TIMEOUT_S, remaining))
+            except asyncio.TimeoutError:
+                ok = False
+            except Exception as exc:
+                logger.warning(f"🟡 [CascadedOrchestrator] Deepgram reconnect raised: {exc}")
+                ok = False
+            if not self._stt_still_needed():
+                if ok:
+                    await self.deepgram.close()
+                return False
+            if ok:
+                logger.warning(
+                    "🟢 [CascadedOrchestrator] Deepgram reconnected on attempt %d — "
+                    "listening again", attempt,
+                )
+                sentry_sdk.capture_message(
+                    f"Deepgram STT reconnected mid-call (attempt {attempt})", level="warning")
+                return True
+            logger.warning("🟡 [CascadedOrchestrator] Deepgram reconnect attempt %d failed", attempt)
+        return False
+
+    async def _end_deaf_call(self) -> None:
+        """
+        The call can no longer hear the caller and will not again. Say so, and
+        hang up through the normal path.
+
+        Never raises: it runs on the Deepgram task at the end of a call that
+        is already failing, and an exception here would leave the line open
+        and deaf — the outcome this exists to prevent.
+        """
+        logger.error(
+            "🔴 [CascadedOrchestrator] Deepgram could not be reconnected — ending the call"
+        )
+        sentry_sdk.capture_message(
+            "Deepgram STT unrecoverable mid-call; call ended", level="error")
+        try:
+            # No turn may start while the line is ending. The queue is fed only
+            # by the dead socket, but a reply in flight would otherwise carry
+            # on talking under the apology.
+            worker = self._turn_worker_task
+            if worker is not None and not worker.done():
+                worker.cancel()
+                try:
+                    await worker
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise
+            await self._abandon_current_turn()
+            if self._stt_still_needed():
+                await self._speak_line(STT_DEAF_LINE)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error(
+                "🔴 [CascadedOrchestrator] Could not say goodbye on a deaf line: %s", exc,
+                exc_info=True,
+            )
+        try:
+            if self.is_running:
+                await self._call_owned(self._hangup_call())
+        except Exception as exc:
+            logger.error("🔴 [CascadedOrchestrator] Hang-up of a deaf call failed: %s", exc)
+        # Even if Twilio refused the hang-up, nothing here can hear the caller
+        # again. Standing down lets run_loop close the stream on its next
+        # message instead of holding a deaf line open.
+        self.is_running = False
+
+    async def _speak_line(self, line: str) -> None:
+        """
+        Speak a fixed line as a turn of its own, through the same pipeline and
+        the same floor-taking a reply uses — so the one-reader rule, barge-in
+        and the history append all hold for it too.
+        """
+        self.state = ConversationState.AGENT_SPEAKING
+        self._agent_audio_started = False
+        self._speech_frames = 0
+        self.mark_tracker.reset()
+        self._current_turn_word_count = 0
+        self.current_context_id = f"ctx_{uuid.uuid4().hex[:8]}"
+        self._turn_id += 1
+        self._turn_task = asyncio.create_task(self._run_parallel_streaming_pipeline(
+            self._turn_id, context_id=self.current_context_id, scripted=line))
+        await self._turn_task
+
+    async def _read_deepgram_events(self) -> None:
+        """
+        Process conversational events from Deepgram Flux v2 until the socket
+        ends.
         """
         async for event in self.deepgram.receive_events():
             event_type = event.get("type")
@@ -863,6 +1033,7 @@ class CascadedPipelineOrchestrator:
         context_id: str,
         transaction=None,
         span_1=None,
+        scripted: Optional[str] = None,
     ) -> None:
         """
         Coordinates parallel LLM token generation, phrase extraction,
@@ -882,6 +1053,9 @@ class CascadedPipelineOrchestrator:
         AWAITING_INPUT and `handle_user_turn_complete` sets AGENT_SPEAKING
         straight back for the new turn, so a loop watching only that flag
         wakes up, sees "speaking", and keeps working for a turn that is over.
+
+        `scripted` speaks that text instead of asking the model (see
+        `_speak_line`).
         """
         start_time = time.time()
         llm_queue = asyncio.Queue()
@@ -894,9 +1068,12 @@ class CascadedPipelineOrchestrator:
                     and self._turn_id == my_turn)
 
         # 1. Start LLM Producer Task
+        async def say_scripted() -> str:
+            return scripted
+
         async def llm_producer():
             try:
-                res = self.llm_callback(self.history)
+                res = self.llm_callback(self.history) if scripted is None else say_scripted()
                 first_token = True
                 if hasattr(res, "__anext__") or inspect.isasyncgen(res):
                     async for token in res:
@@ -1674,6 +1851,7 @@ class CascadedPipelineOrchestrator:
         Stop the orchestrator and close all active bridges.
         """
         self.is_running = False
+        self._stopped.set()
         for task in (self._turn_worker_task, self._turn_task, self._audio_reader):
             if task and not task.done():
                 task.cancel()
