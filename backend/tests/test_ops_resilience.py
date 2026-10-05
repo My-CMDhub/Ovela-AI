@@ -195,3 +195,67 @@ async def test_a_start_inside_the_deadline_leaves_the_call_unbounded(monkeypatch
     greeting.assert_called_once()
     audio.assert_awaited_once()
     stop.assert_awaited()
+
+
+# --- rate limits are settings ------------------------------------------------
+
+def _docs(n, phone="+61400000001"):
+    return {"documents": [{"caller_phone": phone, "status": "completed"} for _ in range(n)]}
+
+
+async def _check(monkeypatch, user_calls, global_calls):
+    from services.appwrite import db_service
+
+    request = AsyncMock(side_effect=[_docs(user_calls), _docs(global_calls, "+61400000099")])
+    monkeypatch.setattr(db_service, "_make_request", request)
+    monkeypatch.setattr(db_service, "get_transcript_collection_for_tenant",
+                        AsyncMock(return_value="call_transcripts_coalcreek"))
+    with patch("rules.whitelist.is_whitelisted", return_value=False):
+        result = await db_service.check_voice_rate_limit("+61400000001")
+    return result, request
+
+
+def test_the_defaults_are_unchanged():
+    assert settings.RATE_LIMIT_CALLS_PER_CALLER_PER_DAY == 2
+    assert settings.RATE_LIMIT_CALLS_PER_HOUR_GLOBAL == 10
+
+
+async def test_default_limits_still_block_the_third_call_and_the_eleventh_caller(monkeypatch):
+    (allowed, why), _ = await _check(monkeypatch, user_calls=2, global_calls=0)
+    assert (allowed, why) == (False, "user_limit_exceeded")
+    (allowed, why), _ = await _check(monkeypatch, user_calls=1, global_calls=10)
+    assert (allowed, why) == (False, "global_limit_exceeded")
+    (allowed, why), _ = await _check(monkeypatch, user_calls=1, global_calls=9)
+    assert (allowed, why) == (True, "allowed")
+
+
+async def test_raised_limits_are_honoured(monkeypatch):
+    monkeypatch.setattr(settings, "RATE_LIMIT_CALLS_PER_CALLER_PER_DAY", 5)
+    monkeypatch.setattr(settings, "RATE_LIMIT_CALLS_PER_HOUR_GLOBAL", 30)
+    (allowed, why), request = await _check(monkeypatch, user_calls=4, global_calls=29)
+    assert (allowed, why) == (True, "allowed")
+    (allowed, why), _ = await _check(monkeypatch, user_calls=5, global_calls=0)
+    assert (allowed, why) == (False, "user_limit_exceeded")
+    (allowed, why), _ = await _check(monkeypatch, user_calls=0, global_calls=30)
+    assert (allowed, why) == (False, "global_limit_exceeded")
+
+
+async def test_a_raised_limit_widens_the_query_page(monkeypatch):
+    """Blocked attempts are filtered after the fetch, so a page smaller than
+    the limit would undercount and never block."""
+    monkeypatch.setattr(settings, "RATE_LIMIT_CALLS_PER_HOUR_GLOBAL", 40)
+    _, request = await _check(monkeypatch, user_calls=0, global_calls=0)
+    global_queries = request.await_args_list[1].kwargs["params"]["queries"]
+    from appwrite.query import Query
+    assert Query.limit(200) in global_queries, global_queries
+
+
+async def test_whitelisted_numbers_still_bypass_every_limit(monkeypatch):
+    from services.appwrite import db_service
+
+    monkeypatch.setattr(settings, "RATE_LIMIT_CALLS_PER_CALLER_PER_DAY", 0)
+    request = AsyncMock()
+    monkeypatch.setattr(db_service, "_make_request", request)
+    with patch("rules.whitelist.is_whitelisted", return_value=True):
+        assert await db_service.check_voice_rate_limit("+61400000001") == (True, "whitelisted")
+    request.assert_not_called()
