@@ -91,7 +91,11 @@ def _client_ip(request: Request) -> str:
     NEXT_PUBLIC_API_URL, no Vercel proxy in between), so that last hop is the
     visitor. request.client is Heroku's router, used only if the header is absent.
     """
-    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+    # Every X-Forwarded-For line, in order: headers.get() returns only the first,
+    # so a client sending two lines would have its own value read as the "last"
+    # hop if the router appended to the later one.
+    joined = ",".join(request.headers.getlist("x-forwarded-for"))
+    hops = [h.strip() for h in joined.split(",") if h.strip()]
     if hops:
         return hops[-1]
     return request.client.host if request.client else "unknown"

@@ -212,3 +212,17 @@ def test_ip_tracking_stays_bounded(monkeypatch):
         voice._demo_ip_allowed(f"old{i}", now=0.0)
     voice._demo_ip_allowed("new", now=voice._DEMO_IP_WINDOW_S + 1.0)
     assert list(voice._demo_ip_hits) == ["new"]
+
+
+def test_client_ip_reads_the_last_hop_across_repeated_header_lines():
+    """A client can send X-Forwarded-For twice; the router's appended hop may sit
+    on the later line. Reading only the first line returned a client-typed value."""
+    from starlette.requests import Request
+    from api.voice import _client_ip
+
+    scope = {
+        "type": "http", "method": "POST", "path": "/api/voice/demo-request",
+        "headers": [(b"x-forwarded-for", b"6.6.6.6"), (b"x-forwarded-for", b"7.7.7.7, 203.0.113.9")],
+        "client": ("10.0.0.1", 1234),
+    }
+    assert _client_ip(Request(scope)) == "203.0.113.9"
