@@ -1164,6 +1164,33 @@ async def _handle_checkout_completed(event: dict, event_id: str, coalcreek_strip
         )
         return {"status": "duplicate"}
 
+    # The amount must be what the booking costs NOW. Extending a stay patches
+    # the total and mails a new link, but the first link stays payable at the
+    # old, smaller total until Stripe expires it (the session id is not stored,
+    # so it can't be expired from here). Paying that one marked the longer stay
+    # paid in full. Every flow charges the full total, so a mismatch is either a
+    # stale link or an error, and a person decides. $1 of slack: the voice path
+    # charges int(total), dropping cents.
+    expected_total = booking_doc.get("total_amount")
+    if mode != "setup" and expected_total not in (None, "") and amount_total_cents:
+        try:
+            paid = float(amount_total_cents) / 100.0
+            expected = float(expected_total)
+        except (TypeError, ValueError):
+            paid = expected = None
+        if paid is not None and abs(paid - expected) >= 1.0:
+            reason = (f"payment {stripe_payment_id or '-'} of ${paid:.2f} does not match the booking "
+                      f"total ${expected:.2f} (a stale link after a change?) — check, then confirm or refund")
+            logger.error("Stripe webhook %s: %s (ref=%s)", event_id, reason, booking_ref)
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_message(f"Stripe webhook {event_id}: {reason} (ref={booking_ref})", level="error")
+            except Exception:
+                pass
+            _spawn_alert(_alert_staff_webhook_failure(
+                event_id, reason, booking_ref, subject="Payment amount doesn't match the booking — please check"))
+            return {"status": "amount_mismatch_flagged"}
+
     # Persist first and only then email: if the write fails we answer 5xx with
     # nothing sent, so the redelivery is the first time the guest hears from us.
     if mode == "setup":
