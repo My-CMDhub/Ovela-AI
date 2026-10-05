@@ -129,6 +129,17 @@ async def shutdown_event():
     logging.info(f"🛑 LOG SESSION END | Melbourne time: {mel_time}")
     logging.info("-" * 72)
     logging.info("🛑 Shutting down application...")
+    # Transcripts are only written when a call ends, so a restart with calls
+    # up would lose them. Save every call still registered as live, bounded
+    # at 10 s in total so the rest of shutdown fits inside Heroku's 30 s
+    # SIGTERM-to-SIGKILL window even if Appwrite is slow. Never raises.
+    try:
+        from services.voice_agent.cascaded_orchestrator import save_live_transcripts
+        saved = await save_live_transcripts(timeout_s=10.0)
+        if saved:
+            logging.info(f"📝 Saved transcripts of {saved} live call(s) on shutdown")
+    except Exception as save_err:
+        logging.error(f"❌ Shutdown transcript save failed: {save_err}")
     shutdown_scheduler()
     logging.info("✅ Application shutdown complete")
 
