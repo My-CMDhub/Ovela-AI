@@ -1480,6 +1480,32 @@ async def handle_request_human_callback(args: dict, user_phone: str) -> dict:
     }
 
 
+# Booking statuses that mean "room held, money not yet taken".
+_HOLD_STATUSES = frozenset({"reserved", "pending", "pending_payment", "link_sent"})
+# Payment states that mean "a link is out, or should be" — deliberately WITHOUT
+# the empty string. Walk-ins and PMS imports are written with no payment_status
+# at all, so "" says nothing about money owed; counting it as pending is how a
+# confirmed walk-in giving their name over the phone was flipped back to
+# pending_payment and emailed a checkout for a stay already settled at the desk.
+_UNPAID_PAYMENT_STATUSES = frozenset({"pending", "pending_payment", "email_failed"})
+
+
+def _is_awaiting_payment(doc: dict) -> bool:
+    """Whether a payment link may be (re)sent for this booking.
+
+    A hold status (reserved/pending/...) is enough on its own: a fresh hold has
+    no payment_status until its link goes out. Otherwise the payment state has
+    to say so explicitly — legacy rows were written `confirmed` before payment
+    (see the N6 guard) and still carry `pending_payment`. Expired holds and
+    anything paid or carded never qualify.
+    """
+    bs = (doc.get("status") or "").lower()
+    ps = (doc.get("payment_status") or "").lower()
+    if bs == "expired" or ps in ("paid", "card_on_file"):
+        return False
+    return bs in _HOLD_STATUSES or ps in _UNPAID_PAYMENT_STATUSES
+
+
 async def handle_update_guest_info(args: dict, db_service, user_phone: str = None) -> dict:
     """
     Save guest details to CRM for persistent memory.
@@ -1505,17 +1531,10 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
             # Find most recent active reservation with incomplete payment
             active_doc = None
             for doc in (docs or []):
-                _ps = doc.get("payment_status") or ""
-                _bs = doc.get("status") or ""
-                # Same guard as resend_payment_link: an expired hold keeps
-                # payment_status "pending_payment", and correcting an email on
-                # it would mail a fresh checkout for a room back on sale.
-                is_pending = (_bs or "").lower() != "expired" and (
-                    _bs in ("reserved", "pending", "pending_payment", "link_sent")
-                    or _ps in ("pending", "pending_payment", "email_failed", "")
-                )
-                is_paid = _ps == "paid" and _bs in ("paid", "confirmed")
-                if is_pending and not is_paid:
+                # Same guard as resend_payment_link. This path runs on a caller
+                # merely giving their name, so a wrong "pending" here both
+                # rewrites payment_status and emails a checkout unprompted.
+                if _is_awaiting_payment(doc):
                     active_doc = doc
                     break
             if active_doc and active_doc.get("$id"):
@@ -1775,22 +1794,12 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
 
         active_doc = None
         for doc in (docs or []):
-            _ps = doc.get("payment_status") or ""
-            _bs = doc.get("status") or ""
-            # Accept any booking that is on-hold / pending payment — includes:
-            # - 'reserved' (PMS hold, payment not yet started)
-            # - 'pending' / 'pending_payment' (explicit payment pending statuses)
-            # - 'link_sent' (link was sent but not paid)
-            # - null/empty payment_status (pipeline glitch — treat as outstanding)
-            # An expired hold keeps payment_status "pending_payment", so the
-            # status check has to come first: a fresh link would take money for
-            # a room that was released when the old link lapsed.
-            is_pending = _bs != "expired" and (
-                _bs in ("reserved", "pending", "pending_payment", "link_sent")
-                or _ps in ("pending", "pending_payment", "email_failed", "")
-            )
-            is_paid = _ps == "paid" and _bs in ("paid", "confirmed")
-            if is_pending and not is_paid:
+            # On hold (reserved/pending/pending_payment/link_sent) or explicitly
+            # unpaid. An empty payment_status no longer counts on its own — a
+            # confirmed walk-in has none and must not be sent a checkout. An
+            # expired hold keeps payment_status "pending_payment", and a fresh
+            # link would take money for a room released when the old one lapsed.
+            if _is_awaiting_payment(doc):
                 active_doc = doc
                 break
 
