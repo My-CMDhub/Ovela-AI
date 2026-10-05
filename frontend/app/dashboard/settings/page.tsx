@@ -66,7 +66,18 @@ export default function MotelSettingsPage() {
 
             const data = await res.json();
             if (data.success && data.settings) {
-                setSettings(data.settings);
+                // Merge over what the form holds (defaults + tenant prefill), never
+                // replace it: a read without a session (fetchWithAuth sends no JWT
+                // when it can't mint one) now returns only the public theming keys
+                // ({industry}), and a new tenant's settings may be partial or empty,
+                // and replacing state with that left every input undefined (a blank
+                // form, and React's controlled-to-uncontrolled warning). Nulls from
+                // Appwrite don't clobber a value either.
+                const loaded = Object.fromEntries(
+                    Object.entries(data.settings as Record<string, unknown>)
+                        .filter(([, v]) => v !== null && v !== undefined)
+                ) as Partial<BusinessSettings>;
+                setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...loaded }));
             }
         } catch (error) {
             console.error("Error fetching settings:", error);

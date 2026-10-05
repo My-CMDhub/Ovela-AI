@@ -81,6 +81,7 @@ interface ApiResponse {
     runs: EvaluationRun[];
     total: number;
     error?: string;
+    detail?: string; // FastAPI's 401 body: runs now need a signed-in user
 }
 
 // ─── Hardcoded baseline scores per scenario (pre-ADK, gpt-4o-mini flat prompt) ──
@@ -531,7 +532,7 @@ export default function EvaluationsPage() {
                 setRuns(data.runs);
                 setTotal(data.total);
             } else {
-                setError(data.error ?? "Failed to load runs");
+                setError(data.error ?? data.detail ?? "Failed to load runs");
             }
         } catch (err: unknown) {
             const message = err instanceof Error ? err.message : "Network error";
