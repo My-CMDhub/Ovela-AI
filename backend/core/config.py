@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     TWILIO_SIGNATURE_MODE: str = "report"
     # Optional. Unset -> derived from the magic-link secret (domain-separated).
     STREAM_TOKEN_SECRET: str = ""
+    # Seconds a Media Stream socket may stay open without sending `start`.
+    # The Deepgram and Cartesia sockets are opened before Twilio's first
+    # message, so a client that connects and goes quiet would otherwise hold
+    # both (and their billing) open indefinitely. Twilio sends `connected` and
+    # `start` within milliseconds, so 10 s only ever catches a stalled client.
+    STREAM_START_TIMEOUT_S: float = 10.0
 
 
     # Personal Assistant Target Number

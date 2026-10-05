@@ -127,3 +127,71 @@ def test_the_app_shutdown_hook_runs_the_save():
     assert len(calls) == 1
     timeout = next(k.value.value for k in calls[0].value.keywords if k.arg == "timeout_s")
     assert timeout <= 10, "must leave room inside Heroku's 30 s SIGKILL window"
+
+
+# --- a socket that never sends `start` --------------------------------------
+
+async def _run(agent, script):
+    """run_loop over a scripted socket: each item is a message to send, or a
+    number of seconds to stall for. Bridges stubbed; the real stop() runs."""
+    async def fake_iter_text():
+        for item in script:
+            if isinstance(item, (int, float)):
+                await asyncio.sleep(item)
+            else:
+                yield json.dumps(item)
+
+    agent.twilio_ws.iter_text = fake_iter_text
+    greeting = AsyncMock()
+    stop = AsyncMock(wraps=agent.stop)
+    with patch.object(agent.deepgram, "connect", AsyncMock(return_value=True)), \
+         patch.object(agent.cartesia, "connect", AsyncMock(return_value=True)), \
+         patch.object(agent.deepgram, "close", AsyncMock()), \
+         patch.object(agent.cartesia, "close", AsyncMock()), \
+         patch.object(agent, "process_deepgram_events", AsyncMock()), \
+         patch.object(agent, "trigger_initial_greeting", greeting), \
+         patch.object(agent, "_ensure_call_context", AsyncMock()), \
+         patch.object(agent, "handle_twilio_audio", AsyncMock()) as audio, \
+         patch.object(agent, "stop", stop):
+        await asyncio.wait_for(agent.run_loop(), timeout=5)
+    return greeting, audio, stop
+
+
+START = {"event": "start", "start": {"streamSid": "MZ1", "callSid": "CAx",
+                                     "customParameters": {}}}
+MEDIA = {"event": "media", "media": {"payload": "AAAA"}}
+
+
+async def test_no_start_in_time_closes_the_socket_and_stops(monkeypatch, live_calls):
+    monkeypatch.setattr(settings, "STREAM_START_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(settings, "STREAM_AUTH_MODE", "report")
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZ0")
+    agent.warm_llm_on_start = False
+
+    # Twilio's `connected` arrives, then nothing: the deadline is for `start`,
+    # not for the first message.
+    greeting, audio, stop = await _run(agent, [{"event": "connected"}, 3600])
+
+    agent.twilio_ws.close.assert_awaited()
+    stop.assert_awaited()
+    greeting.assert_not_called()
+    assert agent.is_running is False
+    assert agent not in live_calls
+
+
+async def test_a_start_inside_the_deadline_leaves_the_call_unbounded(monkeypatch, live_calls):
+    """Once `start` is in, reads wait as long as the call lasts: a caller who
+    is silent past the start deadline is not cut off."""
+    monkeypatch.setattr(settings, "STREAM_START_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(settings, "STREAM_AUTH_MODE", "report")
+    agent = CascadedPipelineOrchestrator(twilio_ws=AsyncMock(), stream_sid="MZ0")
+    agent.warm_llm_on_start = False
+
+    greeting, audio, stop = await _run(agent, [
+        {"event": "connected"}, 0.03, START, 0.3, MEDIA, {"event": "stop"},
+    ])
+
+    agent.twilio_ws.close.assert_not_called()
+    greeting.assert_called_once()
+    audio.assert_awaited_once()
+    stop.assert_awaited()

@@ -3052,8 +3052,36 @@ class CascadedPipelineOrchestrator:
         # anything else arriving first is not Twilio: rejected before it can
         # feed Deepgram or drive a turn on our bill.
         admitted = False
+        # start() has already opened Deepgram and Cartesia, so a socket that
+        # connects and never sends `start` held both open until the platform
+        # dropped it. Reads are bounded only until `start` arrives (Twilio
+        # sends `connected` then `start` within milliseconds); after that they
+        # wait as long as the call lasts, so a live call is unaffected.
+        messages = self.twilio_ws.iter_text().__aiter__()
+        start_deadline = time.monotonic() + settings.STREAM_START_TIMEOUT_S
         try:
-            async for message in self.twilio_ws.iter_text():
+            while True:
+                try:
+                    if admitted:
+                        message = await messages.__anext__()
+                    else:
+                        message = await asyncio.wait_for(
+                            messages.__anext__(),
+                            timeout=max(0.0, start_deadline - time.monotonic()),
+                        )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "⏱️ [CascadedOrchestrator] No `start` within %.0fs — closing stream",
+                        settings.STREAM_START_TIMEOUT_S,
+                    )
+                    self.is_running = False
+                    try:
+                        await self.twilio_ws.close()
+                    except Exception:
+                        pass
+                    break
                 if not self.is_running:
                     break
                 try:
