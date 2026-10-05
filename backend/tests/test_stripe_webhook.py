@@ -356,3 +356,19 @@ def test_dropped_cents_are_not_a_mismatch(env):
     r = env["post"](_event("checkout.session.completed", amount_total=25900))
     assert r.json()["status"] == "received"
     env["pay"].assert_awaited_once()
+
+
+@pytest.mark.parametrize("released_as", ["rejected", "cancelled"])
+def test_a_payment_on_a_rejected_or_cancelled_hold_is_flagged_not_confirmed(env, monkeypatch, released_as):
+    """Staff reject a hold while the guest's 30-minute link is still live; the
+    guest pays. The room was released on reject, so confirming could double-book."""
+    from services.email import email_service
+    alerts = AsyncMock(return_value=True)
+    monkeypatch.setattr(email_service, "send_email", alerts, raising=False)
+    env["find"].return_value = dict(DOC, status=released_as)
+
+    r = env["post"](_event("checkout.session.completed"))
+
+    assert r.json()["status"] == f"{released_as}_hold_flagged"
+    env["pay"].assert_not_called()
+    assert alerts.await_count == 1

@@ -1141,13 +1141,17 @@ async def _handle_checkout_completed(event: dict, event_id: str, coalcreek_strip
         _spawn_alert(_alert_staff_webhook_failure(
             event_id, reason, booking_ref, subject="Possible double payment — please refund"))
         return {"status": "double_payment_flagged"}
-    if (booking_doc.get("status") or "").lower() == "expired":
-        # Paid through a link whose hold had already lapsed: the room went back
-        # on sale when it expired, so confirming here could double-book it.
-        # The money is real, so a person decides (honour or refund) — 200 so
-        # Stripe stops, loud so nobody misses it.
+    released_as = (booking_doc.get("status") or "").lower()
+    if released_as in ("expired", "rejected", "cancelled") and booking_doc.get("payment_status") != "paid":
+        # Paid through a link whose hold had already been released — it lapsed,
+        # or staff rejected or cancelled it while the guest's 30-minute link was
+        # still live. The room went back on sale at that moment, so confirming
+        # here could double-book it (rejected/cancelled were found in review:
+        # the dashboard's Reject button made that path one click away). The
+        # money is real, so a person decides (honour or refund) — 200 so Stripe
+        # stops, loud so nobody misses it.
         reason = (f"payment {stripe_payment_id or '-'} arrived for a hold that had "
-                  "already EXPIRED — check the room is still free, then confirm or refund")
+                  f"already been {released_as.upper()} — check the room is still free, then confirm or refund")
         logger.error("Stripe webhook %s: %s (ref=%s)", event_id, reason, booking_ref)
         try:
             import sentry_sdk
@@ -1155,8 +1159,8 @@ async def _handle_checkout_completed(event: dict, event_id: str, coalcreek_strip
         except Exception:
             pass
         _spawn_alert(_alert_staff_webhook_failure(
-            event_id, reason, booking_ref, subject="Payment on an expired hold — please check"))
-        return {"status": "expired_hold_flagged"}
+            event_id, reason, booking_ref, subject=f"Payment on a {released_as} hold — please check"))
+        return {"status": f"{released_as}_hold_flagged"}
     if booking_doc.get("payment_status") in done_states:
         logger.info(
             "Stripe webhook %s: %s already %s — duplicate delivery, no side effects",
