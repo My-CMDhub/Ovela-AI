@@ -581,8 +581,9 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                 "_skip_ack": True,  # I1 already played "Got it, one moment" — skip LLM ack
                 "ai_should_say": "Sorry, I couldn't complete the live calendar check just now. If you want, I can put you through to reception."
             }
-            if isinstance(availability_cache, dict):
-                availability_cache[cache_key] = copy.deepcopy(payload)
+            # Never cached: the memo lives for the whole call, so caching one
+            # transient failure turned every retry of these dates into the same
+            # "couldn't check" without the calendar ever being asked again.
             return payload
 
         if result.get("partial_scan"):
@@ -598,8 +599,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                 "skipped_nights": skipped,
                 "ai_should_say": f"I can run up to ten nights per live check right now, and I verified {checked_range}. If you want, I can put you through to reception for the full span.",
             }
-            if isinstance(availability_cache, dict):
-                availability_cache[cache_key] = copy.deepcopy(payload)
+            # Not cached: "unknown" is not an answer to remember (see above).
             return payload
         
         # 4. Parse result efficiently
@@ -752,8 +752,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
             "_skip_ack": True,
             "ai_should_say": "Sorry, I couldn't complete the live calendar check just now. If you'd like, I can put you through to reception."
         }
-        if isinstance(availability_cache, dict):
-            availability_cache[cache_key] = copy.deepcopy(payload)
+        # Not cached: a transient error must not answer every retry this call.
         return payload
 
 

@@ -106,3 +106,73 @@ class TestEmptyPaymentStatusIsNotPending:
 
         assert result["success"] is True
         assert len(stripe_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# 5. A failed availability check is not remembered for the rest of the call
+# ---------------------------------------------------------------------------
+
+def _room(num: str, rtype: str = "queen", rate=120) -> dict:
+    return {"room_number": num, "room_type": rtype, "status": "available", "base_rate": rate}
+
+
+class FlakyMotelDb:
+    """Fails the first `fail_reads` reservation reads, then answers."""
+
+    def __init__(self, rooms, fail_reads=0):
+        self.rooms = rooms
+        self.fail_reads = fail_reads
+        self.reads = 0
+
+    async def get_motel_rooms(self, tenant_id="coalcreek"):
+        return list(self.rooms)
+
+    async def get_motel_reservations(self, start, end, tenant_id="coalcreek"):
+        self.reads += 1
+        if self.reads <= self.fail_reads:
+            return None  # "couldn't read" — the contract get_motel_reservations keeps
+        return []
+
+
+class TestFailedAvailabilityIsNotCached:
+    ARGS = {"check_in_date": FRI, "check_out_date": SUN, "room_type": "queen"}
+
+    async def test_a_retry_after_a_failed_read_asks_the_calendar_again(self):
+        db = FlakyMotelDb([_room("1")], fail_reads=1)
+        ctx = {"availability_cache": {}}
+
+        first = await ch.handle_check_availability(dict(self.ARGS), db, context=ctx)
+        second = await ch.handle_check_availability(dict(self.ARGS), db, context=ctx)
+
+        assert first["available"] == "unknown"
+        assert second["available"] is True
+        assert db.reads == 2
+
+    async def test_a_retry_after_an_exception_asks_the_calendar_again(self, monkeypatch):
+        db = FlakyMotelDb([_room("1")])
+        ctx = {"availability_cache": {}}
+        real = ch._check_appwrite_availability
+        calls = {"n": 0}
+
+        async def boom_once(*a, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("unexpected")
+            return await real(*a, **kw)
+
+        monkeypatch.setattr(ch, "_check_appwrite_availability", boom_once)
+
+        first = await ch.handle_check_availability(dict(self.ARGS), db, context=ctx)
+        second = await ch.handle_check_availability(dict(self.ARGS), db, context=ctx)
+
+        assert first["available"] == "unknown"
+        assert second["available"] is True
+
+    async def test_a_real_answer_is_still_cached(self):
+        db = FlakyMotelDb([_room("1")])
+        ctx = {"availability_cache": {}}
+
+        await ch.handle_check_availability(dict(self.ARGS), db, context=ctx)
+        await ch.handle_check_availability(dict(self.ARGS), db, context=ctx)
+
+        assert db.reads == 1
