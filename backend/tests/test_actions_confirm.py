@@ -131,3 +131,12 @@ def test_a_token_only_works_for_the_action_it_was_issued_for(env, issued_for, po
     assert client.get(f"/api/actions/{posted_to}", params={"token": token}).status_code == 400
     assert client.post(f"/api/actions/{posted_to}", data={"token": token}).status_code == 400
     db.update_staff_notification.assert_not_awaited()
+
+
+def test_staff_email_links_point_at_this_backend(monkeypatch):
+    """They were hard-coded to an old Cloud Run deployment, so no fix to the
+    action routes could ever be reached from a staff email."""
+    from core.config import settings
+    from services.magic_links import generate_action_url
+    monkeypatch.setattr(settings, "BACKEND_URL", "https://backend.example")
+    assert generate_action_url("n1", "approve").startswith("https://backend.example/api/actions/approve?token=")
