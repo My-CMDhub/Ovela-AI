@@ -324,6 +324,14 @@ def _map_room_type(raw_type) -> str:
     return mapped_type
 
 
+def _kb_rate(display_type: str):
+    """Knowledge-base nightly price for a display room type, or None."""
+    for room in COALCREEK_DATA.get("rooms", {}).values():
+        if room.get("name") == display_type:
+            return room.get("price")
+    return None
+
+
 async def _check_appwrite_availability(db_service, check_in_str: str, check_out_str: str, room_type: str = None) -> dict:
     """
     Check availability purely from Appwrite DB.
@@ -390,14 +398,20 @@ async def _check_appwrite_availability(db_service, check_in_str: str, check_out_
         candidates = []  # (room dict, set of nights it is free)
         for room in active_rooms:
             room_num = room.get("room_number")
+            display_type = _map_room_type(room.get("room_type"))
             candidates.append((
                 {
-                    "room_type": _map_room_type(room.get("room_type")),
+                    "room_type": display_type,
                     "room_number": room_num,
                     # CRITICAL: use `or` not .get(key, default) because Appwrite stores
                     # null values as None even when the key exists — .get() returns None,
                     # not the default, when the key is present but null.
-                    "price_per_night": room.get("base_rate") or 150,
+                    # This is THE nightly price: check_availability quotes it and
+                    # create_booking_request charges it (from the same room).
+                    # A room with no base_rate falls back to the KB price for its
+                    # type — the figure the prompt lists — not a flat $150 that
+                    # no booking ever charged.
+                    "price_per_night": room.get("base_rate") or _kb_rate(display_type) or 150,
                     "available": True,
                 },
                 {night for night in night_strs if room_num not in booked_by_night[night]},
@@ -854,6 +868,8 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     final_key = key_map.get(search_key, "queen")
     room_data = rooms_data.get(final_key, rooms_data["queen"])
     
+    # KB price: the fallback only. In PMS mode it is replaced below by the
+    # assigned room's quoted rate; live-scraping mode has no room to read.
     rate = room_data["price"]
     total = rate * num_nights
 
@@ -1016,6 +1032,15 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                         "message": f"Unfortunately, the {room_data['name']} is no longer available for those dates."
                     }
                 room = free_rooms[0]
+                # Charge what check_availability quoted. It quotes this same
+                # room (the first free all nights, in inventory order) at its
+                # DB base_rate; the hold used to be written at the static KB
+                # price instead, so a caller told "$120 a night" was emailed a
+                # checkout for $135. The KB price stays only as the fallback.
+                rate = room.get("price_per_night") or rate
+                total = rate * num_nights
+                reservation_data["rate_per_night"] = rate
+                reservation_data["total_amount"] = total
                 reservation_data["room_number"] = room["room_number"]
                 reservation_data["status"] = "reserved"
                 reservation_data["source"] = "voice_ai_pms_auto"

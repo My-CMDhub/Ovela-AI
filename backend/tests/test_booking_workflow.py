@@ -318,3 +318,41 @@ class TestRetryAfterAFailedWriteDoesNotDoubleBook:
         await disp.execute("lookup_booking", {"guest_phone": CALLER})
 
         assert db.lookups == before
+
+
+# ---------------------------------------------------------------------------
+# 4. The price quoted is the price charged
+# ---------------------------------------------------------------------------
+
+class TestQuotedPriceIsChargedPrice:
+
+    async def _quote_then_book(self, db, stripe_calls):
+        disp = _dispatcher(db)
+        quote = await disp.execute(
+            "check_availability", {"check_in_date": FRI, "check_out_date": SUN, "room_type": "queen"})
+        booked = await disp.execute("create_booking_request", _booking_args())
+        return quote, booked
+
+    async def test_db_base_rate_is_quoted_and_charged(self, stripe_calls):
+        db = WorkflowDb([_room("1", rate=120)])
+
+        quote, booked = await self._quote_then_book(db, stripe_calls)
+
+        assert quote["price_per_night"] == 120 and quote["total"] == 240
+        assert db.saved[0]["rate_per_night"] == 120
+        assert db.saved[0]["total_amount"] == 240
+        assert booked["total_amount"] == 240
+        assert stripe_calls[0]["total_amt"] == 240
+
+    async def test_room_without_base_rate_uses_the_kb_price_for_both(self, stripe_calls):
+        """No base_rate: both sides fall back to the KB price the prompt lists,
+        not a $150 the quote invented and the booking never charged."""
+        from services.knowledge_base.coalcreek import COALCREEK_DATA
+        kb = COALCREEK_DATA["rooms"]["queen"]["price"]
+        db = WorkflowDb([_room("1", rate=None)])
+
+        quote, booked = await self._quote_then_book(db, stripe_calls)
+
+        assert quote["price_per_night"] == kb
+        assert db.saved[0]["total_amount"] == kb * 2
+        assert stripe_calls[0]["total_amt"] == kb * 2
