@@ -63,6 +63,74 @@ UTTERANCES = [
     ("Actually, I am calling for Sarah.", NEITHER),
     ("Yes, no problem.", NEITHER),
     ("I'd like to talk to you about a booking.", NEITHER),
+    # --- found in review: narration and deferral are not asks ----------------
+    # Each of these was read as an ask and would have handed a caller who had
+    # just declined over to a person.
+    ("No thanks, I'll speak to reception when I check in", REFUSE),
+    ("nah I'll talk to someone when I get there", REFUSE),
+    ("no it's fine, I was talking to the manager this morning", REFUSE),
+    ("please don't, I'll speak to someone tomorrow", REFUSE),
+    ("my mate was talking to the owner last week", NEITHER),
+    ("transfer me later", NEITHER),
+    ("why would you transfer me", NEITHER),
+    ("should I speak to the manager about that", NEITHER),
+    # --- found in review: a possessive is not a person -----------------------
+    ("I'd like the owner's phone number", NEITHER),
+    ("I need the manager's email address", NEITHER),
+    ("I need the manager’s email address", NEITHER),
+    # --- found in review: "can/could I not" is a polite ask (AU/UK) ----------
+    ("Can I not just speak to someone", ASK),
+    ("Could I not speak to the manager", ASK),
+    ("can you not transfer me", REFUSE),
+    # --- found in review: other gaps ----------------------------------------
+    ("I can't talk to a person right now", REFUSE),
+    ("I don't want to be transferred", REFUSE),
+    ("I never asked to be transferred", REFUSE),
+    ("agent", ASK),
+    ("representative", ASK),
+    ("a real person please", ASK),
+    ("transfer please", ASK),
+    ("I'd like to talk to whoever's at the desk", ASK),
+    ("put me threw to reception", ASK),
+    # --- how Australian callers ask ------------------------------------------
+    ("Can you put me through to reception, mate?", ASK),
+    ("Can I have a word with the manager?", ASK),
+    ("Can I get onto someone at the front desk?", ASK),
+    ("I wouldn't mind talking to a real person.", ASK),
+    ("Can't I just speak to someone?", ASK),
+    ("Why won't you put me through?", ASK),
+    ("Sorry, could I speak to whoever's on the desk?", ASK),
+    ("Honestly mate, I just want a real person.", ASK),
+    ("Yeah nah, can you put me through to someone?", ASK),
+    ("I've had enough of this, put me through to a human.", ASK),
+    ("Any chance I could speak to the manager?", ASK),
+    ("I need to speak to someone about a refund.", ASK),
+    ("I was hoping to speak to the manager.", ASK),
+    ("I'll be there Friday but can I talk to reception now?", ASK),
+    # --- how Australian callers decline --------------------------------------
+    ("Nah, I'm right thanks.", REFUSE),
+    ("Nah you're right, don't worry about it.", REFUSE),
+    ("No, don't bother putting me through.", REFUSE),
+    ("Not right now thanks, I'll call back.", REFUSE),
+    ("I'm good thanks, I'll sort it out myself.", REFUSE),
+    ("Don't put me through to anyone, I just want to book a room.", REFUSE),
+    ("No I don't need to speak to anyone, I'm all sorted.", REFUSE),
+    ("Leave it, I'll talk to the manager when I check in.", REFUSE),
+    ("Nah I'll ring reception tomorrow.", REFUSE),
+    ("I won't be talking to anyone, just book it.", REFUSE),
+    # --- neither: talking about staff, not asking for them -------------------
+    ("I'll just talk to reception when I get there, thanks.", NEITHER),
+    ("I spoke to the manager yesterday about my booking.", NEITHER),
+    ("The owner said I could get a late checkout.", NEITHER),
+    ("What's the manager's name?", NEITHER),
+    ("Do I need to talk to reception to get a key?", NEITHER),
+    ("I was speaking to someone earlier and they said it was booked.", NEITHER),
+    ("When I get there, should I talk to the front desk?", NEITHER),
+    ("Can I speak to someone tomorrow morning about the invoice?", NEITHER),
+    ("Could you pass on a message to the manager?", NEITHER),
+    ("I'll have a word with the manager when I get in.", NEITHER),
+    ("I've already spoken to someone at the front desk.", NEITHER),
+    ("Maybe I'll talk to the owner next time I'm in.", NEITHER),
 ]
 
 
@@ -103,12 +171,32 @@ def test_a_yes_that_takes_it_back_is_not_consent():
     assert not transfer_consent_given(history)
 
 
+@pytest.mark.parametrize("declined", [
+    "No thanks, I'll speak to reception when I check in",
+    "nah I'll talk to someone when I get there",
+    "no it's fine, I was talking to the manager this morning",
+    "please don't, I'll speak to someone tomorrow",
+])
+def test_declining_an_offer_while_mentioning_staff_is_not_consent(declined):
+    """
+    The review's consent violation: the agent offered a transfer, the caller
+    said no and mentioned staff they would see later, and the gate read the
+    staff-mention as an ask.
+    """
+    history = [
+        {"role": "assistant", "content": "Want me to put you through to reception?"},
+        {"role": "user", "content": declined},
+    ]
+    assert not transfer_consent_given(history), declined
+    assert transfer_refused(declined), declined
+
+
 def test_a_curly_apostrophe_from_the_transcriber_still_negates():
     assert transfer_intent("I don’t want to speak to anyone") == REFUSE
 
 
 def test_the_table_is_big_enough_to_mean_something():
-    assert len(UTTERANCES) >= 25
+    assert len(UTTERANCES) >= 80
     assert {e for _, e in UTTERANCES} == {ASK, REFUSE, NEITHER}
 
 
