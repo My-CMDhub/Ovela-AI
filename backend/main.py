@@ -143,6 +143,11 @@ async def shutdown_event():
     shutdown_scheduler()
     logging.info("✅ Application shutdown complete")
 
+# Token-bearing magic-link pages must not leak their URL — see core/token_pages.py.
+from core.token_pages import no_referrer_on_token_pages  # noqa: E402
+app.middleware("http")(no_referrer_on_token_pages)
+
+
 # CORS middleware for dashboard frontend
 app.add_middleware(
     CORSMiddleware,
