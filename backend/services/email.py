@@ -672,14 +672,23 @@ class EmailService:
         """
         Send demo approval request email to team with Approve/Reject magic links.
         """
-        name = lead_details.get("name", "Unknown")
-        business = lead_details.get("business_name", "Unknown")
-        phone = lead_details.get("phone", "Unknown")
+        from html import escape as _escape
+
+        raw_name = str(lead_details.get("name", "Unknown"))
+        raw_business = str(lead_details.get("business_name", "Unknown"))
+        # name, business and phone are typed by a website visitor and land in an
+        # email the team trusts. Unescaped, a "phone" of
+        # `"><a href="https://evil">✅ Approve</a>` drew a fake approve button
+        # next to the real ones. Escaped for HTML; stripped of CR/LF for the
+        # subject header.
+        name = _escape(raw_name, quote=True)
+        business = _escape(raw_business, quote=True)
+        phone = _escape(str(lead_details.get("phone", "Unknown")), quote=True)
         created_at = lead_details.get("created_at", datetime.now(MELBOURNE_TZ).isoformat())
         approve_url = lead_details.get("approve_url", "")
         reject_url = lead_details.get("reject_url", "")
 
-        subject = f"🚀 Demo Request: {name} - {business}"
+        subject = " ".join(f"🚀 Demo Request: {raw_name} - {raw_business}".split())
         
         html = f'''<!DOCTYPE html>
 <html lang="en">
