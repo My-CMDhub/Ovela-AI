@@ -895,7 +895,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                 if _ci == check_in and _rt_final == final_key and is_pending:
                     logger.info("🔍 Found matching existing pending reservation: %s. Patching instead of duplicating.", doc.get("booking_reference"))
                     booking_ref = doc.get("booking_reference")
-                    
+
                     patch_data = {
                         "guest_name": guest_name,
                         "guest_email": guest_email,
@@ -903,28 +903,79 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                         "notes": notes or doc.get("notes") or "Updated via AI",
                         "updated_at": datetime.now().isoformat()
                     }
-                    
-                    await db_service.update_motel_reservation(
-                        booking_id=doc["$id"],
-                        data=patch_data
-                    )
-                    
-                    # Fire email and Stripe link handler for the updated booking
-                    asyncio.create_task(_handle_stripe_and_guest_email(
-                        booking_ref=booking_ref,
-                        room_type=doc.get("room_type", room_data["name"]),
-                        total_amt=float(doc.get("total_amount", total)),
-                        guest_email=guest_email,
-                        guest_name=guest_name,
-                        guest_phone=guest_phone,
-                        check_in=check_in,
-                        check_out=check_out,
-                        db_service=db_service,
-                        saved_doc_id=doc["$id"],
-                        existing_stripe_url=doc.get("payment_link_url"),
-                        existing_expires_at=doc.get("payment_expires_at", 0)
-                    ))
-                    
+
+                    # The match is same check-in + room type, so the stay can
+                    # only differ in its check-out. That used to be dropped: the
+                    # caller heard the new dates while the row, its total and
+                    # the Stripe amount kept the old ones. Keep the hold's own
+                    # agreed nightly rate; only the number of nights moves.
+                    old_co = doc.get("check_out_date")
+                    stay_changed = old_co != check_out
+                    doc_rate = doc.get("rate_per_night") or rate
+                    new_total = doc_rate * num_nights if stay_changed else (doc.get("total_amount") or total)
+                    if stay_changed:
+                        patch_data.update({
+                            "check_out_date": check_out,
+                            "num_nights": num_nights,
+                            "rate_per_night": doc_rate,
+                            "total_amount": new_total,
+                        })
+
+                    room_number = doc.get("room_number")
+                    ext_start = max(old_co or check_in, check_in)
+                    if stay_changed and room_number and check_out > ext_start and not settings.USE_LIVE_SCRAPING:
+                        # Extending onto nights this hold never covered: the room
+                        # must be free on them, checked and written under the same
+                        # per-type lock a new hold takes, or the extension would
+                        # double-book whoever holds those nights. Shortening only
+                        # frees nights, so it needs no check.
+                        async with _booking_lock("coalcreek", room_data["name"]):
+                            ext = await _check_appwrite_availability(db_service, ext_start, check_out, room_data["name"])
+                            if not ext.get("success"):
+                                return {
+                                    "success": False,
+                                    "available": "unknown",
+                                    "verified": False,
+                                    "message": (
+                                        "Sorry, I couldn't confirm the extra nights on the live calendar just now, "
+                                        "so your hold is unchanged. If you'd like, I can put you through to reception."
+                                    ),
+                                }
+                            free = {r.get("room_number") for r in
+                                    (ext.get("rooms_free_all_nights") or {}).get(room_data["name"], [])}
+                            if room_number not in free:
+                                return {
+                                    "success": False,
+                                    "message": (
+                                        "I'm sorry, your room isn't free for the extra nights, so I haven't changed "
+                                        f"your hold. It still checks out on {old_co}."
+                                    ),
+                                }
+                            await db_service.update_motel_reservation(booking_id=doc["$id"], data=patch_data)
+                    else:
+                        await db_service.update_motel_reservation(
+                            booking_id=doc["$id"],
+                            data=patch_data
+                        )
+
+                    # No payment link from here: the dispatcher sends one for
+                    # every successful create_booking_request, built from the
+                    # total returned below. Sending one here as well mailed the
+                    # guest twice — one of them at the OLD total after a date
+                    # change.
+                    if stay_changed:
+                        message = (
+                            f"I've updated your hold to {num_nights} night{'s' if num_nights > 1 else ''}, "
+                            f"{ci_spoken} to {co_spoken}, total ${new_total}. Your reference number is still "
+                            f"{booking_ref.split('-')[-1]}. A new payment link for the new total has been sent to "
+                            f"{guest_email} — please check your inbox and confirm once you receive it."
+                        )
+                    else:
+                        message = (
+                            f"I've updated your existing hold for {ci_spoken}. Your reference number is still {booking_ref.split('-')[-1]}. "
+                            f"The payment link has been resent to {guest_email} — "
+                            "please check your inbox and confirm once you receive it."
+                        )
                     return {
                         "success": True,
                         "booking_reference": booking_ref,
@@ -932,14 +983,11 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                         "guest_email": guest_email,
                         "check_in_date": check_in,
                         "check_out_date": check_out,
+                        "num_nights": num_nights,
                         "room_type": doc.get("room_type", room_data["name"]),
-                        "total_amount": float(doc.get("total_amount", total)),
+                        "total_amount": float(new_total),
                         "_saved_doc_id": doc["$id"],
-                        "message": (
-                            f"I've updated your existing hold for {ci_spoken}. Your reference number is still {booking_ref.split('-')[-1]}. "
-                            f"The payment link has been resent to {guest_email} — "
-                            "please check your inbox and confirm once you receive it."
-                        )
+                        "message": message,
                     }
         except Exception as dup_err:
             logger.error(f"Error checking for duplicate reservation in create_booking: {dup_err}", exc_info=True)

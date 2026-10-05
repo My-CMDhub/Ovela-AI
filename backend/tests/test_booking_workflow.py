@@ -356,3 +356,61 @@ class TestQuotedPriceIsChargedPrice:
         assert quote["price_per_night"] == kb
         assert db.saved[0]["total_amount"] == kb * 2
         assert stripe_calls[0]["total_amt"] == kb * 2
+
+
+# ---------------------------------------------------------------------------
+# 3. Changing the dates of a hold in the same call changes the hold
+# ---------------------------------------------------------------------------
+
+class TestChangedDatesReachTheRowAndTheLink:
+
+    async def test_extending_the_stay_patches_dates_total_and_link(self, stripe_calls):
+        db = WorkflowDb([_room("1", rate=120), _room("2", rate=120)])
+        disp = _dispatcher(db)
+
+        await disp.execute("create_booking_request", _booking_args(co=SUN))
+        result = await disp.execute("create_booking_request", _booking_args(co=MON))
+
+        assert result["success"] is True
+        assert len(db.saved) == 1
+        row = db.rows[0]
+        assert (row["check_out_date"], row["num_nights"], row["total_amount"]) == (MON, 3, 360)
+        assert result["total_amount"] == 360
+        # One link per create_booking_request, the second at the new total.
+        assert [(c["total_amt"], c["check_out"]) for c in stripe_calls] == [(240, SUN), (360, MON)]
+
+    async def test_shortening_the_stay_lowers_the_total(self, stripe_calls):
+        db = WorkflowDb([_room("1", rate=120)])
+        disp = _dispatcher(db)
+
+        await disp.execute("create_booking_request", _booking_args(co=SUN))
+        result = await disp.execute("create_booking_request", _booking_args(co=SAT))
+
+        assert result["success"] is True
+        assert (db.rows[0]["check_out_date"], db.rows[0]["total_amount"]) == (SAT, 120)
+        assert stripe_calls[-1]["total_amt"] == 120
+
+    async def test_an_extension_onto_a_taken_night_is_refused(self, stripe_calls):
+        db = WorkflowDb([_room("1", rate=120)])
+        db.rows.append({"$id": "other", "room_number": "1", "guest_phone": "+61400000001",
+                        "check_in_date": SUN, "check_out_date": MON, "status": "reserved"})
+        disp = _dispatcher(db)
+
+        await disp.execute("create_booking_request", _booking_args(co=SUN))
+        result = await disp.execute("create_booking_request", _booking_args(co=MON))
+
+        assert result["success"] is False
+        mine = next(r for r in db.rows if r["$id"] == "doc1")
+        assert (mine["check_out_date"], mine["total_amount"]) == (SUN, 240)
+        assert len(stripe_calls) == 1  # no link for a change that did not happen
+
+    async def test_same_details_again_is_one_hold_and_one_more_link(self, stripe_calls):
+        db = WorkflowDb([_room("1", rate=120)])
+        disp = _dispatcher(db)
+
+        await disp.execute("create_booking_request", _booking_args())
+        result = await disp.execute("create_booking_request", _booking_args())
+
+        assert result["success"] is True
+        assert len(db.saved) == 1
+        assert [c["total_amt"] for c in stripe_calls] == [240, 240]
