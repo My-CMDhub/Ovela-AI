@@ -1,11 +1,14 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request, BackgroundTasks, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Request, BackgroundTasks, Depends, Form
+from collections import deque
 from datetime import datetime
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from typing import Optional
+import html
 import json
 import logging
 import asyncio
+import time
 from urllib.parse import quote
 from twilio.twiml.voice_response import VoiceResponse, Connect
 from twilio.rest import Client
@@ -17,6 +20,9 @@ from services.voice_agent.cascaded_orchestrator import CascadedPipelineOrchestra
 from services.appwrite import db_service
 from services.email import email_service
 from services.magic_links import generate_demo_approval_url, verify_action_token
+# Same confirm/error pages (and no-store / no-frame headers) as the staff magic
+# links: one look, one set of protections, for every link we email.
+from api.actions import confirm_page, error_page, _CONFIRM_HEADERS
 from rules.whitelist import is_whitelisted
 # Phone numbers are PII and logs ship off-box: always log them through mask_phone.
 from core.utils import mask_phone
@@ -32,10 +38,84 @@ class DemoRequest(BaseModel):
     business_name: str
     phone: str
     consent: bool
+    # Accepted for old clients, but only admin (whitelisted) phones may pick a
+    # tenant, and only a known one: see _demo_tenant.
     tenant_id: Optional[str] = "ovela_demo"
 
+
+DEFAULT_DEMO_TENANT = "ovela_demo"
+
+
+def _demo_tenant(requested: Optional[str], phone: str) -> str:
+    """
+    The tenant a demo request runs as.
+
+    /demo-request is a public website form, so the body's tenant_id is attacker
+    input. Trusted, it filed leads (and per-phone limit counters, which are kept
+    per tenant) under any motel's tenant and, for admin phones, picked which
+    motel's agent and data the outbound call used. The website form never sends
+    one; it exists so an admin can demo a real motel's agent from their own phone.
+    So: admin phones may choose a KNOWN tenant (the demo tenant, the default
+    tenant, or one a Twilio number routes to); everyone else, and any unknown
+    value, gets the demo tenant.
+    """
+    known = {DEFAULT_DEMO_TENANT, settings.TENANT_ID, *settings.PHONE_TO_TENANT_MAP.values()}
+    if requested and requested in known and is_whitelisted(phone):
+        return requested
+    return DEFAULT_DEMO_TENANT
+
+
+# Per-client-IP cap on /demo-request, on top of the per-phone limit. The phone
+# limit alone is no limit at all: a script varies the number and every request
+# still creates a lead and emails the team an approval request. In-memory and
+# per process on purpose (no Redis, no settings): it only has to make abuse
+# slow, so N dynos/workers simply allow N x the cap. Generous so real visitors
+# never see it, even several behind one carrier-grade NAT: a person tries once
+# or twice, and the per-phone limit already stops at 3 an hour.
+_DEMO_IP_LIMIT = 20
+_DEMO_IP_WINDOW_S = 3600
+# Bound memory under a spray of distinct IPs: past this many tracked IPs, drop
+# the ones with no hit inside the window.
+_DEMO_IP_MAX_TRACKED = 10_000
+_demo_ip_hits: dict[str, deque] = {}
+
+
+def _client_ip(request: Request) -> str:
+    """
+    The caller's IP behind Heroku's router.
+
+    Heroku APPENDS the address it accepted the connection from to whatever
+    X-Forwarded-For the client sent, so only the LAST hop is trustworthy; the
+    first is client-typed and a fresh fake per request would reset the limit.
+    The website form posts straight to the backend (VoiceDemoForm.tsx uses
+    NEXT_PUBLIC_API_URL, no Vercel proxy in between), so that last hop is the
+    visitor. request.client is Heroku's router, used only if the header is absent.
+    """
+    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+    if hops:
+        return hops[-1]
+    return request.client.host if request.client else "unknown"
+
+
+def _demo_ip_allowed(ip: str, now: Optional[float] = None) -> bool:
+    """Record one request from ip; False once it has used its hourly allowance.
+    No await inside, so the check-and-record is atomic on the event loop."""
+    now = time.monotonic() if now is None else now
+    cutoff = now - _DEMO_IP_WINDOW_S
+    hits = _demo_ip_hits.setdefault(ip, deque())
+    while hits and hits[0] <= cutoff:
+        hits.popleft()
+    if len(hits) >= _DEMO_IP_LIMIT:
+        return False
+    hits.append(now)
+    if len(_demo_ip_hits) > _DEMO_IP_MAX_TRACKED:
+        for stale in [k for k, v in _demo_ip_hits.items() if not v or v[-1] <= cutoff]:
+            del _demo_ip_hits[stale]
+    return True
+
+
 @router.post("/demo-request")
-async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
+async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks, http_request: Request):
     """
     Handles demo request from website form.
     - Whitelisted phones: Immediate call (bypass approval)
@@ -43,8 +123,16 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     """
     if not request.consent:
         raise HTTPException(status_code=400, detail="Consent required")
-    
-    tenant = request.tenant_id or "ovela_demo"
+
+    # Admin phones skip the IP cap like every other demo limit (an office IP
+    # running many test calls); nobody can claim one without knowing the list.
+    if not is_whitelisted(request.phone) and not _demo_ip_allowed(_client_ip(http_request)):
+        raise HTTPException(
+            status_code=429,
+            detail="We've had a lot of demo requests from your network. Please try again in an hour, or contact us directly."
+        )
+
+    tenant = _demo_tenant(request.tenant_id, request.phone)
     # Rate limit (whitelisted numbers bypass)
     if not is_whitelisted(request.phone) and not await db_service.check_demo_limit(
         request.phone, tenant
@@ -76,7 +164,7 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     if is_whitelisted(request.phone):
         logger.info(f"Whitelisted phone {mask_phone(request.phone)} - immediate call")
         try:
-            call = _trigger_demo_call(request.name, request.business_name, request.phone, request.tenant_id)
+            call = _trigger_demo_call(request.name, request.business_name, request.phone, tenant)
             
             if lead_id:
                 await db_service.update_demo_lead(lead_id=lead_id, data={"status": "called", "call_sid": call.sid})
@@ -119,28 +207,73 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks):
     }
 
 
+# GET never acts; POST does (same pattern as api/actions.py). Mail security
+# scanners and link previewers fetch every URL in an email on their own, so a
+# demo-approve GET that acted placed a real outbound Twilio call to the lead,
+# and burned the lead's one-time approval, before anyone on the team clicked.
+# The emailed URLs stay GETs (already-sent emails keep working): GET verifies the
+# token and renders a confirm page whose button POSTs the token back to the same
+# path, where it is verified again and the action runs. GET must stay free of
+# db_service and Twilio calls. The token's name/business/phone are what a website
+# visitor typed, so every page here HTML-escapes them (they used to go out raw,
+# i.e. script in the team's browser).
+
+def _demo_token(token: str, action: str):
+    """
+    Verify a demo magic-link token for this exact path.
+
+    Returns (payload, None) or (None, error HTMLResponse). The action check stops
+    a token minted for one link being replayed on another: the reject link sits
+    in the same email, and without it posting that token to /demo-approve placed
+    the call. Tokens are minted with action "demo-approve" / "demo-reject"
+    (generate_demo_approval_url), so sent emails pass.
+    """
+    is_valid, payload, error_msg = verify_action_token(token)
+    if is_valid and payload.get("action") != action:
+        is_valid, error_msg = False, "This link is not valid for this action."
+    if not is_valid:
+        return None, HTMLResponse(content=error_page("Link Invalid", html.escape(error_msg)), status_code=400)
+    return payload, None
+
+
 @router.get("/demo-approve")
-async def approve_demo(token: str, background_tasks: BackgroundTasks):
+async def confirm_approve_demo(token: str):
+    """Confirm page for the demo-approve email link. Verifies only; calls nobody."""
+    payload, error = _demo_token(token, "demo-approve")
+    if error:
+        return error
+    extra = payload.get("extra", {})
+    if not extra.get("phone"):
+        return HTMLResponse(content=error_page("Error", "Missing phone number in token. Please check the dashboard."), status_code=400)
+    # Name and business are what a website visitor typed: escape them.
+    who = html.escape(f"{extra.get('name', 'there')} ({extra.get('business', 'your business')})")
+    message = f"This calls <strong>{who}</strong> at <strong>{html.escape(extra['phone'])}</strong> right away. The link works once."
+    return HTMLResponse(content=confirm_page("Approve this demo?", message, "Approve - Call Now", token),
+                        headers=_CONFIRM_HEADERS)
+
+
+@router.get("/demo-reject")
+async def confirm_reject_demo(token: str):
+    """Confirm page for the demo-reject email link. Verifies only; writes nothing."""
+    payload, error = _demo_token(token, "demo-reject")
+    if error:
+        return error
+    name = html.escape(payload.get("extra", {}).get("name", "this lead"))
+    message = f"Decline the demo request from <strong>{name}</strong>. No call is made."
+    return HTMLResponse(content=confirm_page("Reject this demo?", message, "Reject Demo", token),
+                        headers=_CONFIRM_HEADERS)
+
+
+@router.post("/demo-approve")
+async def approve_demo(token: str = Form(...)):
     """
     Approve a demo request via magic link.
     Triggers the Twilio call to the user.
     """
-    # Verify the magic link token
-    is_valid, payload, error_msg = verify_action_token(token)
-    
-    if not is_valid:
-        return HTMLResponse(
-            content=f"""
-            <html>
-            <head><title>Demo Approval</title></head>
-            <body style="font-family: system-ui; padding: 40px; text-align: center;">
-                <h1>⚠️ Link Invalid</h1>
-                <p>{error_msg}</p>
-            </body>
-            </html>
-            """,
-            status_code=400
-        )
+    # Verify the magic link token (again: the GET's check proves nothing here)
+    payload, error = _demo_token(token, "demo-approve")
+    if error:
+        return error
     
     lead_id = payload.get("identifier")
     extra = payload.get("extra", {})
@@ -216,7 +349,7 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
             <head><title>Demo Approved</title></head>
             <body style="font-family: system-ui; padding: 40px; text-align: center;">
                 <h1>✅ Demo Approved!</h1>
-                <p>Calling <strong>{name}</strong> at <strong>{phone}</strong> now.</p>
+                <p>Calling <strong>{html.escape(name)}</strong> at <strong>{html.escape(phone)}</strong> now.</p>
                 <p style="color: #666; margin-top: 20px;">You can close this tab.</p>
             </body>
             </html>
@@ -231,7 +364,7 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
             <head><title>Demo Approval</title></head>
             <body style="font-family: system-ui; padding: 40px; text-align: center;">
                 <h1>❌ Call Failed</h1>
-                <p>Could not initiate call: {str(e)}</p>
+                <p>Could not initiate call: {html.escape(str(e))}</p>
                 <p>Please try calling manually or check the logs.</p>
             </body>
             </html>
@@ -240,29 +373,17 @@ async def approve_demo(token: str, background_tasks: BackgroundTasks):
         )
 
 
-@router.get("/demo-reject")
-async def reject_demo(token: str):
+@router.post("/demo-reject")
+async def reject_demo(token: str = Form(...)):
     """
     Reject a demo request via magic link.
     Updates lead status to rejected.
     """
-    # Verify the magic link token
-    is_valid, payload, error_msg = verify_action_token(token)
-    
-    if not is_valid:
-        return HTMLResponse(
-            content=f"""
-            <html>
-            <head><title>Demo Rejection</title></head>
-            <body style="font-family: system-ui; padding: 40px; text-align: center;">
-                <h1>⚠️ Link Invalid</h1>
-                <p>{error_msg}</p>
-            </body>
-            </html>
-            """,
-            status_code=400
-        )
-    
+    # Verify the magic link token (again: the GET's check proves nothing here)
+    payload, error = _demo_token(token, "demo-reject")
+    if error:
+        return error
+
     lead_id = payload.get("identifier")
     extra = payload.get("extra", {})
     name = extra.get("name", "User")
@@ -282,7 +403,7 @@ async def reject_demo(token: str):
             <head><title>Demo Rejected</title></head>
             <body style="font-family: system-ui; padding: 40px; text-align: center;">
                 <h1>🚫 Demo Rejected</h1>
-                <p>Request from <strong>{name}</strong> has been declined.</p>
+                <p>Request from <strong>{html.escape(name)}</strong> has been declined.</p>
                 <p style="color: #666; margin-top: 20px;">You can close this tab.</p>
             </body>
             </html>
@@ -297,7 +418,7 @@ async def reject_demo(token: str):
             <head><title>Demo Rejection</title></head>
             <body style="font-family: system-ui; padding: 40px; text-align: center;">
                 <h1>❌ Error</h1>
-                <p>Could not update status: {str(e)}</p>
+                <p>Could not update status: {html.escape(str(e))}</p>
             </body>
             </html>
             """,
