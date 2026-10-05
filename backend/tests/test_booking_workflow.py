@@ -414,3 +414,28 @@ class TestChangedDatesReachTheRowAndTheLink:
         assert result["success"] is True
         assert len(db.saved) == 1
         assert [c["total_amt"] for c in stripe_calls] == [240, 240]
+
+
+class TestAFailedPatchIsNotReportedAsDone:
+    """update_motel_reservation returns None on failure instead of raising. The
+    patch path ignored that: the caller heard "I've updated your hold" and was
+    mailed a link for a total the booking never got."""
+
+    async def test_a_failed_patch_refuses_and_creates_nothing(self, stripe_calls):
+        db = WorkflowDb([_room("1"), _room("2")])
+        dispatcher = _dispatcher(db)
+        first = await dispatcher.execute("create_booking_request", _booking_args())
+        assert first["success"] is True
+        stripe_before = len(stripe_calls)
+
+        async def failing_update(booking_id, data):
+            db.patches.append((booking_id, dict(data)))
+            return None
+        db.update_motel_reservation = failing_update
+
+        second = await dispatcher.execute("create_booking_request", _booking_args(name="Test Guest Jr"))
+
+        assert second["success"] is False
+        assert "couldn't update" in second["message"]
+        assert len(db.saved) == 1, "a failed patch fell through to a second hold"
+        assert len(stripe_calls) == stripe_before, "a link was sent for an update that never landed"

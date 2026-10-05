@@ -951,12 +951,27 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                                         f"your hold. It still checks out on {old_co}."
                                     ),
                                 }
-                            await db_service.update_motel_reservation(booking_id=doc["$id"], data=patch_data)
+                            patched = await db_service.update_motel_reservation(booking_id=doc["$id"], data=patch_data)
                     else:
-                        await db_service.update_motel_reservation(
+                        patched = await db_service.update_motel_reservation(
                             booking_id=doc["$id"],
                             data=patch_data
                         )
+                    # update_motel_reservation returns None on failure rather
+                    # than raising. Unchecked, a failed patch was reported as
+                    # "I've updated your hold" and the dispatcher mailed a link
+                    # for a total the booking never got. Refuse instead, and do
+                    # not fall through to creating a second hold either.
+                    if not patched:
+                        logger.error("🚨 Patch of existing hold %s failed; nothing changed", booking_ref)
+                        return {
+                            "success": False,
+                            "booking_reference": booking_ref,
+                            "message": (
+                                "Sorry, I couldn't update your existing hold just now, so nothing has "
+                                "changed. If you'd like, I can put you through to reception."
+                            ),
+                        }
 
                     # No payment link from here: the dispatcher sends one for
                     # every successful create_booking_request, built from the
