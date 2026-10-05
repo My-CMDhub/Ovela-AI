@@ -484,7 +484,13 @@ async def create_manual_booking(data: dict, tenant_id: str = Depends(get_current
     try:
         import random
         import string
-        from services.motel_knowledge_base import ROOM_INFO
+        # Room rates come from the knowledge base the voice agent quotes from
+        # (COALCREEK_DATA["rooms"], keyed queen/twin/family/spa like room_type), so
+        # a walk-in is priced like a phone booking. This used to import ROOM_INFO
+        # from here, which no longer exists: every walk-in failed with
+        # {"success": False} before reaching Appwrite.
+        from services.motel_knowledge_base import get_active_data
+        rooms = get_active_data()["rooms"]
 
         guest_name = data.get("guest_name")
         guest_phone = data.get("guest_phone")
@@ -543,7 +549,9 @@ async def create_manual_booking(data: dict, tenant_id: str = Depends(get_current
                 start = datetime.strptime(check_in, "%Y-%m-%d")
                 end = datetime.strptime(check_out, "%Y-%m-%d")
                 nights = (end - start).days or 1
-                price = ROOM_INFO.get(room_type, {}).get("price", 130)
+                # "accessible" (a dashboard option) has no rate of its own; it
+                # is a queen-bed room, so it takes the queen rate.
+                price = rooms.get(room_type, rooms.get("queen", {})).get("price", 130)
                 data["total_amount"] = price * nights
                 data["num_nights"] = nights
                 data["rate_per_night"] = price
@@ -808,14 +816,16 @@ async def approve_booking(booking_id: str, tenant_id: str = Depends(get_current_
 @router.post("/bookings/{booking_id}/reject")
 async def reject_booking(booking_id: str, tenant_id: str = Depends(get_current_tenant_id)):
     """
-    Reject a booking request.
-    1. Update status to 'rejected'.
-    2. Send rejection email.
+    Reject a booking request: update status to 'rejected'.
+
+    No guest email: services.email has no rejection template, and staff phone
+    the guest instead, as the emailed reject link's page (api/actions.py) has
+    them do. This used to import services.tenants.coalcreek.email, which does
+    not exist and was never used, so every reject failed with
+    {"success": False} before the PATCH.
     """
     await _get_tenant_booking(booking_id, tenant_id)
     try:
-        from services.tenants.coalcreek.email import coalcreek_email_service
-        
         # 1. Update Status
         endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents/{booking_id}"
         update_data = {

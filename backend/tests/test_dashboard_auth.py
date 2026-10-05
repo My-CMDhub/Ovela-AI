@@ -165,16 +165,12 @@ def test_malformed_booking_id_is_404_without_appwrite_call(env):
     appwrite.assert_not_awaited()
 
 
-def test_same_tenant_reject_patches_the_booking(env, monkeypatch):
+def test_same_tenant_reject_patches_the_booking(env):
     client, appwrite, _, _, sign_in = env
     sign_in(TENANT)
-    # Pre-existing, out of scope here: reject_booking imports a module that does
-    # not exist (services.tenants.coalcreek.email; the name is unused), so in
-    # production it always answers {"success": False}. Stub it to test the
-    # ownership path; drop this once that dead import is removed.
-    import sys, types
-    monkeypatch.setitem(sys.modules, "services.tenants.coalcreek.email",
-                        types.SimpleNamespace(coalcreek_email_service=None))
+    # No stubs: the real import path runs. reject_booking used to import the
+    # nonexistent services.tenants.coalcreek.email and always answered
+    # {"success": False}.
     appwrite.side_effect = [_booking(TENANT), {"$id": "b1", "status": "rejected"}]
     resp = client.post("/api/dashboard/bookings/b1/reject")
     assert resp.status_code == 200 and resp.json()["success"] is True
@@ -216,15 +212,11 @@ def test_same_tenant_payment_link_returns_existing_link(env):
     assert resp.json() == {"success": True, "payment_link": "https://pay.example/x"}
 
 
-def test_manual_booking_is_owned_by_the_jwt_tenant(env, monkeypatch):
+def test_manual_booking_is_owned_by_the_jwt_tenant(env):
     client, appwrite, _, _, sign_in = env
     sign_in(TENANT)
-    # Pre-existing, out of scope here: create_manual_booking imports ROOM_INFO,
-    # which services.motel_knowledge_base no longer defines, so in production it
-    # always answers {"success": False}. Provide it to test tenant ownership.
-    from services import motel_knowledge_base
-    monkeypatch.setattr(motel_knowledge_base, "ROOM_INFO",
-                        {"queen": {"price": 130}}, raising=False)
+    # No stubs: the real room-rate import runs (it used to import a ROOM_INFO
+    # that no longer exists and always answered {"success": False}).
     resp = client.post("/api/dashboard/reservations/manual", json={
         "guest_name": "G", "guest_phone": "1", "check_in_date": "2026-11-01",
         "check_out_date": "2026-11-02", "tenant_id": OTHER})
@@ -232,6 +224,24 @@ def test_manual_booking_is_owned_by_the_jwt_tenant(env, monkeypatch):
     method, _, payload = appwrite.await_args.args
     assert method == "POST"
     assert payload["data"]["tenant_id"] == TENANT
+
+
+@pytest.mark.parametrize("room_type,rate_key", [
+    ("queen", "queen"), ("family", "family"),
+    ("accessible", "queen"),  # dashboard option with no rate of its own
+])
+def test_manual_booking_is_priced_from_the_knowledge_base(env, room_type, rate_key):
+    # Same rates the voice agent quotes, so a walk-in costs what a call would.
+    from services.knowledge_base.coalcreek import COALCREEK_DATA
+    client, appwrite, _, _, sign_in = env
+    sign_in(TENANT)
+    resp = client.post("/api/dashboard/reservations/manual", json={
+        "guest_name": "G", "guest_phone": "1", "room_type": room_type,
+        "check_in_date": "2026-11-01", "check_out_date": "2026-11-03"})
+    assert resp.status_code == 200 and resp.json()["success"] is True
+    data = appwrite.await_args.args[2]["data"]
+    rate = COALCREEK_DATA["rooms"][rate_key]["price"]
+    assert (data["rate_per_night"], data["num_nights"], data["total_amount"]) == (rate, 2, rate * 2)
 
 
 # --- settings -----------------------------------------------------------------
