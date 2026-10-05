@@ -69,8 +69,12 @@ async def test_shutdown_saves_every_live_call_once_marked_as_server_shutdown(liv
 async def test_shutdown_is_bounded_when_one_save_hangs(live_calls):
     """One stuck Appwrite write must not cost the other calls their records,
     nor hold shutdown past the platform's SIGKILL."""
-    for sid in ("CAslow", "CAfast"):
-        live_calls.add(_call(sid))
+    # Held here: _LIVE_CALLS is a WeakSet (in production the websocket handler
+    # holds each call), so an orchestrator only the set refers to could be
+    # garbage-collected before the save — which made this test flaky.
+    calls = [_call(sid) for sid in ("CAslow", "CAfast")]
+    for call in calls:
+        live_calls.add(call)
     written = []
 
     async def save(**kwargs):
