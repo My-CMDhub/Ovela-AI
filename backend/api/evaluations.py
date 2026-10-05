@@ -8,10 +8,9 @@ Routes:
 """
 
 import logging
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 import httpx
 
-from core.auth import get_current_tenant_id
 from core.config import settings
 from appwrite.query import Query as AppwriteQuery
 
@@ -25,13 +24,6 @@ APPWRITE_PROJECT_ID = settings.APPWRITE_PROJECT_ID
 APPWRITE_API_KEY = settings.APPWRITE_API_KEY
 
 
-# Whose runs these are. evaluation_runs docs carry no tenant_id: they are written
-# by tests/run_multi_agent_evaluation.py, which only ever drives the Coal Creek
-# agent (tenant "coalcreek", its prompt, its tools). So that tenant sees them and
-# every other tenant sees an empty history, decided here rather than by an
-# Appwrite query on an attribute the collection does not have. If runs ever get
-# a tenant_id, filter on it in the query instead.
-EVALUATION_TENANT_ID = "coalcreek"
 
 
 def _appwrite_headers() -> dict:
@@ -64,18 +56,17 @@ async def _appwrite_get(endpoint: str, queries: list = None) -> dict:
 async def get_evaluation_runs(
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    tenant_id: str = Depends(get_current_tenant_id),
 ):
     """
     Return paginated evaluation run history from `evaluation_runs` collection,
     sorted by timestamp DESC.
 
-    Needs a signed-in user (Appwrite JWT): the runs are internal QA data (scores,
-    per-scenario results and agent routing traces) and were readable by anyone.
-    The evaluations page already sends the JWT through fetchWithAuth.
+    Public and read-only on purpose: docs/EVALUATION_METHODOLOGY.md links
+    https://ovela.dev/evaluations so anyone can verify the published scores, and
+    the runs are synthetic QA scenarios from the evaluation harness, not guest
+    calls. (Requiring a sign-in here broke that link for every visitor.) Nothing
+    on this router writes.
     """
-    if tenant_id != EVALUATION_TENANT_ID:
-        return {"success": True, "runs": [], "total": 0}
     try:
         endpoint = f"/databases/{MOTEL_DB_ID}/collections/evaluation_runs/documents"
         queries = [

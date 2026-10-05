@@ -1,11 +1,11 @@
 """
-tests/test_evaluations_adk_auth.py — evaluation history and the ADK query route
-need a signed-in user.
+tests/test_evaluations_adk_auth.py — the ADK query route needs a signed-in user;
+evaluation history stays public and read-only.
 
-GET /evaluations served internal QA runs to anyone, and POST /api/adk/query ran
-the Gemini agent graph (paid LLM calls) for anyone. Both now take the tenant from
-the Appwrite JWT (core.auth.get_current_tenant_id): no Authorization header is a
-401 before any Appwrite or LLM work. Signed-in cases override the dependency.
+POST /api/adk/query ran the Gemini agent graph (paid LLM calls) for anyone; it
+now takes the tenant from the Appwrite JWT (core.auth.get_current_tenant_id):
+no Authorization header is a 401 before any LLM work. GET /evaluations is public
+on purpose (the methodology doc links it for verifiability).
 """
 import types
 from unittest.mock import AsyncMock
@@ -29,30 +29,19 @@ def evals(monkeypatch):
 
 
 @pytest.mark.parametrize("prefix", ["/api/dashboard", "/api/motel"])
-def test_evaluations_reject_anonymous_callers(evals, prefix):
+def test_evaluations_are_public_for_verifiability(evals, prefix):
+    """docs/EVALUATION_METHODOLOGY.md links the evaluation dashboard publicly so
+    anyone can check the published scores; requiring a sign-in broke that link."""
     client, _, appwrite = evals
-    assert client.get(f"{prefix}/evaluations").status_code == 401
-    appwrite.assert_not_awaited()
-
-
-def test_evaluations_are_served_to_their_tenant(evals):
-    client, app, appwrite = evals
-    app.dependency_overrides[get_current_tenant_id] = lambda: "coalcreek"
-    resp = client.get("/api/dashboard/evaluations")
+    resp = client.get(f"{prefix}/evaluations")
     assert resp.status_code == 200
-    assert resp.json()["success"] is True
     assert [r["run_id"] for r in resp.json()["runs"]] == ["r1"]
 
 
-def test_evaluations_are_empty_for_other_tenants(evals):
-    # Runs carry no tenant_id; they are the Coal Creek agent's. Another tenant
-    # gets an empty history and Appwrite is not even asked.
-    client, app, appwrite = evals
-    app.dependency_overrides[get_current_tenant_id] = lambda: "tenant_b"
-    resp = client.get("/api/dashboard/evaluations")
-    assert resp.status_code == 200
-    assert resp.json() == {"success": True, "runs": [], "total": 0}
-    appwrite.assert_not_awaited()
+def test_the_evaluations_router_has_no_write_routes():
+    import api.evaluations as evaluations
+    methods = {m for r in evaluations.router.routes for m in getattr(r, "methods", set())}
+    assert methods <= {"GET", "HEAD"}
 
 
 # --- ADK -----------------------------------------------------------------------
