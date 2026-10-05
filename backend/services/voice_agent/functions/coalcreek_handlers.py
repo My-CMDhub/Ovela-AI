@@ -2130,6 +2130,10 @@ class CoalCreekFunctionDispatcher:
     Dispatches Coal Creek specific function calls.
     Ensures 'coalcreek' context is set for all KB operations.
     """
+
+    # Per-tool ceiling in execute(); check_availability scales it with nights.
+    # A class attribute so a test can shrink it instead of waiting 18 s.
+    TOOL_TIMEOUT_S = 18.0
     
     def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, caller_memory_bank=None, call_sid: str = "", adk_orchestrator=None):
         # Wrap reads in a per-call memo. Repeated `lookup_booking` calls in one
@@ -2271,7 +2275,7 @@ class CoalCreekFunctionDispatcher:
         
         # Dynamic timeout: scale with nights for availability checks.
         # Parallel scraping completes in ~10s, but we add headroom.
-        TIMEOUT = 18.0
+        TIMEOUT = self.TOOL_TIMEOUT_S
         if function_name == "check_availability":
             try:
                 ci = args.get("check_in_date", "")
@@ -2280,7 +2284,7 @@ class CoalCreekFunctionDispatcher:
                     from datetime import datetime as dt
                     nights = max(1, (dt.strptime(co, "%Y-%m-%d") - dt.strptime(ci, "%Y-%m-%d")).days)
                     # Parallel: base 15s + 3s per extra night (safety margin)
-                    TIMEOUT = max(18.0, 15.0 + nights * 3.0)
+                    TIMEOUT = max(self.TOOL_TIMEOUT_S, 15.0 + nights * 3.0)
                     logger.info(f"⏱️ Dynamic timeout for {nights}-night check: {TIMEOUT}s")
             except Exception:
                 pass
@@ -2289,14 +2293,10 @@ class CoalCreekFunctionDispatcher:
         set_tenant_context("coalcreek")
         
         try:
-             result = await asyncio.wait_for(
+             return await asyncio.wait_for(
                 self._dispatch(function_name, args, context),
                 timeout=TIMEOUT
              )
-             if function_name not in _RESERVATION_READ_ONLY_TOOLS:
-                 # Unknown or writing tool: assume the reservation moved.
-                 self.db_service.invalidate()
-             return result
         except asyncio.TimeoutError:
              logger.error(f"Function {function_name} timed out after {TIMEOUT}s")
              # For availability checks, return "unknown" and let AI transparently
@@ -2312,6 +2312,16 @@ class CoalCreekFunctionDispatcher:
         except Exception as e:
              logger.error(f"Function error {function_name}: {e}")
              return {"error": str(e), "message": "I encountered a system error."}
+        finally:
+             # Unknown or writing tool: assume the reservation moved — on EVERY
+             # exit, not just success. A timeout or error can land after the
+             # hold was written; the model then retries, and a memo still
+             # holding the pre-write "no booking on this number" hid the new
+             # hold from create_booking_request's duplicate check, so the retry
+             # saved a second hold and mailed a second Stripe link. With the
+             # memo dropped, the retry finds its own hold and patches it.
+             if function_name not in _RESERVATION_READ_ONLY_TOOLS:
+                 self.db_service.invalidate()
 
     async def _dispatch(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Internal dispatch map."""

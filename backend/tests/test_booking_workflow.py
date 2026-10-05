@@ -246,3 +246,75 @@ class TestLinkGoesToTheSavedAddress:
         assert result["success"] is True
         assert db.saved[0]["guest_email"] == "james@gmail.com"
         assert [c["guest_email"] for c in stripe_calls] == ["james@gmail.com"]
+
+
+# ---------------------------------------------------------------------------
+# 2. A tool that fails after writing still drops the per-call reservation memo
+# ---------------------------------------------------------------------------
+
+class TestRetryAfterAFailedWriteDoesNotDoubleBook:
+    """The retry's own duplicate check is the idempotency key (same caller,
+    check-in and room type in one call → patch). It only works if it reads
+    the row the failed attempt wrote, not the memo from before it."""
+
+    async def test_retry_after_a_timeout_patches_the_first_hold(self, monkeypatch):
+        db = WorkflowDb([_room("1"), _room("2")])
+        disp = _dispatcher(db)
+        monkeypatch.setattr(disp, "TOOL_TIMEOUT_S", 0.2)
+        hang = asyncio.Event()
+
+        async def email_never_confirms(**kw):
+            await hang.wait()  # SMTP stalls: the dispatcher's 6 s wait outlives the tool budget
+
+        monkeypatch.setattr(ch, "_handle_stripe_and_guest_email", email_never_confirms)
+
+        first = await disp.execute("create_booking_request", _booking_args())
+        assert first["success"] is False          # what the model sees: a failure
+        assert len(db.saved) == 1                 # what happened: a hold was written
+
+        async def email_ok(**kw):
+            if kw.get("notify_event") is not None:
+                kw["notify_result"][0] = True
+                kw["notify_event"].set()
+
+        monkeypatch.setattr(ch, "_handle_stripe_and_guest_email", email_ok)
+        second = await disp.execute("create_booking_request", _booking_args())
+        hang.set()
+
+        assert second["success"] is True
+        assert len(db.saved) == 1, "the retry created a second hold"
+        assert second["booking_reference"] == db.saved[0]["booking_reference"]
+
+    async def test_retry_after_an_exception_patches_the_first_hold(self, monkeypatch, stripe_calls):
+        db = WorkflowDb([_room("1"), _room("2")])
+        disp = _dispatcher(db)
+
+        def stripe_down(**kw):  # raises after the hold is saved
+            raise RuntimeError("stripe import failed")
+
+        monkeypatch.setattr(ch, "_handle_stripe_and_guest_email", stripe_down)
+        first = await disp.execute("create_booking_request", _booking_args())
+        assert "error" in first
+        assert len(db.saved) == 1
+
+        async def email_ok(**kw):
+            if kw.get("notify_event") is not None:
+                kw["notify_result"][0] = True
+                kw["notify_event"].set()
+
+        monkeypatch.setattr(ch, "_handle_stripe_and_guest_email", email_ok)
+        second = await disp.execute("create_booking_request", _booking_args())
+
+        assert second["success"] is True
+        assert len(db.saved) == 1, "the retry created a second hold"
+
+    async def test_read_only_tools_keep_the_memo(self, stripe_calls):
+        db = WorkflowDb([_room("1")])
+        disp = _dispatcher(db)
+
+        await disp.execute("lookup_booking", {"guest_phone": CALLER})
+        before = db.lookups
+        assert before > 0
+        await disp.execute("lookup_booking", {"guest_phone": CALLER})
+
+        assert db.lookups == before
