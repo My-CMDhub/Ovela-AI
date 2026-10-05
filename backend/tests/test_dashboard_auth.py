@@ -261,7 +261,7 @@ def test_anonymous_settings_read_returns_only_theming_fields(env):
     # ThemeContext.tsx: plain fetch, no JWT, reads settings.industry only.
     resp = client.get("/api/dashboard/settings")
     assert resp.status_code == 200
-    assert resp.json() == {"success": True, "settings": {"industry": "hospitality"}}
+    assert resp.json() == {"success": True, "scope": "public", "settings": {"industry": "hospitality"}}
     db_service.get_tenant_settings.assert_awaited_once_with("coalcreek")
 
 
@@ -271,6 +271,9 @@ def test_signed_in_settings_read_is_full_and_for_jwt_tenant(env):
     resp = client.get("/api/dashboard/settings", params={"tenant_id": OTHER})
     assert resp.status_code == 200
     assert resp.json()["settings"]["staff_email"] == "staff@a.example"
+    # The settings page only lets Save run after a "full" read; a "public" one
+    # would have it write blanks over the private fields.
+    assert resp.json()["scope"] == "full"
     db_service.get_tenant_settings.assert_awaited_once_with(TENANT)
 
 

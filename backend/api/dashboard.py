@@ -1401,6 +1401,10 @@ async def get_settings(
         public = await db_service.get_tenant_settings(tenant_id) or {}
         return {
             "success": True,
+            # Says which view this is, so the settings page can refuse to Save
+            # a form that was never filled with the private fields — saving it
+            # would write blanks over the owner email and hours.
+            "scope": "public",
             "settings": {k: public[k] for k in _PUBLIC_SETTINGS_KEYS if public.get(k)},
         }
     tenant_id = auth_tenant_id
@@ -1412,6 +1416,7 @@ async def get_settings(
         # Ensure fallback defaults for missing fields if needed
         return {
             "success": True,
+            "scope": "full",
             "settings": real_settings
         }
 
@@ -1420,6 +1425,7 @@ async def get_settings(
 
     return {
         "success": True,
+        "scope": "full",
         "settings": {
             "business_name": "Coal Creek Motel",
             "business_hours": "24/7 Reception\nCheck-in: 2:00 PM\nCheck-out: 10:00 AM",

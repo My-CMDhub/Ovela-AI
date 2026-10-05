@@ -42,6 +42,10 @@ export default function MotelSettingsPage() {
     const [passwordError, setPasswordError] = useState("");
     const [passwordSuccess, setPasswordSuccess] = useState("");
     const [updatingPassword, setUpdatingPassword] = useState(false);
+    // True only once the backend has returned the signed-in tenant's FULL
+    // settings. A read without a session gets just the public theming keys, and
+    // saving that form would overwrite the owner email and hours with blanks.
+    const [fullSettingsLoaded, setFullSettingsLoaded] = useState(false);
 
     useEffect(() => {
         if (tenant) {
@@ -78,6 +82,7 @@ export default function MotelSettingsPage() {
                         .filter(([, v]) => v !== null && v !== undefined)
                 ) as Partial<BusinessSettings>;
                 setSettings(prev => ({ ...DEFAULT_SETTINGS, ...prev, ...loaded }));
+                setFullSettingsLoaded(data.scope === "full");
             }
         } catch (error) {
             console.error("Error fetching settings:", error);
@@ -88,6 +93,10 @@ export default function MotelSettingsPage() {
     };
 
     const handleSave = async () => {
+        if (!fullSettingsLoaded) {
+            alert("Your settings didn't load fully, so saving now could erase them. Please refresh the page and try again.");
+            return;
+        }
         setSaving(true);
         setSaved(false);
         try {
