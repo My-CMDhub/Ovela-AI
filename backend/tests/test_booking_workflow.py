@@ -176,3 +176,73 @@ class TestFailedAvailabilityIsNotCached:
         await ch.handle_check_availability(dict(self.ARGS), db, context=ctx)
 
         assert db.reads == 1
+
+
+# ---------------------------------------------------------------------------
+# A whole-workflow Appwrite stand-in, for tests that go through the dispatcher
+# ---------------------------------------------------------------------------
+
+class WorkflowDb:
+    """Rooms + reservation rows. A save becomes a row that later lookups,
+    availability reads and patches all see, as in the real collection."""
+
+    def __init__(self, rooms):
+        self.rooms = rooms
+        self.rows: list[dict] = []
+        self.saved: list[dict] = []
+        self.patches: list[tuple[str, dict]] = []
+        self.lookups = 0
+
+    async def get_motel_rooms(self, tenant_id="coalcreek"):
+        return list(self.rooms)
+
+    async def get_motel_reservations(self, start, end, tenant_id="coalcreek"):
+        return [dict(r) for r in self.rows
+                if r.get("room_number") and r["check_in_date"] < end and r["check_out_date"] > start]
+
+    async def lookup_motel_reservation(self, phone=None, email=None, tenant_id="coalcreek", **_):
+        self.lookups += 1
+        return [dict(r) for r in self.rows
+                if (phone and r.get("guest_phone") == phone) or (email and r.get("guest_email") == email)]
+
+    async def update_motel_reservation(self, booking_id, data):
+        self.patches.append((booking_id, dict(data)))
+        for r in self.rows:
+            if r["$id"] == booking_id:
+                r.update(data)
+        return {"$id": booking_id}
+
+    async def save(self, data):
+        doc = dict(data, **{"$id": f"doc{len(self.saved) + 1}"})
+        self.saved.append(doc)
+        self.rows.append(doc)
+        return {"success": True, "document": {"$id": doc["$id"]}}
+
+
+def _booking_args(ci=FRI, co=SUN, room="queen", email="guest@example.com", name="Test Guest") -> dict:
+    return {
+        "guest_name": name, "check_in_date": ci, "check_out_date": co,
+        "room_type": room, "num_guests": 1, "guest_email": email,
+        "has_user_confirmed_summary": "YES",
+    }
+
+
+def _dispatcher(db) -> "ch.CoalCreekFunctionDispatcher":
+    return ch.CoalCreekFunctionDispatcher(db, CALLER, db.save, abuse_protection=None)
+
+
+# ---------------------------------------------------------------------------
+# 7. The payment link goes to the address that was saved
+# ---------------------------------------------------------------------------
+
+class TestLinkGoesToTheSavedAddress:
+
+    async def test_spoken_email_is_sent_in_its_normalised_form(self, stripe_calls):
+        db = WorkflowDb([_room("1")])
+
+        result = await _dispatcher(db).execute(
+            "create_booking_request", _booking_args(email="james at g mail dot com"))
+
+        assert result["success"] is True
+        assert db.saved[0]["guest_email"] == "james@gmail.com"
+        assert [c["guest_email"] for c in stripe_calls] == ["james@gmail.com"]

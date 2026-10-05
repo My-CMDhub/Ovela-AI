@@ -2338,7 +2338,11 @@ class CoalCreekFunctionDispatcher:
                 guest_name  = args.get("guest_name", "")
                 check_in    = result.get("check_in_date", "")
                 check_out   = result.get("check_out_date", "")
-                guest_email = args.get("guest_email", "")
+                # The address the handler normalised and SAVED, not the raw
+                # transcript. Raw "james at g mail dot com" fails the format
+                # check, the hold is marked email_failed and the caller is told
+                # to spell an address that was in fact understood — on a loop.
+                guest_email = result.get("guest_email", args.get("guest_email", ""))
                 num_nights  = max(1, result.get("num_nights", 1))
 
                 # P11-C: Use saved doc $id to skip race-prone get_booking_by_reference
