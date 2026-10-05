@@ -1105,6 +1105,14 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "total_amount":           doc.get("total_amount", ""),
             "other_bookings":         total_docs - 1,
         }
+        from services.voice_agent.call_state import stay_facts
+        _timing, _rule = stay_facts(
+            doc.get("check_in_date"), doc.get("check_out_date"),
+            doc.get("payment_status"), _today_melbourne_date())
+        if _timing:
+            result["stay_status"] = _timing
+        if _rule:
+            result["change_policy"] = _rule
         
         _pstatus = doc.get("payment_status") or ""   # null / missing treated as outstanding
         _bstatus = doc.get("status") or ""

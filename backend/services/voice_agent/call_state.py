@@ -35,6 +35,8 @@ Two boundaries it must not cross, both Track A:
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,61 @@ _PROMISES = {
 def recent_transcript(history: list) -> list:
     """The tail of the conversation the model still sees verbatim."""
     return history[-TRANSCRIPT_WINDOW:] if len(history) > TRANSCRIPT_WINDOW else list(history)
+
+
+# Payment states after which the booking is the business's, not the caller's,
+# to change: money taken, or a card pre-authorised for this exact stay. Rule 10
+# in prompts_coalcreek.py says the same thing in words; this is the code copy.
+_PAID = {"paid", "card_on_file"}
+
+
+@lru_cache(maxsize=64)
+def _warn_bad_dates(check_in, check_out) -> None:
+    # Cached so a booking with broken dates warns once, not on every turn.
+    logger.warning("stay_facts: unusable stay dates check_in=%r check_out=%r",
+                   check_in, check_out)
+
+
+def _spoken(d: date) -> str:
+    return f"{d:%A} {d.day} {d:%B %Y}"
+
+
+def stay_facts(check_in, check_out, payment_status, today: date):
+    """(stay timing sentence or None, payment rule sentence) for one booking.
+
+    Today's date in the system prompt was not enough: asked to move a stay
+    that had already ended, 6 models x 108 runs never once said it was over.
+    So the arithmetic is done here and handed over as a plain sentence.
+    """
+    def parse(value):
+        try:
+            return datetime.strptime(str(value).strip(), "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return None
+
+    start, end = parse(check_in), parse(check_out)
+    timing, ended = None, False
+    prefix = "Stay timing (worked out from today's date): "
+    if start and end:
+        ended = end <= today
+        if ended:
+            timing = (f"{prefix}this stay ended on {_spoken(end)}. "
+                      "It is over and can't be moved or changed.")
+        elif start <= today:
+            timing = f"{prefix}in progress, checking out {_spoken(end)}."
+        else:
+            timing = f"{prefix}upcoming, starting {_spoken(start)}."
+    elif check_in or check_out:
+        _warn_bad_dates(check_in, check_out)
+
+    if (payment_status or "") in _PAID:
+        rule = ("Paid booking: dates, room or name can't be changed on this call; "
+                "reception makes changes to paid bookings.")
+    elif ended:
+        rule = None  # unpaid and over (a no-show): "can still be changed" would contradict the timing line
+    else:
+        rule = "Payment pending: dates or room can still be changed on this call."
+    return timing, rule
 
 
 def _succeeded(result: dict) -> bool:
@@ -274,8 +331,10 @@ class CallState:
             else "available" if available else "nothing free"
         )
 
-    def as_note(self) -> str:
-        """The facts, as a system message. Empty while there is nothing to say."""
+    def as_note(self, today: date = None) -> str:
+        """The facts, as a system message. Empty while there is nothing to say.
+
+        `today` is the motel's local date; tests pass a fixed one."""
         lines = []
         if self.identity_confirmed:
             lines.append(f"- Caller identity: CONFIRMED — {self.identity_basis}.")
@@ -301,6 +360,13 @@ class CallState:
             if self.guest_email:
                 stay.append(f"email on the booking {self.guest_email}")
             lines.append(f"- Their booking: {', '.join(stay)}.")
+            if today is None:
+                from services.voice_agent.functions.coalcreek_handlers import (
+                    _today_melbourne_date)
+                today = _today_melbourne_date()
+            timing, rule = stay_facts(self.check_in, self.check_out,
+                                      self.payment_status, today)
+            lines += [f"- {fact}" for fact in (timing, rule) if fact]
             if self.guest_name:
                 # The lookup matched the name the caller said to this one in
                 # Python, so what was heard is a mishearing of it. On a live

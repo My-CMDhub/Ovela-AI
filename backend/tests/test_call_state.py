@@ -1,4 +1,3 @@
-import pytest
 """
 tests/test_call_state.py — the call's memory, checked without the model.
 
@@ -11,8 +10,12 @@ with no LLM in the loop. scripts/replay_conversation.py --only long-call
 measures whether the agent then *uses* it; that is a rate, this is a guarantee.
 """
 
+from datetime import date
+
+import pytest
+
 from services.voice_agent.call_state import (
-    CallState, TRANSCRIPT_WINDOW, recent_transcript,
+    CallState, TRANSCRIPT_WINDOW, recent_transcript, stay_facts,
 )
 
 # What lookup_booking returns once a name the caller actually said has been
@@ -284,3 +287,120 @@ def test_hearing_junk_never_raises():
     for junk in (None, "", "   ", "at dot"):
         state.hear_caller(junk)
     assert state.heard_email == ""
+
+
+# ── stay timing and the paid-booking rule, worked out in code ───────────────
+#
+# Measured on Kaggle, 6 models x 108 runs: asked to move a stay that had
+# already ended, no model ever said it was over (0/108, twice) although today's
+# date sat in the system prompt, and some offered to move it. With these two
+# sentences placed next to the booking, offers to move a finished stay went
+# 10-15 -> 0 and 50/108 said it was over. Date arithmetic is code's job.
+
+TODAY = date(2026, 10, 5)
+
+
+def test_a_stay_that_ended_is_said_to_be_over():
+    timing, _ = stay_facts("2026-09-04", "2026-09-06", "pending_payment", TODAY)
+    assert timing == ("Stay timing (worked out from today's date): this stay ended on "
+                      "Sunday 6 September 2026. It is over and can't be moved or changed.")
+
+
+def test_checking_out_today_counts_as_ended():
+    timing, _ = stay_facts("2026-10-03", "2026-10-05", "paid", TODAY)
+    assert "ended on Monday 5 October 2026" in timing
+
+
+def test_a_stay_in_progress_says_when_it_checks_out():
+    timing, _ = stay_facts("2026-10-05", "2026-10-07", "paid", TODAY)
+    assert timing == ("Stay timing (worked out from today's date): in progress, "
+                      "checking out Wednesday 7 October 2026.")
+
+
+def test_an_upcoming_stay_says_when_it_starts():
+    timing, _ = stay_facts("2026-10-06", "2026-10-08", "paid", TODAY)
+    assert timing == ("Stay timing (worked out from today's date): upcoming, "
+                      "starting Tuesday 6 October 2026.")
+
+
+@pytest.mark.parametrize("status", ["paid", "card_on_file"])
+def test_a_paid_booking_goes_to_reception_for_changes(status):
+    _, rule = stay_facts("2026-10-06", "2026-10-08", status, TODAY)
+    assert rule == ("Paid booking: dates, room or name can't be changed on this call; "
+                    "reception makes changes to paid bookings.")
+
+
+@pytest.mark.parametrize("status", ["pending_payment", "pending", "outstanding",
+                                    "email_failed", "", None])
+def test_an_unpaid_booking_can_still_be_changed(status):
+    _, rule = stay_facts("2026-10-06", "2026-10-08", status, TODAY)
+    assert rule == "Payment pending: dates or room can still be changed on this call."
+
+
+def test_an_unpaid_stay_that_already_ended_is_not_called_changeable():
+    # A no-show: the stay is over, so "can still be changed" would contradict the timing line.
+    timing, rule = stay_facts("2026-09-04", "2026-09-06", "pending_payment", TODAY)
+    assert "It is over and can't be moved or changed." in timing
+    assert rule is None
+    note = CallState(identity_confirmed=True, identity_basis="x", guest_name="A B",
+                     booking_reference="KR-1", check_in="2026-09-04", check_out="2026-09-06",
+                     payment_status="pending_payment").as_note(today=TODAY)
+    assert "can still be changed" not in note
+
+
+@pytest.mark.parametrize("check_in,check_out", [
+    ("", ""), ("2026-10-06", ""), ("not a date", "2026-10-08"), (None, None),
+    ("2026-13-40", "2026-10-08"),
+])
+def test_bad_dates_give_no_timing_and_never_raise(check_in, check_out):
+    timing, rule = stay_facts(check_in, check_out, "paid", TODAY)
+    assert timing is None
+    assert rule.startswith("Paid booking")
+
+
+def test_the_note_carries_both_facts_next_to_the_booking():
+    state = CallState()
+    state.observe("lookup_booking", {"guest_name": "Dhruv Patel"}, CONFIRMED)
+    note = state.as_note(today=TODAY)
+
+    assert ("- Stay timing (worked out from today's date): this stay ended on "
+            "Sunday 6 September 2026. It is over and can't be moved or changed.") in note
+    assert ("- Paid booking: dates, room or name can't be changed on this call; "
+            "reception makes changes to paid bookings.") in note
+    # Directly after the booking line, so the model reads them together.
+    lines = note.splitlines()
+    i = next(n for n, line in enumerate(lines) if line.startswith("- Their booking:"))
+    assert lines[i + 1].startswith("- Stay timing")
+    assert lines[i + 2].startswith("- Paid booking")
+
+
+def test_no_booking_in_state_means_no_timing_lines():
+    state = CallState()
+    state.observe("lookup_booking", {}, UNCONFIRMED)
+    note = state.as_note(today=TODAY)
+    assert "Stay timing" not in note and "Paid booking" not in note
+
+
+async def test_the_lookup_result_carries_both_facts(monkeypatch):
+    """The model reads the tool result on the turn of the lookup, before the
+    note exists — so the facts have to be in the result as well."""
+    from unittest.mock import AsyncMock, MagicMock
+    from services.voice_agent.functions import coalcreek_handlers as h
+
+    monkeypatch.setattr(h, "_today_melbourne_date", lambda: TODAY)
+    db = MagicMock()
+    db.lookup_motel_reservation = AsyncMock(return_value=[{
+        "booking_reference": "CC-76818", "guest_name": "Dhruv Patel",
+        "guest_phone": "+61491570006", "room_type": "queen",
+        "check_in_date": "2026-09-04", "check_out_date": "2026-09-06",
+        "payment_status": "paid",
+    }])
+    result = await h.handle_lookup_booking({"guest_name": "Dhruv Patel"}, db, "+61491570006")
+
+    assert result["found"]
+    assert result["stay_status"] == (
+        "Stay timing (worked out from today's date): this stay ended on "
+        "Sunday 6 September 2026. It is over and can't be moved or changed.")
+    assert result["change_policy"] == (
+        "Paid booking: dates, room or name can't be changed on this call; "
+        "reception makes changes to paid bookings.")
