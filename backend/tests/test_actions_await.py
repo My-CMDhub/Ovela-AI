@@ -59,7 +59,8 @@ def client_and_db(monkeypatch):
 ])
 def test_magic_link_routes_await_db(client_and_db, path, expected_status):
     client, db = client_and_db
-    resp = client.get(path, params={"token": "t"})
+    # The action runs on the POST behind the confirm page (GET only confirms).
+    resp = client.post(path, data={"token": "t"})
     assert resp.status_code == 200, resp.text
     assert db.updates and db.updates[-1][0] == "n1"
     assert db.updates[-1][1]["status"] == expected_status
@@ -67,15 +68,15 @@ def test_magic_link_routes_await_db(client_and_db, path, expected_status):
 
 def test_update_route_awaits_db_and_redirects(client_and_db):
     client, db = client_and_db
-    resp = client.get("/actions/update", params={"token": "t"}, follow_redirects=False)
-    assert resp.status_code in (302, 307)
+    resp = client.post("/actions/update", data={"token": "t"}, follow_redirects=False)
+    assert resp.status_code == 303
     assert db.updates == [("n1", {"status": "in_progress"})]
 
 
 def test_complete_unknown_notification_is_404_not_500(client_and_db):
     client, db = client_and_db
     db.notifications = []
-    resp = client.get("/actions/complete", params={"token": "t"})
+    resp = client.post("/actions/complete", data={"token": "t"})
     assert resp.status_code == 404
     assert db.updates == []
 
