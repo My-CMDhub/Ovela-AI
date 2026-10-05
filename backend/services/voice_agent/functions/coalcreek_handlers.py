@@ -2481,10 +2481,14 @@ class CoalCreekFunctionDispatcher:
             }
              
         elif function_name == "transfer_to_staff":
-             user_utt = (args.get("_user_utterance") or "").lower().strip()
-             negation_words = {"no", "dont", "don't", "stop", "never", "cancel"}
-             words = set(re.sub(r'[^\w\s]', '', user_utt).split())
-             if negation_words & words or user_utt in ("no", "no no", "no thanks", "no thank you"):
+             # A bag-of-words check ("no"/"don't" anywhere) refused callers who
+             # said "No, I want to speak to a person" or "I don't want the
+             # robot, put me through", so the model looped unable to transfer.
+             # Only a negation of the transfer itself refuses now — the same
+             # parse the orchestrator's consent gate uses, so they agree.
+             from services.voice_agent.text_utils import transfer_refused
+             user_utt = (args.get("_user_utterance") or "").strip()
+             if transfer_refused(user_utt):
                  logger.debug("tool args: %s", _args_for_log(args)); logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
                  return {
                      "success": False,
