@@ -169,11 +169,25 @@ _CONFIRM_HEADERS = {
 }
 
 
+def _verify_for(action: str, token: str):
+    """verify_action_token, plus: the token must have been issued for THIS action.
+
+    Tokens carry the action they were minted for, but nothing compared it with
+    the route, so the "approve" link from a staff email also worked when posted
+    to /reject (and "complete" to "dismiss"). One email's links then decide any
+    outcome for that notification, not just the one the button names.
+    """
+    is_valid, payload, error = verify_action_token(token)
+    if is_valid and payload.get("action") != action:
+        return False, payload, "This link is for a different action."
+    return is_valid, payload, error
+
+
 def _confirm_route(action: str):
     async def confirm(token: str = Query(...)):
         # Same verification as the POST, so a dead link says so up front. Nothing
         # else: no db reads, no writes, the one-time link is not consumed here.
-        is_valid, _payload, error = verify_action_token(token)
+        is_valid, _payload, error = _verify_for(action, token)
         if not is_valid:
             return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
         title, message, button = _CONFIRM_COPY[action]
@@ -188,7 +202,7 @@ for _action in _CONFIRM_COPY:
 @router.post("/complete")
 async def complete_action(token: str = Form(...)):
     """Mark a notification as completed via magic link."""
-    is_valid, payload, error = verify_action_token(token)
+    is_valid, payload, error = _verify_for("complete", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
@@ -230,7 +244,7 @@ async def complete_action(token: str = Form(...)):
 @router.post("/dismiss")
 async def dismiss_action(token: str = Form(...)):
     """Dismiss a notification via magic link."""
-    is_valid, payload, error = verify_action_token(token)
+    is_valid, payload, error = _verify_for("dismiss", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
@@ -277,7 +291,7 @@ async def reject_action(token: str = Form(...)):
     Reject a booking/request - shows phone dialer to call customer.
     Magic link is ONE-TIME USE ONLY. Subsequent clicks redirect to dashboard.
     """
-    is_valid, payload, error = verify_action_token(token)
+    is_valid, payload, error = _verify_for("reject", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
@@ -382,7 +396,7 @@ async def reject_action(token: str = Form(...)):
 @router.post("/update")
 async def update_action(token: str = Form(...)):
     """Redirect to dashboard for manual update."""
-    is_valid, payload, error = verify_action_token(token)
+    is_valid, payload, error = _verify_for("update", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
@@ -403,7 +417,7 @@ async def approve_action(token: str = Form(...)):
     Approve a booking request - updates status and sends guest confirmation.
     Magic link is ONE-TIME USE ONLY. Subsequent clicks redirect to dashboard.
     """
-    is_valid, payload, error = verify_action_token(token)
+    is_valid, payload, error = _verify_for("approve", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)

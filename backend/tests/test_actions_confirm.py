@@ -114,7 +114,20 @@ def test_confirm_page_escapes_token(env, monkeypatch):
     # Only verified tokens are echoed, but the page must never trust that.
     client, _ = env
     monkeypatch.setattr(actions, "verify_action_token",
-                        lambda t: (True, {"notification_id": "n1"}, ""))
+                        lambda t: (True, {"notification_id": "n1", "action": "complete"}, ""))
     resp = client.get("/api/actions/complete", params={"token": '"><script>x</script>'})
     assert "<script>x</script>" not in resp.text
     assert "&quot;&gt;&lt;script&gt;" in resp.text
+
+
+@pytest.mark.parametrize("issued_for, posted_to", [
+    ("approve", "reject"), ("reject", "approve"), ("complete", "dismiss"), ("dismiss", "complete"),
+])
+def test_a_token_only_works_for_the_action_it_was_issued_for(env, issued_for, posted_to):
+    """The approve link from a staff email used to be accepted by /reject too:
+    one email's links decided any outcome, not the one the button named."""
+    client, db = env
+    token = generate_action_token("n1", issued_for)
+    assert client.get(f"/api/actions/{posted_to}", params={"token": token}).status_code == 400
+    assert client.post(f"/api/actions/{posted_to}", data={"token": token}).status_code == 400
+    db.update_staff_notification.assert_not_awaited()

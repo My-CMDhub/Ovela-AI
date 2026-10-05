@@ -41,8 +41,8 @@ def client_and_db(monkeypatch):
     monkeypatch.setattr(actions, "db_service", db)
     # Token crypto is not under test here — accept any token for n1.
     monkeypatch.setattr(
-        actions, "verify_action_token",
-        lambda token: (True, {"notification_id": "n1"}, None),
+        actions, "_verify_for",
+        lambda action, token: (True, {"notification_id": "n1", "action": action}, None),
     )
     app = FastAPI()
     app.include_router(actions.router)
