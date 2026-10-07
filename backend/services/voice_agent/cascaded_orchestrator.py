@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Optional, List, Dict, Any, Callable, Coroutine, AsyncGenerator
+import httpx
 import sentry_sdk
 from fastapi import WebSocket
 
@@ -134,6 +135,13 @@ class CascadedPipelineOrchestrator:
         # True once this turn's first audio chunk has reached Twilio. Barge-in
         # stays disarmed until then so LLM think-time can't be interrupted.
         self._agent_audio_started: bool = False
+
+        # Control-flow tool actions. The dispatcher signals call termination by
+        # returning {"action": "hangup"}; it is executed after the farewell has
+        # finished streaming, not at dispatch time.
+        self._pending_hangup: bool = False
+        self._pending_transfer: Optional[str] = None
+        self._hangup_triggered: bool = False
 
         # Sentry transaction and span tracking
         self._sentry_transaction = None
@@ -634,11 +642,111 @@ class CascadedPipelineOrchestrator:
                 except Exception as e:
                     logger.error(f"🔴 [CascadedOrchestrator] {name} task failed: {e}", exc_info=True)
 
-            if self.state == ConversationState.AGENT_SPEAKING:
+            interrupted = self.state != ConversationState.AGENT_SPEAKING
+            if not interrupted:
                 full_text = " ".join(full_response_parts).strip()
                 if full_text:
                     self.history.append({"role": "assistant", "content": full_text})
                 self.state = ConversationState.AWAITING_INPUT
+
+            # Farewell has finished streaming — now end the call. A caller who
+            # spoke over the goodbye is still talking, so the hangup is dropped
+            # rather than deferred.
+            if self._pending_hangup:
+                self._pending_hangup = False
+                if interrupted:
+                    logger.info(
+                        "🛑 [CascadedOrchestrator] Hangup aborted — user spoke during farewell"
+                    )
+                else:
+                    await self._hangup_call()
+
+            # A transfer is never aborted by barge-in: the caller asking again
+            # while the handoff line plays still wants the human.
+            if self._pending_transfer:
+                transfer_to, self._pending_transfer = self._pending_transfer, None
+                await self._transfer_call(transfer_to)
+
+    async def _hangup_call(self) -> None:
+        """
+        Terminate the live PSTN leg via the Twilio REST API.
+
+        Closing our WebSocket does not end the call — only a status update to
+        `completed` does. Idempotent: the model re-fires `hang_up_call` when a
+        first attempt appears to do nothing.
+        """
+        if self._hangup_triggered:
+            return
+        self._hangup_triggered = True
+
+        if not self.call_sid:
+            logger.warning("🟡 [CascadedOrchestrator] Cannot hang up: no Call SID")
+            return
+
+        logger.info(f"📵 [CascadedOrchestrator] Hanging up call: {self.call_sid}")
+        try:
+            url = (
+                f"https://api.twilio.com/2010-04-01/Accounts/"
+                f"{settings.TWILIO_ACCOUNT_SID}/Calls/{self.call_sid}.json"
+            )
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    url,
+                    data={"Status": "completed"},
+                    auth=(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN),
+                )
+                response.raise_for_status()
+            logger.info("✅ [CascadedOrchestrator] Call terminated successfully")
+            self.is_running = False
+        except Exception as e:
+            logger.error(f"🔴 [CascadedOrchestrator] Failed to hang up call: {e}")
+            sentry_sdk.capture_exception(e)
+
+    async def _transfer_call(self, transfer_to: str) -> None:
+        """
+        Hand the live call to a human by replacing its TwiML with a `<Dial>`.
+
+        If nobody answers within TRANSFER_TIMEOUT, Twilio falls through to the
+        redirect and the caller lands back on the AI rather than on dead air.
+        """
+        if not self.call_sid:
+            logger.warning("🟡 [CascadedOrchestrator] Cannot transfer: no Call SID")
+            return
+
+        masked = f"{'*' * max(len(transfer_to) - 4, 0)}{transfer_to[-4:]}"
+        logger.info(f"📞 [CascadedOrchestrator] Transferring call to {masked}")
+        try:
+            from twilio.twiml.voice_response import VoiceResponse, Dial
+
+            twiml = VoiceResponse()
+            dial = Dial(
+                timeout=settings.TRANSFER_TIMEOUT,
+                caller_id=settings.TWILIO_PHONE_NUMBER,
+                action=f"{settings.BACKEND_URL}/twilio/transfer-status",
+            )
+            dial.number(transfer_to)
+            twiml.append(dial)
+            twiml.say("Our staff are currently unavailable. Let me see how else I can help you.")
+            twiml.redirect(f"{settings.BACKEND_URL}/twilio/voice")
+
+            url = (
+                f"https://api.twilio.com/2010-04-01/Accounts/"
+                f"{settings.TWILIO_ACCOUNT_SID}/Calls/{self.call_sid}.json"
+            )
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(
+                    url,
+                    data={"Twiml": str(twiml)},
+                    auth=(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN),
+                )
+                response.raise_for_status()
+
+            logger.info("✅ [CascadedOrchestrator] Transfer initiated")
+            # Stop generating AI audio into a leg that now belongs to staff.
+            self.is_running = False
+        except Exception as e:
+            logger.error(f"🔴 [CascadedOrchestrator] Transfer failed: {e}")
+            sentry_sdk.capture_exception(e)
 
     async def stop(self) -> None:
         """
@@ -837,6 +945,16 @@ class CascadedPipelineOrchestrator:
                         args = {}
                     logger.info(f"🔧 [CascadedOrchestrator] Tool call: {call['name']}({list(args)})")
                     result = await self.dispatcher.execute(call["name"], args)
+                    # The dispatcher answers control-flow tools with an `action`
+                    # field. Forwarding the dict to the LLM without reading it
+                    # makes the model *narrate* the action instead of anyone
+                    # performing it — hang_up_call spoke a goodbye and left the
+                    # line open.
+                    if isinstance(result, dict):
+                        if result.get("action") == "hangup":
+                            self._pending_hangup = True
+                        elif result.get("action") == "transfer" and result.get("transfer_to"):
+                            self._pending_transfer = result["transfer_to"]
                     messages.append({
                         "role": "tool",
                         "tool_call_id": call["id"],
