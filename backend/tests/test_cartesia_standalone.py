@@ -13,7 +13,7 @@ from services.voice_agent.bridges.cartesia_standalone import CartesiaStandaloneB
 
 @pytest.fixture
 def bridge():
-    return CartesiaStandaloneBridge(model_id="sonic-english", sample_rate=8000)
+    return CartesiaStandaloneBridge(model_id="sonic-3", sample_rate=8000)
 
 
 class TestCartesiaStandaloneBridge:
@@ -55,9 +55,13 @@ class TestCartesiaStandaloneBridge:
         mock_ws.send.assert_called_once()
         payload = json.loads(mock_ws.send.call_args[0][0])
         assert payload["context_id"] == "ctx_101"
-        assert payload["model_id"] == "sonic-english"
+        # Cartesia rejects model_id="sonic-english" and encoding="mulaw" with a
+        # 400 ("unsupported encoding for raw: mulaw"). These exact strings are
+        # the contract — do not "simplify" them.
+        assert payload["model_id"] == "sonic-3"
         assert payload["transcript"] == "Hello from Coal Creek Motel"
-        assert payload["output_format"]["encoding"] == "mulaw"
+        assert payload["output_format"]["encoding"] == "pcm_mulaw"
+        assert payload["output_format"]["container"] == "raw"
         assert payload["output_format"]["sample_rate"] == 8000
         assert payload["continue"] is True
 

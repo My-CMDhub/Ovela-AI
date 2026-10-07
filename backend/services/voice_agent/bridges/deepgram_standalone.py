@@ -29,16 +29,22 @@ class DeepgramStandaloneBridge:
     def __init__(
         self,
         sample_rate: int = 8000,
-        model: str = "flux",
-        version: str = "v2",
+        model: str = "flux-general-en",
+        version: str = "",
         encoding: str = "mulaw",
         channels: int = 1,
+        eot_threshold: float = 0.6,
+        eager_eot_threshold: Optional[float] = 0.4,
+        eot_timeout_ms: int = 1000,
     ):
         self.sample_rate = sample_rate
         self.model = model
         self.version = version
         self.encoding = encoding
         self.channels = channels
+        self.eot_threshold = eot_threshold
+        self.eager_eot_threshold = eager_eot_threshold
+        self.eot_timeout_ms = eot_timeout_ms
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.is_connected = False
 
@@ -46,30 +52,53 @@ class DeepgramStandaloneBridge:
     def url(self) -> str:
         """
         Constructs the query-parameterized Deepgram streaming URL.
+        Routely uses /v2/listen for Flux models and /v1/listen for legacy models.
         """
+        is_flux = self.model.startswith("flux")
+        endpoint = "v2" if is_flux else "v1"
+
         params = [
             f"model={self.model}",
-            f"version={self.version}",
             f"encoding={self.encoding}",
             f"sample_rate={self.sample_rate}",
-            f"channels={self.channels}",
-            "interim_results=true",
-            "smart_format=true",
         ]
-        return f"wss://api.deepgram.com/v1/listen?{'&'.join(params)}"
+
+        if is_flux:
+            if self.eot_threshold is not None:
+                params.append(f"eot_threshold={self.eot_threshold}")
+            if self.eager_eot_threshold is not None:
+                params.append(f"eager_eot_threshold={self.eager_eot_threshold}")
+            if self.eot_timeout_ms is not None:
+                params.append(f"eot_timeout_ms={self.eot_timeout_ms}")
+        else:
+            params.append(f"channels={self.channels}")
+            params.append("interim_results=true")
+            params.append("smart_format=true")
+            if self.version:
+                params.append(f"version={self.version}")
+
+        return f"wss://api.deepgram.com/{endpoint}/listen?{'&'.join(params)}"
 
     async def connect(self) -> bool:
         """
         Establish WebSocket connection to Deepgram Listen API.
         """
         try:
-            extra_headers = {"Authorization": f"Token {settings.DEEPGRAM_API_KEY}"}
-            self.ws = await websockets.connect(
-                self.url,
-                extra_headers=extra_headers,
-                ping_interval=5,
-                ping_timeout=20,
-            )
+            headers = {"Authorization": f"Token {settings.DEEPGRAM_API_KEY}"}
+            try:
+                self.ws = await websockets.connect(
+                    self.url,
+                    additional_headers=headers,
+                    ping_interval=5,
+                    ping_timeout=20,
+                )
+            except TypeError:
+                self.ws = await websockets.connect(
+                    self.url,
+                    extra_headers=headers,
+                    ping_interval=5,
+                    ping_timeout=20,
+                )
             self.is_connected = True
             logger.info("🟢 [DeepgramStandalone] Connected to Deepgram Listen / Flux v2")
             return True
@@ -92,9 +121,11 @@ class DeepgramStandaloneBridge:
 
     async def send_configure(
         self,
-        eot_threshold: float = 0.7,
-        eot_timeout_ms: int = 1500,
-        eager_eot_threshold: float = 0.5,
+        # Must match the constructor/connect-URL defaults above, or an
+        # argument-less call silently retunes turn-taking mid-call.
+        eot_threshold: float = 0.6,
+        eot_timeout_ms: int = 1000,
+        eager_eot_threshold: float = 0.4,
     ) -> None:
         """
         Send runtime configuration (Configure message) to adjust turn detection
@@ -102,15 +133,14 @@ class DeepgramStandaloneBridge:
         """
         if not self.ws or not self.is_connected:
             return
+        # Flux v2 schema is `thresholds`; the old Listen v1 `processors` shape is
+        # rejected with ConfigureFailure and the stream then yields nothing.
         payload = {
             "type": "Configure",
-            "processors": {
-                "interim_results": True,
-                "turn_taking": {
-                    "eot_threshold": eot_threshold,
-                    "eot_timeout_ms": eot_timeout_ms,
-                    "eager_eot_threshold": eager_eot_threshold,
-                },
+            "thresholds": {
+                "eot_threshold": eot_threshold,
+                "eot_timeout_ms": eot_timeout_ms,
+                "eager_eot_threshold": eager_eot_threshold,
             },
         }
         try:
@@ -146,10 +176,12 @@ class DeepgramStandaloneBridge:
                         logger.warning(f"🟡 [DeepgramStandalone] Malformed JSON received: {message[:100]}")
         except websockets.exceptions.ConnectionClosed:
             logger.info("🔌 [DeepgramStandalone] Connection closed by server")
+            self.is_connected = False
         except Exception as e:
             logger.error(f"🔴 [DeepgramStandalone] Error receiving stream events: {e}")
-        finally:
             self.is_connected = False
+        # Deliberately no `finally` — see cartesia_standalone.receive_audio_events().
+        # Finalizing this generator must not mark a live socket as disconnected.
 
     async def close(self) -> None:
         """
