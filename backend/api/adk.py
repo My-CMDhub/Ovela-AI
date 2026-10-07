@@ -21,6 +21,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional
 
+from core.auth import get_current_tenant_id
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -77,8 +79,13 @@ def get_adk_orchestrator():
 # Routes
 # ---------------------------------------------------------------------------
 
+# POST /query needs a signed-in user (Appwrite JWT). Every request runs the
+# Gemini agent graph, i.e. paid LLM calls, and it was open to the internet. No
+# legitimate caller is anonymous: the voice handler stopped POSTing here and calls
+# the orchestrator in-process (CoalCreekFunctionDispatcher.fire_adk_cold_path),
+# and the frontend never calls /api/adk. /health stays public: static, no LLM.
 @router.post("/query", response_model=ADKQueryResponse, tags=["adk"])
-async def adk_query(request: ADKQueryRequest):
+async def adk_query(request: ADKQueryRequest, tenant_id: str = Depends(get_current_tenant_id)):
     """
     Route a user query through the Gemini ADK multi-agent graph.
 
@@ -102,6 +109,11 @@ async def adk_query(request: ADKQueryRequest):
 
     call_sid = request.call_sid
     query = request.query.strip()
+    # ADK session key. The live call's in-process cold path keys its session by
+    # the bare CallSid; prefixing the tenant keeps an HTTP caller (any signed-in
+    # user) from joining, reading or seeding a live call's session, or another
+    # tenant's, by sending its call_sid.
+    session_user = f"http:{tenant_id}:{call_sid}"
 
     if not query:
         raise HTTPException(status_code=422, detail="Query text cannot be empty")
@@ -110,20 +122,20 @@ async def adk_query(request: ADKQueryRequest):
 
     try:
         # Get or create isolated session for this Twilio call
-        session = await orchestrator.get_or_create_session(user_id=call_sid)
+        session = await orchestrator.get_or_create_session(user_id=session_user)
         session_id = session.id
 
         # Optionally merge caller state (name, dates) into session
         if request.session_state:
             await orchestrator.update_session_state(
-                user_id=call_sid,
+                user_id=session_user,
                 session_id=session_id,
                 state=request.session_state,
             )
 
         # Run the ADK graph — Manager routes to BookingWorker or InfoWorker
         response_text = await orchestrator.query(
-            user_id=call_sid,
+            user_id=session_user,
             session_id=session_id,
             text=query,
         )

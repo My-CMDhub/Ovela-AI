@@ -24,6 +24,8 @@ APPWRITE_PROJECT_ID = settings.APPWRITE_PROJECT_ID
 APPWRITE_API_KEY = settings.APPWRITE_API_KEY
 
 
+
+
 def _appwrite_headers() -> dict:
     return {
         "Content-Type": "application/json",
@@ -58,6 +60,12 @@ async def get_evaluation_runs(
     """
     Return paginated evaluation run history from `evaluation_runs` collection,
     sorted by timestamp DESC.
+
+    Public and read-only on purpose: docs/EVALUATION_METHODOLOGY.md links
+    https://ovela.dev/evaluations so anyone can verify the published scores, and
+    the runs are synthetic QA scenarios from the evaluation harness, not guest
+    calls. (Requiring a sign-in here broke that link for every visitor.) Nothing
+    on this router writes.
     """
     try:
         endpoint = f"/databases/{MOTEL_DB_ID}/collections/evaluation_runs/documents"

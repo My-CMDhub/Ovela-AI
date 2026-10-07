@@ -1,4 +1,5 @@
 import logging
+from typing import Optional
 from fastapi import Header, HTTPException
 import httpx
 from core.config import settings
@@ -50,3 +51,18 @@ async def get_current_tenant_id(
         except httpx.RequestError as e:
             logger.error(f"Failed to connect to Appwrite to validate session: {e}")
             raise HTTPException(status_code=502, detail="Auth Gateway Error")
+
+
+async def get_optional_tenant_id(
+    authorization: str = Header(None)
+) -> Optional[str]:
+    """
+    Like get_current_tenant_id, but None when no Authorization header is sent.
+
+    For the few routes that serve a reduced public view to anonymous callers
+    (GET /settings theming). A header that IS sent must still be valid: a bad or
+    expired JWT raises 401 rather than quietly falling back to the public view.
+    """
+    if not authorization:
+        return None
+    return await get_current_tenant_id(authorization)

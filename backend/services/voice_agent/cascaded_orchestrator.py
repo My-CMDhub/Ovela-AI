@@ -21,6 +21,7 @@ import re
 import time
 import uuid
 import inspect
+import weakref
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +54,42 @@ from services.voice_agent.text_utils import transfer_consent_given
 from services.voice_agent.functions.coalcreek_definitions import get_coalcreek_functions
 
 logger = logging.getLogger(__name__)
+
+# Every call this process is carrying right now. Transcripts are written once,
+# at teardown (stop()), so a process that dies with calls up — Heroku's daily
+# restart, a deploy, SIGKILL 30 s after SIGTERM — used to take every live
+# call's record with it. The shutdown hook in main.py saves what is here.
+# Weak, so a call whose stop() never ran cannot be pinned in memory by this.
+_LIVE_CALLS: "weakref.WeakSet" = weakref.WeakSet()
+
+
+async def save_live_transcripts(timeout_s: float = 10.0) -> int:
+    """
+    Save the transcript of every call still in progress, marked as ended by
+    the server rather than the caller. Returns how many calls were live.
+
+    Bounded as a whole: the platform kills the process 30 s after SIGTERM, and
+    one slow Appwrite write must not cost every other call its record — so the
+    saves run together and whatever has not finished in `timeout_s` is
+    abandoned. Each save is idempotent (`_transcript_saved`), so a call whose
+    own stop() is already saving, or runs after this, is written once.
+    """
+    calls = list(_LIVE_CALLS)
+    if not calls:
+        return 0
+    for call in calls:
+        if not call._transcript_saved:
+            call._ended_by = "server_shutdown"
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*(call._save_transcript() for call in calls),
+                           return_exceptions=True),
+            timeout=timeout_s,
+        )
+    except asyncio.TimeoutError:
+        logger.error("📝 [CascadedOrchestrator] Shutdown save of %d live call(s) "
+                     "timed out after %.0fs", len(calls), timeout_s)
+    return len(calls)
 
 # How much continuous speech commits a barge-in without waiting for words.
 # 20ms webrtcvad frames. LiveKit's acoustic interruption model needs a median
@@ -347,6 +384,10 @@ class CascadedPipelineOrchestrator:
         # are the things that turned out to matter when doing that by hand.
         self._call_started_at: float = time.time()
         self._transcript_saved: bool = False
+        # Who ended the call, when it was not the caller or the agent: set to
+        # "server_shutdown" by save_live_transcripts. None on a normal call,
+        # which then saves exactly the metadata it always did.
+        self._ended_by: Optional[str] = None
         self._tools_called: List[str] = []
         self._refusals: List[str] = []
         self._unsourced: List[str] = []
@@ -2006,6 +2047,7 @@ class CascadedPipelineOrchestrator:
                     # flag off saves exactly what it always did.
                     **({"speculation": self._speculation_stats}
                        if self._speculation_stats["started"] else {}),
+                    **({"ended_by": self._ended_by} if self._ended_by else {}),
                 },
             )
             logger.info(
@@ -2023,6 +2065,8 @@ class CascadedPipelineOrchestrator:
         """
         self.is_running = False
         self._stopped.set()
+        # Off the live list first: from here the call saves its own record.
+        _LIVE_CALLS.discard(self)
         for task in (self._turn_worker_task, self._turn_task, self._audio_reader):
             if task and not task.done():
                 task.cancel()
@@ -2999,6 +3043,7 @@ class CascadedPipelineOrchestrator:
         """
         if not await self.start():
             return
+        _LIVE_CALLS.add(self)
 
         dg_task = asyncio.create_task(self.process_deepgram_events())
         self._turn_worker_task = asyncio.create_task(self._turn_worker())
@@ -3007,8 +3052,36 @@ class CascadedPipelineOrchestrator:
         # anything else arriving first is not Twilio: rejected before it can
         # feed Deepgram or drive a turn on our bill.
         admitted = False
+        # start() has already opened Deepgram and Cartesia, so a socket that
+        # connects and never sends `start` held both open until the platform
+        # dropped it. Reads are bounded only until `start` arrives (Twilio
+        # sends `connected` then `start` within milliseconds); after that they
+        # wait as long as the call lasts, so a live call is unaffected.
+        messages = self.twilio_ws.iter_text().__aiter__()
+        start_deadline = time.monotonic() + settings.STREAM_START_TIMEOUT_S
         try:
-            async for message in self.twilio_ws.iter_text():
+            while True:
+                try:
+                    if admitted:
+                        message = await messages.__anext__()
+                    else:
+                        message = await asyncio.wait_for(
+                            messages.__anext__(),
+                            timeout=max(0.0, start_deadline - time.monotonic()),
+                        )
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "⏱️ [CascadedOrchestrator] No `start` within %.0fs — closing stream",
+                        settings.STREAM_START_TIMEOUT_S,
+                    )
+                    self.is_running = False
+                    try:
+                        await self.twilio_ws.close()
+                    except Exception:
+                        pass
+                    break
                 if not self.is_running:
                     break
                 try:

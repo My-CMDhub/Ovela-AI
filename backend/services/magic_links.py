@@ -96,13 +96,18 @@ def generate_action_url(notification_id: str, action: str, base_url: str = None)
     Args:
         notification_id: The notification ID
         action: The action (complete, dismiss, approve, reject)
-        base_url: Optional base URL (defaults to Cloud Run app URL)
+        base_url: Optional base URL (defaults to settings.BACKEND_URL)
     
     Returns:
         Complete URL with token
     """
     if not base_url:
-        base_url = "https://ovela-backend-278930799830.australia-southeast1.run.app"
+        # The app runs on Heroku (settings.BACKEND_URL, which the demo links
+        # below already use). This used to be hard-coded to an old Cloud Run
+        # deployment, so every staff email's Complete/Dismiss/Approve/Reject
+        # button went to a service that is gone or runs old code — none of the
+        # magic-link fixes would ever have been reached.
+        base_url = settings.BACKEND_URL
     
     token = generate_action_token(notification_id, action)
     return f"{base_url}/api/actions/{action}?token={token}"

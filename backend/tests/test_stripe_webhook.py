@@ -333,3 +333,42 @@ def test_a_payment_on_an_expired_hold_is_flagged_not_confirmed(env, monkeypatch)
     assert r.status_code == 200 and r.json()["status"] == "expired_hold_flagged"
     env["pay"].assert_not_called()
     assert alerts.await_count == 1
+
+
+def test_a_stale_link_paid_after_the_stay_changed_is_flagged_not_confirmed(env, monkeypatch):
+    """Extending a stay raises the total and mails a new link, but the first link
+    stays payable at the old total. Paying it used to mark the longer stay paid."""
+    from services.email import email_service
+    alerts = AsyncMock(return_value=True)
+    monkeypatch.setattr(email_service, "send_email", alerts, raising=False)
+    env["find"].return_value = dict(DOC, total_amount=360)      # extended to 3 nights
+
+    r = env["post"](_event("checkout.session.completed", amount_total=24000))  # old 2-night link
+
+    assert r.status_code == 200 and r.json()["status"] == "amount_mismatch_flagged"
+    env["pay"].assert_not_called()
+    assert alerts.await_count == 1
+
+
+def test_dropped_cents_are_not_a_mismatch(env):
+    """The voice path charges int(total); a $259.50 booking is paid as $259."""
+    env["find"].return_value = dict(DOC, total_amount=259.5)
+    r = env["post"](_event("checkout.session.completed", amount_total=25900))
+    assert r.json()["status"] == "received"
+    env["pay"].assert_awaited_once()
+
+
+@pytest.mark.parametrize("released_as", ["rejected", "cancelled"])
+def test_a_payment_on_a_rejected_or_cancelled_hold_is_flagged_not_confirmed(env, monkeypatch, released_as):
+    """Staff reject a hold while the guest's 30-minute link is still live; the
+    guest pays. The room was released on reject, so confirming could double-book."""
+    from services.email import email_service
+    alerts = AsyncMock(return_value=True)
+    monkeypatch.setattr(email_service, "send_email", alerts, raising=False)
+    env["find"].return_value = dict(DOC, status=released_as)
+
+    r = env["post"](_event("checkout.session.completed"))
+
+    assert r.json()["status"] == f"{released_as}_hold_flagged"
+    env["pay"].assert_not_called()
+    assert alerts.await_count == 1

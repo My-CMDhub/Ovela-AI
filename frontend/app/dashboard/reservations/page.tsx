@@ -43,6 +43,13 @@ export interface Reservation {
 }
 
 
+// The backend fails two ways: a route's own {"success": false, "error": ...},
+// and FastAPI's {"detail": ...} for 401 (signed out / session expired) and 404
+// (not this motel's booking). Read both, so staff never see "Error: undefined".
+function apiError(data: { error?: string; detail?: string } | null, res: Response): string {
+    return data?.error ?? data?.detail ?? (res.statusText || `HTTP ${res.status}`);
+}
+
 type StatusFilter = "all" | "pending" | "confirmed" | "checked_in" | "checked_out" | "cancelled" | "rejected" | "link_sent" | "approved";
 
 import { useTenant } from "@/contexts/TenantContext";
@@ -88,7 +95,7 @@ export default function ReservationsPage() {
                 fetchReservations();
                 setSelectedReservation(null);
             } else {
-                alert("Error: " + data.error);
+                alert("Error: " + apiError(data, res));
             }
         } catch (e) {
             alert("Network error");
@@ -107,7 +114,7 @@ export default function ReservationsPage() {
                 fetchReservations();
                 setSelectedReservation(null);
             } else {
-                alert("Error: " + data.error);
+                alert("Error: " + apiError(data, res));
             }
         } catch (e) {
             alert("Network error");
@@ -128,7 +135,7 @@ export default function ReservationsPage() {
                     alert("Link sent!");
                 }
             } else {
-                alert("Error: " + data.error);
+                alert("Error: " + apiError(data, res));
             }
         } catch (e) {
             alert("Network error");
@@ -416,7 +423,7 @@ function WalkInModal({ isOpen, onClose, onSuccess }: { isOpen: boolean; onClose:
             if (data.success) {
                 onSuccess();
             } else {
-                alert(data.error || "Failed to create walk-in booking");
+                alert(data.error || data.detail || "Failed to create walk-in booking");
             }
         } catch (error) {
             console.error("Error creating walk-in:", error);

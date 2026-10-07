@@ -14,13 +14,14 @@ Routes:
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, HTTPException
 import httpx
 
 from core.config import settings
-from core.auth import get_current_tenant_id
+from core.auth import get_current_tenant_id, get_optional_tenant_id
 
 logger = logging.getLogger(__name__)
 
@@ -475,7 +476,7 @@ async def get_call_logs(
         return {"success": False, "error": str(e), "logs": [], "total": 0}
 
 @router.post("/reservations/manual")
-async def create_manual_booking(data: dict):
+async def create_manual_booking(data: dict, tenant_id: str = Depends(get_current_tenant_id)):
     """
     Create a manual walk-in booking (Staff overrides).
     Checks availability but allows forcing creation.
@@ -483,7 +484,13 @@ async def create_manual_booking(data: dict):
     try:
         import random
         import string
-        from services.motel_knowledge_base import ROOM_INFO
+        # Room rates come from the knowledge base the voice agent quotes from
+        # (COALCREEK_DATA["rooms"], keyed queen/twin/family/spa like room_type), so
+        # a walk-in is priced like a phone booking. This used to import ROOM_INFO
+        # from here, which no longer exists: every walk-in failed with
+        # {"success": False} before reaching Appwrite.
+        from services.motel_knowledge_base import get_active_data
+        rooms = get_active_data()["rooms"]
 
         guest_name = data.get("guest_name")
         guest_phone = data.get("guest_phone")
@@ -529,7 +536,11 @@ async def create_manual_booking(data: dict):
 
         # Auto-confirm walk-ins
         data["status"] = "confirmed"
-        data["source"] = "walk_in" 
+        data["source"] = "walk_in"
+        # Owner comes from the signed-in user, never the body: a client-supplied
+        # tenant_id would let one motel file bookings into another's dashboard,
+        # and without one the walk-in was invisible to every tenant-filtered read.
+        data["tenant_id"] = tenant_id
         
         # Calculate totals if missing
         if "total_amount" not in data:
@@ -538,7 +549,9 @@ async def create_manual_booking(data: dict):
                 start = datetime.strptime(check_in, "%Y-%m-%d")
                 end = datetime.strptime(check_out, "%Y-%m-%d")
                 nights = (end - start).days or 1
-                price = ROOM_INFO.get(room_type, {}).get("price", 130)
+                # "accessible" (a dashboard option) has no rate of its own; it
+                # is a queen-bed room, so it takes the queen rate.
+                price = rooms.get(room_type, rooms.get("queen", {})).get("price", 130)
                 data["total_amount"] = price * nights
                 data["num_nights"] = nights
                 data["rate_per_night"] = price
@@ -581,16 +594,47 @@ async def create_manual_booking(data: dict):
 # BOOKING MANAGEMENT ENDPOINTS (Approve/Reject/Payments)
 # ============================================================================
 
+# Appwrite document IDs: up to 36 chars of [A-Za-z0-9._-], not starting with a
+# symbol. booking_id is pasted into the Appwrite URL, so anything else (a "?",
+# an encoded "/") is refused before it can reshape that request.
+_APPWRITE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,35}")
+
+
+async def _get_tenant_booking(booking_id: str, tenant_id: str) -> dict:
+    """
+    Load a reservation and prove it belongs to the signed-in tenant.
+
+    Every booking write goes through here first. A booking that is missing, that
+    Appwrite failed to return, or that belongs to another tenant all raise the
+    same 404, so a caller cannot probe which IDs exist in other motels. The match
+    is exact (no "coalcreek" default for docs without tenant_id), mirroring the
+    GET /reservations filter: staff can only act on bookings their list shows.
+    Call it OUTSIDE the routes' broad `except Exception` blocks, which would
+    otherwise swallow the HTTPException into a 200 {"success": False}.
+    """
+    if not _APPWRITE_ID_RE.fullmatch(booking_id or ""):
+        raise HTTPException(status_code=404, detail="Booking not found")
+    endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents/{booking_id}"
+    booking = await appwrite_request("GET", endpoint)
+    if "error" in booking or booking.get("tenant_id") != tenant_id:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    return booking
+
+
 @router.patch("/bookings/{booking_id}")
-async def update_booking(booking_id: str, data: dict):
+async def update_booking(booking_id: str, data: dict, tenant_id: str = Depends(get_current_tenant_id)):
     """
     Update a booking (general update).
     Staff can update notes, dates, guest details etc.
     """
+    await _get_tenant_booking(booking_id, tenant_id)
     try:
         # Don't allow changing sensitive fields directly via this endpoint if needed
         # but for MVP trust the staff dashboard.
-        
+        # Except ownership: re-pointing tenant_id would hand the booking (and its
+        # guest's details) to another motel, so the body can never move it.
+        data.pop("tenant_id", None)
+
         # Add updated_at
         data["updated_at"] = datetime.now().isoformat()
         
@@ -610,7 +654,7 @@ async def update_booking(booking_id: str, data: dict):
 
 
 @router.post("/bookings/{booking_id}/approve")
-async def approve_booking(booking_id: str):
+async def approve_booking(booking_id: str, tenant_id: str = Depends(get_current_tenant_id)):
     """
     Approve a pending booking.
     1. Update status to 'link_sent' (or 'approved' if no payment).
@@ -618,21 +662,17 @@ async def approve_booking(booking_id: str):
     3. Send SMS to guest with link (PRIMARY).
     4. Send Email to guest with link (SECONDARY/OPTIONAL).
     """
+    # 1. Get Booking Details (404 unless it is the signed-in tenant's)
+    booking = await _get_tenant_booking(booking_id, tenant_id)
     try:
         from services.tenants.coalcreek.stripe import coalcreek_stripe_service
         from services.email import email_service
         from services.sms import sms_service
         from services.appwrite import db_service
-        
-        # 1. Get Booking Details
+
         endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents/{booking_id}"
-        booking = await appwrite_request("GET", endpoint)
-        
-        if "error" in booking:
-            return {"success": False, "error": "Booking not found"}
-            
-        # Fetch Tenant Config
-        tenant_id = booking.get("tenant_id", "coalcreek")
+
+        # Fetch Tenant Config (tenant_id is the JWT's; the booking was just matched to it)
         tenant_config = await db_service.get_tenant_config(tenant_id)
         use_stripe = tenant_config.get("use_stripe_payments", False)
         
@@ -774,15 +814,18 @@ async def approve_booking(booking_id: str):
 
 
 @router.post("/bookings/{booking_id}/reject")
-async def reject_booking(booking_id: str):
+async def reject_booking(booking_id: str, tenant_id: str = Depends(get_current_tenant_id)):
     """
-    Reject a booking request.
-    1. Update status to 'rejected'.
-    2. Send rejection email.
+    Reject a booking request: update status to 'rejected'.
+
+    No guest email: services.email has no rejection template, and staff phone
+    the guest instead, as the emailed reject link's page (api/actions.py) has
+    them do. This used to import services.tenants.coalcreek.email, which does
+    not exist and was never used, so every reject failed with
+    {"success": False} before the PATCH.
     """
+    await _get_tenant_booking(booking_id, tenant_id)
     try:
-        from services.tenants.coalcreek.email import coalcreek_email_service
-        
         # 1. Update Status
         endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents/{booking_id}"
         update_data = {
@@ -807,19 +850,16 @@ async def reject_booking(booking_id: str):
 
 
 @router.post("/bookings/{booking_id}/payment-link")
-async def regenerate_payment_link(booking_id: str):
+async def regenerate_payment_link(booking_id: str, tenant_id: str = Depends(get_current_tenant_id)):
     """
     Regenerate or retrieve payment link for an existing booking.
     """
+    booking = await _get_tenant_booking(booking_id, tenant_id)
     try:
         from services.tenants.coalcreek.stripe import coalcreek_stripe_service
-        
+
         endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents/{booking_id}"
-        booking = await appwrite_request("GET", endpoint)
-        
-        if "error" in booking:
-            return {"success": False, "error": "Booking not found"}
-            
+
         # Reuse existing if valid? Stripe links don't expire quickly usually.
         if booking.get("payment_link_url") and booking.get("status") != "paid":
              return {"success": True, "payment_link": booking.get("payment_link_url")}
@@ -1101,13 +1141,17 @@ async def _handle_checkout_completed(event: dict, event_id: str, coalcreek_strip
         _spawn_alert(_alert_staff_webhook_failure(
             event_id, reason, booking_ref, subject="Possible double payment — please refund"))
         return {"status": "double_payment_flagged"}
-    if (booking_doc.get("status") or "").lower() == "expired":
-        # Paid through a link whose hold had already lapsed: the room went back
-        # on sale when it expired, so confirming here could double-book it.
-        # The money is real, so a person decides (honour or refund) — 200 so
-        # Stripe stops, loud so nobody misses it.
+    released_as = (booking_doc.get("status") or "").lower()
+    if released_as in ("expired", "rejected", "cancelled") and booking_doc.get("payment_status") != "paid":
+        # Paid through a link whose hold had already been released — it lapsed,
+        # or staff rejected or cancelled it while the guest's 30-minute link was
+        # still live. The room went back on sale at that moment, so confirming
+        # here could double-book it (rejected/cancelled were found in review:
+        # the dashboard's Reject button made that path one click away). The
+        # money is real, so a person decides (honour or refund) — 200 so Stripe
+        # stops, loud so nobody misses it.
         reason = (f"payment {stripe_payment_id or '-'} arrived for a hold that had "
-                  "already EXPIRED — check the room is still free, then confirm or refund")
+                  f"already been {released_as.upper()} — check the room is still free, then confirm or refund")
         logger.error("Stripe webhook %s: %s (ref=%s)", event_id, reason, booking_ref)
         try:
             import sentry_sdk
@@ -1115,14 +1159,41 @@ async def _handle_checkout_completed(event: dict, event_id: str, coalcreek_strip
         except Exception:
             pass
         _spawn_alert(_alert_staff_webhook_failure(
-            event_id, reason, booking_ref, subject="Payment on an expired hold — please check"))
-        return {"status": "expired_hold_flagged"}
+            event_id, reason, booking_ref, subject=f"Payment on a {released_as} hold — please check"))
+        return {"status": f"{released_as}_hold_flagged"}
     if booking_doc.get("payment_status") in done_states:
         logger.info(
             "Stripe webhook %s: %s already %s — duplicate delivery, no side effects",
             event_id, booking_ref, booking_doc.get("payment_status"),
         )
         return {"status": "duplicate"}
+
+    # The amount must be what the booking costs NOW. Extending a stay patches
+    # the total and mails a new link, but the first link stays payable at the
+    # old, smaller total until Stripe expires it (the session id is not stored,
+    # so it can't be expired from here). Paying that one marked the longer stay
+    # paid in full. Every flow charges the full total, so a mismatch is either a
+    # stale link or an error, and a person decides. $1 of slack: the voice path
+    # charges int(total), dropping cents.
+    expected_total = booking_doc.get("total_amount")
+    if mode != "setup" and expected_total not in (None, "") and amount_total_cents:
+        try:
+            paid = float(amount_total_cents) / 100.0
+            expected = float(expected_total)
+        except (TypeError, ValueError):
+            paid = expected = None
+        if paid is not None and abs(paid - expected) >= 1.0:
+            reason = (f"payment {stripe_payment_id or '-'} of ${paid:.2f} does not match the booking "
+                      f"total ${expected:.2f} (a stale link after a change?) — check, then confirm or refund")
+            logger.error("Stripe webhook %s: %s (ref=%s)", event_id, reason, booking_ref)
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_message(f"Stripe webhook {event_id}: {reason} (ref={booking_ref})", level="error")
+            except Exception:
+                pass
+            _spawn_alert(_alert_staff_webhook_failure(
+                event_id, reason, booking_ref, subject="Payment amount doesn't match the booking — please check"))
+            return {"status": "amount_mismatch_flagged"}
 
     # Persist first and only then email: if the write fails we answer 5xx with
     # nothing sent, so the redelivery is the first time the guest hears from us.
@@ -1303,16 +1374,41 @@ async def _handle_checkout_expired(event: dict, event_id: str):
 # SETTINGS
 # -----------------------------------------------------------------------------
 
+# What an anonymous caller may read. frontend/contexts/ThemeContext.tsx fetches
+# GET /settings with a plain fetch (no JWT) only to pick a theme from
+# settings.industry. The rest (owner/staff email, phone, address, hours) is
+# private config and needs a signed-in user, or anyone could harvest it per tenant.
+_PUBLIC_SETTINGS_KEYS = ("industry",)
+
+
 @router.get("/settings")
 async def get_settings(
-    tenant_id: str = Query(default="coalcreek", description="Tenant ID")
+    tenant_id: str = Query(default="coalcreek", description="Tenant ID (anonymous theming lookups only)"),
+    auth_tenant_id: Optional[str] = Depends(get_optional_tenant_id),
 ):
     """
     Get business settings (Profile, Hours, etc).
     Fetches real data from 'Tenants' collection in Appwrite.
+
+    With a valid JWT: the signed-in tenant's full settings (the query param is
+    ignored, so one tenant cannot read another's). Without one: only the public
+    theming keys of the requested tenant. A bad or expired JWT is a 401, not a
+    silent downgrade, so the settings page cannot mistake it for empty settings.
     """
     from services.appwrite import db_service
-    
+
+    if auth_tenant_id is None:
+        public = await db_service.get_tenant_settings(tenant_id) or {}
+        return {
+            "success": True,
+            # Says which view this is, so the settings page can refuse to Save
+            # a form that was never filled with the private fields — saving it
+            # would write blanks over the owner email and hours.
+            "scope": "public",
+            "settings": {k: public[k] for k in _PUBLIC_SETTINGS_KEYS if public.get(k)},
+        }
+    tenant_id = auth_tenant_id
+
     # 1. Try to get from Appwrite
     real_settings = await db_service.get_tenant_settings(tenant_id)
     
@@ -1320,6 +1416,7 @@ async def get_settings(
         # Ensure fallback defaults for missing fields if needed
         return {
             "success": True,
+            "scope": "full",
             "settings": real_settings
         }
 
@@ -1328,6 +1425,7 @@ async def get_settings(
 
     return {
         "success": True,
+        "scope": "full",
         "settings": {
             "business_name": "Coal Creek Motel",
             "business_hours": "24/7 Reception\nCheck-in: 2:00 PM\nCheck-out: 10:00 AM",
@@ -1340,10 +1438,15 @@ async def get_settings(
 @router.post("/settings")
 async def update_settings(
     settings_data: dict,
-    tenant_id: str = Query(default="coalcreek", description="Tenant ID")
+    tenant_id: str = Depends(get_current_tenant_id)
 ):
     """
     Update business settings in Appwrite.
+
+    Tenant comes from the JWT only. This writes owner_email/staff_email, which
+    receive booking approvals and callback requests; trusting ?tenant_id= let
+    anyone redirect another motel's staff notifications to their own inbox.
+    (The settings page still sends ?tenant_id=; it is now ignored.)
     """
     from services.appwrite import db_service
     

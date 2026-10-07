@@ -2,10 +2,11 @@
 Magic Link Actions API
 Handles email-based action links for staff operations (complete, dismiss, approve, reject).
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Form, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 from services.magic_links import verify_action_token
 from services.appwrite import db_service
+import html
 import logging
 import time
 
@@ -17,6 +18,15 @@ router = APIRouter(prefix="/actions", tags=["actions"])
 # Calling them without `await` hands back a coroutine, so `next(... for n in
 # notifications)` raised TypeError and every staff magic link 500'd while the
 # update never ran. Each call below MUST be awaited.
+
+# GET never acts; POST does. Mail security scanners and link previewers (Outlook
+# Safe Links, Gmail, Slack/Teams unfurls) fetch every URL in an email on their own,
+# so a GET that mutated could complete a callback, or approve/reject a booking and
+# burn its one-time link, before any human clicked. The emailed URLs are still
+# GETs (already-sent emails keep working): GET only verifies the token and renders
+# a confirm page whose button POSTs the same token to the same path, where the
+# token is verified again and the action runs. Bots follow links; they don't
+# submit forms. GET must stay free of db_service calls.
 
 # Dashboard URL for redirects
 DASHBOARD_URL = "https://ovela.dev/motel/notifications"
@@ -97,10 +107,102 @@ def error_page(title: str, message: str) -> str:
     """
 
 
-@router.get("/complete")
-async def complete_action(token: str = Query(...)):
-    """Mark a notification as completed via magic link."""
+def confirm_page(title: str, message: str, button: str, token: str) -> str:
+    """
+    Generate the confirm page a magic-link GET shows instead of acting.
+
+    The form has no action attribute, so it POSTs back to the exact URL the email
+    opened (same path, same ?token=), whatever prefix the router is mounted under.
+    The token also rides in the body, which is what the POST routes read.
+    """
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta name="robots" content="noindex">
+        <title>{title}</title>
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f7; margin: 0; padding: 40px 20px; }}
+            .container {{ max-width: 500px; margin: 0 auto; background: white; border-radius: 16px; padding: 40px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }}
+            h1 {{ font-size: 24px; color: #1d1d1f; margin-bottom: 16px; }}
+            p {{ color: #86868b; font-size: 16px; line-height: 1.6; }}
+            .btn {{ display: inline-block; padding: 14px 28px; background: #0066cc; color: white; border: 0; border-radius: 30px; font-size: 16px; font-weight: 600; margin-top: 24px; cursor: pointer; }}
+            .back-link {{ margin-top: 24px; }}
+            .back-link a {{ color: #0066cc; text-decoration: none; font-size: 14px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>{title}</h1>
+            <p>{message}</p>
+            <form method="post">
+                <input type="hidden" name="token" value="{html.escape(token, quote=True)}">
+                <button type="submit" class="btn">{button}</button>
+            </form>
+            <div class="back-link">
+                <a href="{DASHBOARD_URL}">← Open Dashboard</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+
+# Path -> (title, message, button) for each magic link's confirm page.
+_CONFIRM_COPY = {
+    "complete": ("Mark as complete?", "Mark this callback request as completed.", "Mark Complete"),
+    "dismiss": ("Dismiss notification?", "Dismiss this notification without calling back.", "Dismiss"),
+    "reject": ("Reject this booking?", "This cancels the reservation. The email link works once, so this can't be undone from email.", "Reject Booking"),
+    "update": ("Open in dashboard?", "Mark this request as in progress and open it in the dashboard.", "Mark In Progress"),
+    "approve": ("Approve this booking?", "This confirms the reservation and emails the guest their confirmation. The email link works once.", "Approve Booking"),
+}
+
+# The token sits in the URL: keep it out of caches and Referer headers, and stop
+# the one-click form being framed by another site (clickjacking).
+_CONFIRM_HEADERS = {
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "Content-Security-Policy": "frame-ancestors 'none'",
+}
+
+
+def _verify_for(action: str, token: str):
+    """verify_action_token, plus: the token must have been issued for THIS action.
+
+    Tokens carry the action they were minted for, but nothing compared it with
+    the route, so the "approve" link from a staff email also worked when posted
+    to /reject (and "complete" to "dismiss"). One email's links then decide any
+    outcome for that notification, not just the one the button names.
+    """
     is_valid, payload, error = verify_action_token(token)
+    if is_valid and payload.get("action") != action:
+        return False, payload, "This link is for a different action."
+    return is_valid, payload, error
+
+
+def _confirm_route(action: str):
+    async def confirm(token: str = Query(...)):
+        # Same verification as the POST, so a dead link says so up front. Nothing
+        # else: no db reads, no writes, the one-time link is not consumed here.
+        is_valid, _payload, error = _verify_for(action, token)
+        if not is_valid:
+            return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
+        title, message, button = _CONFIRM_COPY[action]
+        return HTMLResponse(content=confirm_page(title, message, button, token), headers=_CONFIRM_HEADERS)
+    return confirm
+
+
+for _action in _CONFIRM_COPY:
+    router.add_api_route(f"/{_action}", _confirm_route(_action), methods=["GET"], name=f"confirm_{_action}")
+
+
+@router.post("/complete")
+async def complete_action(token: str = Form(...)):
+    """Mark a notification as completed via magic link."""
+    is_valid, payload, error = _verify_for("complete", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
@@ -139,10 +241,10 @@ async def complete_action(token: str = Query(...)):
     ))
 
 
-@router.get("/dismiss")
-async def dismiss_action(token: str = Query(...)):
+@router.post("/dismiss")
+async def dismiss_action(token: str = Form(...)):
     """Dismiss a notification via magic link."""
-    is_valid, payload, error = verify_action_token(token)
+    is_valid, payload, error = _verify_for("dismiss", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
@@ -183,13 +285,13 @@ async def dismiss_action(token: str = Query(...)):
     ))
 
 
-@router.get("/reject")
-async def reject_action(token: str = Query(...)):
+@router.post("/reject")
+async def reject_action(token: str = Form(...)):
     """
     Reject a booking/request - shows phone dialer to call customer.
     Magic link is ONE-TIME USE ONLY. Subsequent clicks redirect to dashboard.
     """
-    is_valid, payload, error = verify_action_token(token)
+    is_valid, payload, error = _verify_for("reject", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
@@ -291,10 +393,10 @@ async def reject_action(token: str = Query(...)):
     ))
 
 
-@router.get("/update")
-async def update_action(token: str = Query(...)):
+@router.post("/update")
+async def update_action(token: str = Form(...)):
     """Redirect to dashboard for manual update."""
-    is_valid, payload, error = verify_action_token(token)
+    is_valid, payload, error = _verify_for("update", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
@@ -304,17 +406,18 @@ async def update_action(token: str = Query(...)):
     # Mark as in_progress
     await db_service.update_staff_notification(notification_id, {"status": "in_progress"})
     
-    # Redirect to dashboard
-    return RedirectResponse(url=f"{DASHBOARD_URL}?highlight={notification_id}")
+    # Redirect to dashboard. 303 so the browser follows with a GET; the default
+    # 307 would re-POST the form to the dashboard page.
+    return RedirectResponse(url=f"{DASHBOARD_URL}?highlight={notification_id}", status_code=303)
 
 
-@router.get("/approve")
-async def approve_action(token: str = Query(...)):
+@router.post("/approve")
+async def approve_action(token: str = Form(...)):
     """
     Approve a booking request - updates status and sends guest confirmation.
     Magic link is ONE-TIME USE ONLY. Subsequent clicks redirect to dashboard.
     """
-    is_valid, payload, error = verify_action_token(token)
+    is_valid, payload, error = _verify_for("approve", token)
     
     if not is_valid:
         return HTMLResponse(content=error_page("Link Invalid", error), status_code=400)
