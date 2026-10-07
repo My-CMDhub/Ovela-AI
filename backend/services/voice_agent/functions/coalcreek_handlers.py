@@ -1756,6 +1756,67 @@ async def _handle_stripe_and_guest_email(
 # COAL CREEK DISPATCHER
 # =============================================================================
 
+# Tools that cannot change a reservation row. Anything not listed here
+# invalidates the per-call lookup memo — a new tool defaults to safe, not fast.
+_RESERVATION_READ_ONLY_TOOLS = frozenset({
+    "lookup_booking",
+    "check_availability",
+    "perform_live_search",
+    "hang_up_call",
+    "transfer_to_staff",
+    "wait_on_request",
+    "report_user_behavior",
+})
+
+
+class _CachedReservationLookup:
+    """
+    Per-call memo in front of `lookup_motel_reservation`.
+
+    A single call asks the same question over and over: trace
+    CA591f56d4f5055bd64cb598b2de7a58cd shows `lookup_booking` firing 8 times
+    in 204 seconds, and each miss on the caller's phone falls through to a
+    name query and then a 100-document scan — three sequential Appwrite round
+    trips at ~250ms apiece, inside a turn budgeted at 800ms end to end.
+
+    The caller's reservation cannot change mid-call unless we change it, so
+    `invalidate()` is called after any tool that writes. Every other attribute
+    delegates to the real service untouched.
+    """
+
+    def __init__(self, db_service):
+        self._db = db_service
+        self._cache: dict[tuple, "asyncio.Future"] = {}
+
+    def __getattr__(self, name):
+        # Only reached for attributes this proxy does not define itself.
+        return getattr(self._db, name)
+
+    async def lookup_motel_reservation(self, *args, **kwargs):
+        if args:
+            # Positional callers bypass the memo rather than risk a key that
+            # does not match the keyword form of the same query.
+            return await self._db.lookup_motel_reservation(*args, **kwargs)
+
+        key = tuple(sorted(kwargs.items()))
+        task = self._cache.get(key)
+        if task is None:
+            # Cache the task, not the result: the startup prefetch and the
+            # first tool call race for the same row, and the loser must join
+            # the in-flight request instead of issuing a second one.
+            task = asyncio.ensure_future(self._db.lookup_motel_reservation(**kwargs))
+            self._cache[key] = task
+        try:
+            return await task
+        except Exception:
+            # A transient Appwrite error must not poison the rest of the call.
+            self._cache.pop(key, None)
+            raise
+
+    def invalidate(self) -> None:
+        self._cache.clear()
+
+
 class CoalCreekFunctionDispatcher:
     """
     Dispatches Coal Creek specific function calls.
@@ -1763,7 +1824,9 @@ class CoalCreekFunctionDispatcher:
     """
     
     def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, caller_memory_bank=None, call_sid: str = "", adk_orchestrator=None):
-        self.db_service = db_service
+        # Wrap reads in a per-call memo. Repeated `lookup_booking` calls in one
+        # call were re-issuing the same Appwrite queries at ~250ms each.
+        self.db_service = _CachedReservationLookup(db_service)
         self.user_phone = user_phone
         self.save_reservation_fn = save_reservation_fn
         self.abuse_protection = abuse_protection
@@ -1772,6 +1835,30 @@ class CoalCreekFunctionDispatcher:
         self.adk_orchestrator = adk_orchestrator  # In-process ADKOrchestrator (avoids HTTP loopback)
         # Always set context on init
         set_tenant_context("coalcreek")
+
+    def prefetch_caller_reservation(self) -> None:
+        """
+        Warm the caller's own booking while the greeting is still playing.
+
+        Deepgram, the model and Cartesia all get a head start at call setup;
+        the first `lookup_booking` did not, and paid ~250ms of Appwrite round
+        trip inside the turn instead. The memo means the tool call joins this
+        request rather than repeating it.
+        """
+        if not self.user_phone:
+            return
+        try:
+            from services.voice_agent.text_utils import normalize_phone_number
+            phone = normalize_phone_number(self.user_phone)
+        except Exception:
+            phone = self.user_phone
+        try:
+            asyncio.ensure_future(
+                self.db_service.lookup_motel_reservation(phone=phone, tenant_id="coalcreek")
+            )
+        except RuntimeError:
+            # No running loop (test context) — a cold first lookup is slow, not broken.
+            logger.debug("📇 Reservation prefetch skipped (no event loop)")
 
     def fire_adk_cold_path(self, query: str, session_state: dict | None = None) -> None:
         """
@@ -1878,6 +1965,9 @@ class CoalCreekFunctionDispatcher:
                 self._dispatch(function_name, args, context),
                 timeout=TIMEOUT
              )
+             if function_name not in _RESERVATION_READ_ONLY_TOOLS:
+                 # Unknown or writing tool: assume the reservation moved.
+                 self.db_service.invalidate()
              return result
         except asyncio.TimeoutError:
              logger.error(f"Function {function_name} timed out after {TIMEOUT}s")
