@@ -73,6 +73,7 @@ class TestCascadedPipelineOrchestrator:
         """
         orchestrator.is_running = True
         orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator._agent_audio_started = True  # agent is audibly speaking
         with patch.object(orchestrator.deepgram, "send_audio", AsyncMock()), \
              patch.object(orchestrator.vad, "process_mulaw", return_value=True), \
              patch.object(orchestrator.vad, "is_immune", return_value=False), \
@@ -141,26 +142,35 @@ class TestCascadedPipelineOrchestrator:
             )
 
     @pytest.mark.asyncio
-    async def test_default_llm_callback(self, orchestrator):
+    async def test_no_barge_in_while_agent_is_thinking(self, orchestrator):
         """
-        Verify default LLM callback uses ADKOrchestrator query_stream or falls back.
+        Regression: LLM think-time is 2-3s. Barge-in must stay disarmed until
+        the first audio chunk actually reaches Twilio, or the caller saying
+        "hello?" while waiting cancels the reply they are waiting for.
         """
-        history = [{"role": "user", "content": "Hello Ovela"}]
-        with patch("services.adk.graph.ADKOrchestrator") as mock_adk_cls:
-            mock_adk = MagicMock()
-            async def fake_query_stream(user_id, session_id, text):
-                yield "Hello! "
-                yield "How can I help today?"
-            mock_adk.query_stream = fake_query_stream
-            mock_session = MagicMock()
-            mock_session.id = "mock_sess"
-            mock_adk.get_or_create_session = AsyncMock(return_value=mock_session)
-            mock_adk_cls.return_value = mock_adk
-            
-            chunks = []
-            async for chunk in orchestrator._default_llm_callback(history):
-                chunks.append(chunk)
-            assert chunks == ["Hello! ", "How can I help today?"]
+        orchestrator.is_running = True
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator._agent_audio_started = False   # thinking, not yet audible
+        orchestrator.vad.process_mulaw = MagicMock(return_value=True)  # caller speaks
+        orchestrator.vad.arm_immunity(duration_s=0.0)  # immunity expired
+        orchestrator.trigger_barge_in = AsyncMock()
+
+        await orchestrator.handle_twilio_audio(b"\xff" * 160)
+        orchestrator.trigger_barge_in.assert_not_awaited()
+
+        # Once audio is genuinely flowing, barge-in must work again.
+        orchestrator._agent_audio_started = True
+        await orchestrator.handle_twilio_audio(b"\xff" * 160)
+        orchestrator.trigger_barge_in.assert_awaited_once()
+
+    @staticmethod
+    def _delta(content=None, tool_calls=None):
+        """Build a minimal OpenAI streaming chunk."""
+        ev = MagicMock()
+        ev.choices = [MagicMock()]
+        ev.choices[0].delta.content = content
+        ev.choices[0].delta.tool_calls = tool_calls
+        return ev
 
     @pytest.mark.asyncio
     async def test_run_loop_processes_twilio_events(self, orchestrator):
@@ -253,5 +263,47 @@ class TestCascadedPipelineOrchestrator:
                 transcript="this is a test of the parallel queue.",
                 continue_stream=False
             )
+
+    @pytest.mark.asyncio
+    async def test_stale_cartesia_context_does_not_kill_current_turn(self, orchestrator):
+        """
+        Regression: Cartesia multiplexes all contexts on one socket. After a
+        barge-in cancel, the cancelled context still emits trailing chunks and a
+        `done`. That stale `done` must NOT terminate the next turn's receiver —
+        it previously did, and the caller heard silence on every turn following
+        an interruption.
+        """
+        async def fake_llm_stream(history):
+            yield "Here is your answer."
+
+        orchestrator.llm_callback = fake_llm_stream
+        orchestrator.state = ConversationState.AGENT_SPEAKING
+        orchestrator.current_context_id = "ctx_current"
+        orchestrator.stream_sid = "MZtest"
+        orchestrator.cartesia.send_transcript_chunk = AsyncMock()
+
+        sent_media = []
+        async def capture(payload):
+            if '"media"' in payload:
+                sent_media.append(payload)
+        orchestrator.twilio_ws.send_text = AsyncMock(side_effect=capture)
+
+        async def fake_audio_events():
+            # Leftovers from the cancelled previous turn arrive first.
+            yield {"type": "chunk", "context_id": "ctx_cancelled", "data": "c3RhbGU="}
+            yield {"type": "done",  "context_id": "ctx_cancelled"}
+            # This turn's real audio follows and must still be delivered.
+            yield {"type": "chunk", "context_id": "ctx_current", "data": "YXVkaW8="}
+            yield {"type": "done",  "context_id": "ctx_current"}
+
+        orchestrator.cartesia.receive_audio_events = fake_audio_events
+
+        with patch("services.voice_agent.cascaded_orchestrator.prepare_for_tts", side_effect=lambda x: (x, [])), \
+             patch("asyncio.sleep", AsyncMock()):
+            await orchestrator._run_parallel_streaming_pipeline()
+
+        # The current turn's audio reached Twilio despite the stale `done`.
+        assert any("YXVkaW8=" in p for p in sent_media), "current turn audio was dropped"
+        assert not any("c3RhbGU=" in p for p in sent_media), "stale audio was forwarded"
 
 
