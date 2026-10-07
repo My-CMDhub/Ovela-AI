@@ -107,6 +107,14 @@ class CascadedPipelineOrchestrator:
         self.tenant_id: str = settings.TENANT_ID
         self.call_sid: str = ""
 
+        # Built once per call by _ensure_call_context(); the lock stops the
+        # start-event task and the first turn from building it twice.
+        self._context_ready: bool = False
+        self._context_lock: asyncio.Lock = asyncio.Lock()
+        self.tenant_config: Dict[str, Any] = {}
+        self.dispatcher = None
+        self._openai = None
+
         # Core state & history
         self.state = ConversationState.AWAITING_INPUT
         self.history: List[Dict[str, Any]] = []
@@ -213,6 +221,86 @@ class CascadedPipelineOrchestrator:
         confirmed_idx = self.mark_tracker.confirmed_index
         self.history = prune_conversation_history(self.history, confirmed_word_index=confirmed_idx)
         self.mark_tracker.reset()
+
+    async def trigger_initial_greeting(self) -> None:
+        """
+        Streams pre-recorded zero-latency greeting audio clip (`smart_greeting.mulaw.raw`)
+        immediately upon call connect, falling back to Cartesia TTS if missing.
+        """
+        greeting = "Hello! Thanks for calling Coal Creek Accommodation. How can I help you today?"
+        logger.info(f"🗣️ [CascadedOrchestrator] Triggering initial greeting: '{greeting}'")
+        self.history.append({"role": "assistant", "content": greeting})
+        self.state = ConversationState.AGENT_SPEAKING
+
+        # Greeting audio starts immediately, so barge-in is armed from here
+        # (gated by the 3s echo-immunity window below).
+        self._agent_audio_started = True
+        self.vad.arm_immunity(duration_s=3.0)
+
+        # Check for pre-recorded cached audio clip to eliminate cold-start TTS latency
+        audio_clip_path = Path(__file__).resolve().parent / "audio" / "f786b574-daa5-4673-aa0c-cbe3e8534c02" / "smart_greeting.mulaw.raw"
+        if audio_clip_path.exists():
+            try:
+                raw_bytes = audio_clip_path.read_bytes()
+                logger.info(f"⚡ [CascadedOrchestrator] Playing zero-latency cached smart_greeting ({len(raw_bytes)} bytes)")
+                
+                # Stream in 1600-byte (200ms) chunks to Twilio
+                chunk_size = 1600
+                for i in range(0, len(raw_bytes), chunk_size):
+                    if not self.is_running or self.state != ConversationState.AGENT_SPEAKING:
+                        break
+                    chunk = raw_bytes[i:i + chunk_size]
+                    payload_b64 = base64.b64encode(chunk).decode("utf-8")
+                    media_event = {
+                        "event": "media",
+                        "streamSid": self.stream_sid,
+                        "media": {"payload": payload_b64}
+                    }
+                    if self.twilio_ws:
+                        await self.twilio_ws.send_text(json.dumps(media_event))
+                    await asyncio.sleep(0.18)  # ~200ms pacing for 8kHz mu-law audio
+                return
+            except Exception as e:
+                logger.warning(f"🟡 [CascadedOrchestrator] Failed playing cached greeting audio clip: {e}")
+            finally:
+                if self.state == ConversationState.AGENT_SPEAKING:
+                    self.state = ConversationState.AWAITING_INPUT
+
+        # Fallback: Stream initial greeting via Cartesia TTS
+        try:
+            self.current_context_id = f"greeting_{int(time.time()*1000)}"
+            word_count = 0
+            async for audio_chunk, marks in self.cartesia.stream_speech(
+                text=greeting,
+                context_id=self.current_context_id,
+                continue_stream=False
+            ):
+                if not self.is_running or self.state != ConversationState.AGENT_SPEAKING:
+                    break
+                payload_b64 = base64.b64encode(audio_chunk).decode("utf-8")
+                media_event = {
+                    "event": "media",
+                    "streamSid": self.stream_sid,
+                    "media": {"payload": payload_b64}
+                }
+                if self.twilio_ws:
+                    await self.twilio_ws.send_text(json.dumps(media_event))
+
+                for mark in marks:
+                    mark_event = {
+                        "event": "mark",
+                        "streamSid": self.stream_sid,
+                        "mark": {"name": mark}
+                    }
+                    if self.twilio_ws:
+                        await self.twilio_ws.send_text(json.dumps(mark_event))
+                    word_count += 1
+            self.mark_tracker.set_total_words(word_count)
+        except Exception as e:
+            logger.error(f"🔴 [CascadedOrchestrator] Failed streaming initial greeting: {e}")
+        finally:
+            if self.state == ConversationState.AGENT_SPEAKING:
+                self.state = ConversationState.AWAITING_INPUT
 
     async def process_deepgram_events(self) -> None:
         """
@@ -563,6 +651,121 @@ class CascadedPipelineOrchestrator:
         await self.cartesia.close()
         logger.info("🛑 [CascadedOrchestrator] Stopped completely")
 
+    async def _apply_voice_settings(self) -> None:
+        """
+        Push Appwrite `Tenants.config.voice_settings` onto the live bridges.
+
+        Cartesia sends voice/model in every synthesis payload, so updating the
+        attributes is enough — no reconnect. Deepgram's turn thresholds are
+        connect-URL params, so they are re-sent via a Flux `Configure` message.
+        """
+        vs = (self.tenant_config or {}).get("voice_settings", {})
+        if not vs:
+            logger.warning(
+                f"🟡 [CascadedOrchestrator] No voice_settings for tenant={self.tenant_id}; "
+                "using code defaults"
+            )
+            return
+
+        if vs.get("voice_id"):
+            self.cartesia.voice_id = vs["voice_id"]
+        if vs.get("tts_model"):
+            self.cartesia.model_id = vs["tts_model"]
+
+        # The STT model is baked into Deepgram's connect URL, which is opened
+        # before this config is available. It currently matches by coincidence;
+        # surface the drift loudly rather than silently running the wrong model.
+        db_stt_model = vs.get("model")
+        if db_stt_model and db_stt_model != self.deepgram.model:
+            logger.warning(
+                f"🟡 [CascadedOrchestrator] voice_settings.model='{db_stt_model}' but the "
+                f"Deepgram socket is already connected with '{self.deepgram.model}'. "
+                "The DB value is NOT applied this call — restart is required to change STT model."
+            )
+
+        # `speed` may be a legacy string (slow/normal/fast) or a number.
+        speed = vs.get("speed")
+        if speed is not None:
+            named = {"slow": 0.8, "normal": 1.0, "fast": 1.2}
+            try:
+                value = named[speed.strip().lower()] if isinstance(speed, str) else float(speed)
+                self.cartesia.speed = min(max(value, 0.6), 1.5)  # Cartesia range
+            except (KeyError, TypeError, ValueError):
+                logger.warning(f"🟡 [CascadedOrchestrator] Unrecognised speed '{speed}', ignoring")
+        if vs.get("volume") is not None:
+            try:
+                self.cartesia.volume = min(max(float(vs["volume"]), 0.5), 2.0)
+            except (TypeError, ValueError):
+                logger.warning(f"🟡 [CascadedOrchestrator] Unrecognised volume '{vs['volume']}', ignoring")
+
+        try:
+            eot = float(vs.get("eot_threshold", 0.6))
+            eot_timeout = int(vs.get("eot_timeout_ms", 1000))
+            eager = float(vs.get("eager_eot_threshold", 0.4))
+            # Keep the bridge's own attributes in sync with what Deepgram was
+            # told, so logs and reconnects don't report stale values.
+            self.deepgram.eot_threshold = eot
+            self.deepgram.eot_timeout_ms = eot_timeout
+            self.deepgram.eager_eot_threshold = eager
+            await self.deepgram.send_configure(
+                eot_threshold=eot,
+                eot_timeout_ms=eot_timeout,
+                eager_eot_threshold=eager,
+            )
+        except (TypeError, ValueError) as e:
+            logger.warning(f"🟡 [CascadedOrchestrator] Bad turn-taking settings, keeping defaults: {e}")
+
+        logger.info(
+            f"🎚️ [CascadedOrchestrator] voice_settings applied | voice={self.cartesia.voice_id} "
+            f"| tts={self.cartesia.model_id} | eot={vs.get('eot_threshold')} "
+            f"| eot_timeout_ms={vs.get('eot_timeout_ms')}"
+        )
+
+    async def _ensure_call_context(self) -> None:
+        """
+        Lazily build per-call context: tenant voice_settings, the function
+        dispatcher, and the OpenAI client. Runs once per call.
+        """
+        if self._context_ready:
+            return
+        async with self._context_lock:
+            if self._context_ready:   # another task won the race
+                return
+            await self._build_call_context()
+
+    async def _build_call_context(self) -> None:
+        from services.appwrite import db_service
+        from services.voice_agent.abuse_protection import AbuseProtection
+        from services.voice_agent.memory import CallerMemoryBank
+        from services.voice_agent.functions import CoalCreekFunctionDispatcher
+        from openai import AsyncOpenAI
+
+        self.tenant_config = await db_service.get_tenant_config(self.tenant_id) or {}
+
+        # Reuse the singleton warmed at startup — building the ADK graph
+        # per turn cost ~4s of dead air.
+        adk_state = getattr(getattr(self.twilio_ws, "app", None), "state", None)
+        adk_orchestrator = getattr(adk_state, "adk_orchestrator", None)
+
+        self.dispatcher = CoalCreekFunctionDispatcher(
+            db_service=db_service,
+            user_phone=self.user_phone,
+            save_reservation_fn=lambda data: db_service.save_motel_reservation(
+                data, tenant_id=self.tenant_id
+            ),
+            abuse_protection=AbuseProtection(tenant_id=self.tenant_id),
+            caller_memory_bank=CallerMemoryBank(),
+            call_sid=self.call_sid,
+            adk_orchestrator=adk_orchestrator,
+        )
+        self._openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        await self._apply_voice_settings()
+        self._context_ready = True
+        logger.info(
+            f"🧩 [CascadedOrchestrator] Call context ready | tenant={self.tenant_id} "
+            f"| adk_singleton={'yes' if adk_orchestrator else 'no'}"
+        )
+
     async def _default_llm_callback(self, history: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
         """
         Default LLM response generation using ADKOrchestrator query_stream if available,
@@ -575,18 +778,72 @@ class CascadedPipelineOrchestrator:
             return
 
         try:
-            from services.adk.graph import ADKOrchestrator
-            orchestrator = ADKOrchestrator()
-            user_id = self.stream_sid or "cascaded_session"
-            session = await orchestrator.get_or_create_session(user_id=user_id)
-            async for chunk in orchestrator.query_stream(
-                user_id=user_id,
-                session_id=session.id,
-                text=latest_user_text,
-            ):
-                yield chunk
+            await self._ensure_call_context()
+            voice_settings = (self.tenant_config or {}).get("voice_settings", {})
+            model = voice_settings.get("llm_model") or "gpt-4.1-nano"
+
+            now = datetime.now(ZoneInfo("Australia/Melbourne"))
+            messages: List[Dict[str, Any]] = [{
+                "role": "system",
+                "content": get_coalcreek_prompt(
+                    now.strftime("%Y-%m-%d"), now.strftime("%I:%M %p")
+                ),
+            }] + list(history)
+            tools = [
+                {"type": "function", "function": fn}
+                for fn in get_coalcreek_functions()
+            ]
+
+            # Bounded so a tool-calling loop can never stall the voice turn.
+            for _round in range(3):
+                stream = await self._openai.chat.completions.create(
+                    model=model, messages=messages, tools=tools, stream=True,
+                )
+                pending: Dict[int, Dict[str, str]] = {}
+                assistant_text = ""
+
+                async for event in stream:
+                    if not event.choices:
+                        continue
+                    delta = event.choices[0].delta
+                    if delta.content:
+                        assistant_text += delta.content
+                        yield delta.content
+                    for tc in (delta.tool_calls or []):
+                        slot = pending.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                        if tc.id:
+                            slot["id"] = tc.id
+                        if tc.function and tc.function.name:
+                            slot["name"] += tc.function.name
+                        if tc.function and tc.function.arguments:
+                            slot["args"] += tc.function.arguments
+
+                if not pending:
+                    return
+
+                messages.append({
+                    "role": "assistant",
+                    "content": assistant_text or None,
+                    "tool_calls": [
+                        {"id": c["id"], "type": "function",
+                         "function": {"name": c["name"], "arguments": c["args"] or "{}"}}
+                        for c in pending.values()
+                    ],
+                })
+                for call in pending.values():
+                    try:
+                        args = json.loads(call["args"] or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    logger.info(f"🔧 [CascadedOrchestrator] Tool call: {call['name']}({list(args)})")
+                    result = await self.dispatcher.execute(call["name"], args)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": json.dumps(result, default=str)[:4000],
+                    })
         except Exception as e:
-            logger.warning(f"🟡 [CascadedOrchestrator] ADK fallback generation warning: {e}")
+            logger.error(f"🔴 [CascadedOrchestrator] LLM generation failed: {e}", exc_info=True)
             yield "I am checking those details right now. Just one moment please."
 
     async def run_loop(self) -> None:
@@ -618,6 +875,11 @@ class CascadedPipelineOrchestrator:
                             f"🚀 [CascadedOrchestrator] Twilio stream started: {self.stream_sid} "
                             f"| tenant={self.tenant_id} | caller={self.user_phone[:6]}***"
                         )
+                        # Load tenant config now, concurrently with the greeting,
+                        # so voice_settings are live before the first synthesis
+                        # instead of arriving a turn late.
+                        asyncio.create_task(self._ensure_call_context())
+                        asyncio.create_task(self.trigger_initial_greeting())
                     elif event_type == "media":
                         payload = data["media"].get("payload")
                         if payload:

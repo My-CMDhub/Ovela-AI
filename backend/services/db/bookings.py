@@ -267,6 +267,37 @@ class BookingsMixin:
 
     # ==================== MOTEL RESERVATION UPDATES ====================
 
+    async def save_motel_reservation(self, data: dict, tenant_id: str = "coalcreek") -> dict:
+        """
+        Create a motel reservation document.
+
+        Shared by both the legacy monolithic handler and the cascaded pipeline
+        so booking persistence has exactly one implementation.
+
+        Returns ``{"success": True, "document": <doc>}`` or
+        ``{"success": False, "error": "<message>"}``. Never raises.
+        """
+        try:
+            doc_id = ID.unique()
+            payload = dict(data)
+            payload["tenant_id"] = tenant_id
+            doc = await self._motel_request(
+                "POST",
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                data={"documentId": doc_id, "data": payload},
+            )
+            if not doc:
+                return {"success": False, "error": "Appwrite returned no document"}
+            logger.info(
+                "✅ Reservation saved | doc_id=%s | booking_ref=%s",
+                doc.get("$id", doc_id),
+                payload.get("booking_reference", "?"),
+            )
+            return {"success": True, "document": doc}
+        except Exception as e:
+            logger.error(f"Error saving reservation: {e}")
+            return {"success": False, "error": str(e)}
+
     async def update_motel_reservation(self, booking_id: str, data: dict) -> dict:
         """
         Generic PATCH for a motel reservation document.

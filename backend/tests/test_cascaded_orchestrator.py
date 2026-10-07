@@ -173,6 +173,67 @@ class TestCascadedPipelineOrchestrator:
         return ev
 
     @pytest.mark.asyncio
+    async def test_default_llm_callback_streams_gpt_text(self, orchestrator):
+        """
+        The conversational driver is GPT (never ADK) and yields streamed text.
+        """
+        async def fake_stream(*_a, **_kw):
+            for part in ("Hello! ", "How can I help today?"):
+                yield TestCascadedPipelineOrchestrator._delta(content=part)
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock()
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            return_value=fake_stream()
+        )
+
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "Hello Ovela"}]
+        )]
+        assert chunks == ["Hello! ", "How can I help today?"]
+
+        # The DB-configured model must be the one actually requested.
+        assert orchestrator._openai.chat.completions.create.call_args.kwargs["model"] == "gpt-4.1-nano"
+
+    @pytest.mark.asyncio
+    async def test_default_llm_callback_executes_tool_calls(self, orchestrator):
+        """
+        Streamed tool-call deltas are reassembled and dispatched, then the
+        follow-up round streams the spoken answer.
+        """
+        tc = MagicMock()
+        tc.index = 0
+        tc.id = "call_1"
+        tc.function.name = "check_availability"
+        tc.function.arguments = '{"room_type": "any"}'
+
+        async def round_one(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(tool_calls=[tc])
+
+        async def round_two(*_a, **_kw):
+            yield TestCascadedPipelineOrchestrator._delta(content="We have a Queen available.")
+
+        orchestrator._context_ready = True
+        orchestrator.tenant_config = {"voice_settings": {"llm_model": "gpt-4.1-nano"}}
+        orchestrator.dispatcher = MagicMock()
+        orchestrator.dispatcher.execute = AsyncMock(return_value={"available": ["Queen"]})
+        orchestrator._openai = MagicMock()
+        orchestrator._openai.chat.completions.create = AsyncMock(
+            side_effect=[round_one(), round_two()]
+        )
+
+        chunks = [c async for c in orchestrator._default_llm_callback(
+            [{"role": "user", "content": "any rooms free?"}]
+        )]
+
+        orchestrator.dispatcher.execute.assert_awaited_once_with(
+            "check_availability", {"room_type": "any"}
+        )
+        assert chunks == ["We have a Queen available."]
+
+    @pytest.mark.asyncio
     async def test_run_loop_processes_twilio_events(self, orchestrator):
         """
         Verify run_loop iterates through Twilio messages and dispatches start, media, mark, stop.
