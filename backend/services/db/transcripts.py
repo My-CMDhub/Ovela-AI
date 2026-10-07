@@ -119,13 +119,20 @@ class TranscriptsMixin:
         room_type: str = None,
         metadata: dict = None,
         call_summary: str = None,
-        customer_name: str = None
+        customer_name: str = None,
+        document_id: str = None
     ) -> dict:
-        """Save a call transcript to tenant-specific collection."""
+        """Save a call transcript to tenant-specific collection.
+
+        `document_id` overrides the CallSid-derived id. A call that comes back
+        from an unanswered transfer keeps its CallSid, so saving the second
+        leg under the same id upserted over the first and erased everything
+        the caller said before asking for a person.
+        """
         try:
             MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
             collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
-            doc_id = call_sid if (call_sid and len(call_sid) <= 36) else ID.unique()
+            doc_id = document_id or (call_sid if (call_sid and len(call_sid) <= 36) else ID.unique())
             now = datetime.now(MELBOURNE_TZ).isoformat()
 
             if tenant_id == "coalcreek":
@@ -317,6 +324,33 @@ class TranscriptsMixin:
         except Exception as e:
             logger.error(f"Error updating call log for {call_sid}: {e}")
             return False
+
+    async def call_already_recorded(self, call_sid: str, tenant_id: str = "coalcreek") -> bool:
+        """
+        Does this CallSid already have a (non-blocked) transcript?
+
+        Used to exempt the leg that returns to the AI after a failed staff
+        transfer from the voice rate limit: that leg keeps the CallSid of a
+        call that was already admitted and recorded (save_call_transcript uses
+        the CallSid as the document id), so a single GET by id proves it. A
+        forged `?transfer_failed=true` on a new call has no such record and
+        gets the normal check. Never raises; anything unexpected is "no".
+        """
+        # Goes into a URL path: only plain Twilio-style ids (CA + 32 hex).
+        if not call_sid or len(call_sid) > 36 or not call_sid.isalnum():
+            return False
+        try:
+            collection_id = await self.get_transcript_collection_for_tenant(tenant_id)
+            doc = await self._make_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/{collection_id}/documents/{call_sid}",
+            )
+        except Exception as e:
+            logger.warning(f"Could not look up call record {call_sid}: {e}")
+            return False
+        if not doc or not isinstance(doc, dict):
+            return False
+        return (doc.get("status") or doc.get("outcome")) != "blocked"
 
     async def check_voice_rate_limit(self, phone: str, tenant_id: str = "coalcreek") -> tuple[bool, str]:
         """

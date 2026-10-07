@@ -29,6 +29,7 @@ from fastapi import WebSocket
 from appwrite.id import ID
 
 from core.config import settings
+from core.stream_auth import check_stream_start
 from services.appwrite import db_service
 import os
 
@@ -711,6 +712,8 @@ class VoiceAgentHandler:
                 
                 if event_type == "start":
                     await self._handle_twilio_start(data)
+                    if not self.is_running:   # rejected by stream auth
+                        break
                 elif event_type == "media":
                     await self._handle_twilio_media(data)
                 elif event_type == "stop":
@@ -733,6 +736,18 @@ class VoiceAgentHandler:
         
         Extracts call metadata and connects to Deepgram Agent API.
         """
+        # Same gate as the cascaded path (core/stream_auth): under "enforce" an
+        # unverified start never gets its user_phone believed, its greeting
+        # played or its bookings loaded. Legacy path: only the start is gated.
+        if not check_stream_start(data.get("start") or {}):
+            logger.warning("🔐 Rejecting stream: invalid or missing stream_token")
+            self.is_running = False
+            try:
+                await self.twilio_ws.close(code=1008)
+            except Exception:
+                pass
+            return
+
         self.stream_sid = data["start"]["streamSid"]
         
         # Extract Call SID for hangup capability

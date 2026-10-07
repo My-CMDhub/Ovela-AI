@@ -70,3 +70,6 @@ scripts/*.py
 # Local documentation
 redeploy-guide.md
 !scripts/probe_live_call.py
+
+# Output of scripts/tts_ab.py (audio, keys, results) — local listening material, not source.
+tts_ab_out/

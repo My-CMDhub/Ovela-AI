@@ -12,6 +12,7 @@ Routes:
 - POST /api/motel/reservations - Create reservation
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Optional
@@ -860,200 +861,442 @@ async def regenerate_payment_link(booking_id: str):
 # ============================================================================
 
 from fastapi import Request, Header
+from fastapi.responses import JSONResponse
+
+# Delivery contract with Stripe (events arrive at-least-once, retried with backoff
+# for up to 3 days on any non-2xx):
+#   - 2xx  = "done, never send this again". Only return it once the booking write
+#            has landed, or when retrying cannot help (unknown booking, other tenant).
+#   - 5xx  = "try again later". Used when Appwrite failed, so a paid booking is not
+#            left at pending_payment with no confirmation email.
+# Every handled event is safe to replay: side effects run only after a successful
+# write and are skipped when the booking already shows the outcome.
+
+# Unpaid holds the voice agent writes (coalcreek_handlers.create_booking: "pending"
+# soft hold, "reserved" when PMS auto-assigns a room). The staff approval flow
+# writes "link_sent" instead; it keeps its historical "expired" outcome below.
+_VOICE_HOLD_STATUSES = ("pending", "reserved")
+# Money or a card is secured: an expiring checkout session must never undo these.
+_SECURED_PAYMENT_STATUSES = ("paid", "card_on_file")
+# The voice path creates the session and PATCHes payment_link_sent_at a few seconds
+# apart. A link stamped later than this after the expiring session was created
+# came from a newer session (a resend), which is still payable.
+_SUPERSEDED_LINK_GRACE_S = 120
+
+
+# Events whose failed write has already been escalated by this process. Stripe
+# redelivers for up to three days; one alert per event is enough, and losing
+# this set on a restart costs at most one repeat email.
+_ESCALATED_EVENTS: set = set()
+# Strong references to fire-and-forget alert tasks, so none is collected mid-send.
+_ALERT_TASKS: set = set()
+
+
+def _spawn_alert(coro) -> None:
+    task = asyncio.create_task(coro)
+    _ALERT_TASKS.add(task)
+    task.add_done_callback(_ALERT_TASKS.discard)
+
+
+def _webhook_retry(event_id: str, reason: str, booking_ref: str = None) -> JSONResponse:
+    """Answer 503 so Stripe redelivers the event later — and say so loudly.
+
+    `_make_request` folds every Appwrite failure into None, so a transient
+    outage and a permanent rejection (an attribute the schema lacks) look the
+    same here. Retrying covers the first; only a person covers the second, so
+    every retry also reaches Sentry and, once per event, the staff inbox.
+    """
+    msg = f"Stripe webhook {event_id}: {reason} (ref={booking_ref}) — answering 503 so Stripe retries"
+    logger.error(msg)
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_message(msg, level="error")
+    except Exception:
+        pass  # Telemetry must never change the answer Stripe gets.
+    if event_id and event_id not in _ESCALATED_EVENTS:
+        _ESCALATED_EVENTS.add(event_id)
+        _spawn_alert(_alert_staff_webhook_failure(event_id, reason, booking_ref))
+    return JSONResponse(status_code=503, content={"status": "retry", "reason": reason})
+
+
+async def _alert_staff_webhook_failure(event_id: str, reason: str, booking_ref: str = None,
+                                       subject: str = "Stripe payment needs a manual check") -> None:
+    """Best effort: a payment event the system could not record, in a person's inbox."""
+    try:
+        from services.email import email_service
+        send = getattr(email_service, "send_email", None)
+        if send is None:
+            logger.error("No send_email on email_service — staff alert for %s not sent", event_id)
+            return
+        from html import escape
+        html = (
+            "<p>A Stripe event could not be recorded automatically.</p>"
+            f"<p>Booking reference: <b>{escape(booking_ref or 'unknown')}</b><br>"
+            f"Stripe event: {escape(event_id)}<br>Reason: {escape(reason)}</p>"
+            "<p>Please check this booking in the Stripe dashboard and the reservations "
+            "list, and update or refund it by hand if needed.</p>"
+        )
+        # Same address the payment notifications use for this tenant.
+        result = send(to_email="officialcoalcreek@gmail.com", subject=subject, html_content=html)
+        if asyncio.iscoroutine(result):
+            await result
+    except Exception as e:
+        logger.error("Staff alert for Stripe event %s failed: %s", event_id, e)
+
+
+def _report_unmatched_payment(event_id: str, booking_ref: str, stripe_session_id: str) -> None:
+    """A completed checkout with no booking: 200 (retrying cannot conjure the row),
+    but loud — if it is a real guest, staff must reconcile the money by hand."""
+    msg = (
+        f"Stripe webhook {event_id}: checkout.session.completed for unknown booking "
+        f"ref={booking_ref} sid={stripe_session_id}"
+    )
+    logger.error(msg)
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_message(msg, level="error")
+    except Exception:
+        pass  # Telemetry must never change the answer Stripe gets.
+
+
+def _superseded_by_newer_link(doc: dict, session: dict) -> bool:
+    """True if the booking's current payment link was issued after this session.
+
+    resend_payment_link creates a fresh checkout session (payment_expires_at is
+    not in the schema, so the reuse branch never fires), leaving the old one to
+    expire while the guest holds a live link. Releasing the hold then would
+    cancel a booking that can still be paid. A naive timestamp (the staff flow
+    writes local time without an offset) cannot be compared safely, so it does
+    not count as evidence either way.
+    """
+    # Exact answer first: a Checkout URL carries its session id
+    # (checkout.stripe.com/c/pay/cs_...), and both the voice and staff flows
+    # store the URL of the link they last sent. If that URL is not this
+    # session's, a newer link is live. The time-based rule below guessed, and
+    # guessed wrong for a resend inside its two-minute grace.
+    link = doc.get("payment_link_url") or ""
+    session_id = session.get("id") or ""
+    if session_id and "/cs_" in link:
+        return session_id not in link
+
+    created = session.get("created")
+    sent_at = doc.get("payment_link_sent_at")
+    if not created or not sent_at:
+        return False
+    try:
+        sent = datetime.fromisoformat(sent_at)
+    except (TypeError, ValueError):
+        return False
+    if sent.tzinfo is None:
+        return False
+    return sent.timestamp() > float(created) + _SUPERSEDED_LINK_GRACE_S
+
 
 @router.post("/payments/webhook")
 async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
     """
     Handle Stripe webhooks for payment confirmation.
     """
+    from services.tenants.coalcreek.stripe import coalcreek_stripe_service
+
+    payload = await request.body()
+    # Verification is unchanged: construct_event with STRIPE_WEBHOOK_SECRET, and no
+    # secret configured means nothing verifies. The try only keeps a verifier crash
+    # on the same path as a bad signature (unprocessed, 200), which is where the old
+    # catch-all sent it, rather than letting the 5xx handler below turn unsigned
+    # junk into Stripe-style retries.
     try:
-        from services.tenants.coalcreek.stripe import coalcreek_stripe_service
-        
-        payload = await request.body()
         verification = coalcreek_stripe_service.verify_webhook(payload, stripe_signature)
-        
-        if not verification.get("valid"):
-            logger.warning("Invalid Stripe webhook signature")
-            # Don't return 400 to avoid Stripe retrying, just warn and 200
-            return {"status": "ignored", "reason": "invalid_signature"}
-            
-        event = verification.get("event")
-        event_type = getattr(event, "type", None) or event.get("type")
-        
-        if event_type == "checkout.session.completed":
-            session = getattr(event.data, "object", None) or event.get("data", {}).get("object", {})
-            
-            # Handle success (Payment or Setup)
-            result = await coalcreek_stripe_service.handle_checkout_completion(session)
-            
-            if result.get("success"):
-                # Update Booking Status in DB
-                booking_ref = result.get("booking_ref")
-                mode = result.get("mode", "payment")
-                stripe_session_id = getattr(session, "id", None) or session.get("id", "")
-                stripe_payment_id = result.get("payment_intent")
-                amount_total_cents = result.get("amount_total", 0)
-
-                # PRIMARY lookup: booking_reference from Stripe metadata
-                # FALLBACK: stripe_session_id stored on doc during booking creation
-                from services.appwrite import db_service as _db
-                booking_doc = None
-                if booking_ref:
-                    booking_doc = await _db.get_booking_by_reference(booking_ref)
-                if not booking_doc and stripe_session_id:
-                    logger.warning(
-                        "⚠️ Webhook: booking_ref lookup missed for %s — falling back to stripe_session_id",
-                        booking_ref,
-                    )
-                    booking_doc = await _db.get_booking_by_stripe_session(stripe_session_id)
-
-                if booking_doc:
-                    doc_id = booking_doc.get("$id")
-                    
-                    if mode == "setup":
-                        # Card saved — mark confirmed but not paid
-                        await _db.update_motel_reservation(doc_id, {
-                            "status": "confirmed",
-                            "payment_status": "card_on_file",
-                            "stripe_setup_intent": result.get("setup_intent"),
-                        })
-                        logger.info("💳 Booking %s card securely saved (SetupIntent)", booking_ref)
-                    else:
-                        # Paid — mark paid and confirmed atomically
-                        await _db.update_booking_payment_status(
-                            booking_id=doc_id,
-                            payment_status="paid",
-                            stripe_payment_id=stripe_payment_id,
-                            deposit_paid=float(amount_total_cents) / 100.0,
-                            status="confirmed"
-                        )
-                        logger.info("💰 Booking %s marked as PAID | amount=AUD$%.2f", booking_ref, amount_total_cents / 100.0)
-
-                    # Send notifications using the fully-populated doc
-                    doc = booking_doc
-                    try:
-                        from services.email import email_service
-
-                        tenant_id = doc.get("tenant_id", "coalcreek")
-                        
-                        # Use DB email, but fallback to the email entered during Stripe checkout if missing
-                        guest_email = doc.get("guest_email") or result.get("customer_email")
-                        if not guest_email:
-                            logger.error("❌ No guest_email found on booking doc or Stripe session for %s", booking_ref)
-
-                        _COALCREEK_DEFAULTS = {
-                            "staff_email": "officialcoalcreek@gmail.com",
-                            "business_name": "Coal Creek Motel",
-                            "business_phone": "+61348236219",
-                            "location": "8444 South Gippsland Highway, Korumburra VIC 3950",
-                        }
-                        if tenant_id == "coalcreek":
-                            tenant_config = _COALCREEK_DEFAULTS
-                        else:
-                            from services.appwrite import db_service as _db2
-                            tenant_config = await _db2.get_tenant_config(tenant_id) or {}
-
-                        staff_email = tenant_config.get("staff_email") or _COALCREEK_DEFAULTS["staff_email"]
-                        business_name = tenant_config.get("business_name", "Coal Creek Motel")
-
-                        # 1. Notify Staff — isolated so guest email still fires if this fails
-                        try:
-                            await email_service.send_staff_payment_notification(
-                                staff_email=staff_email,
-                                booking_reference=booking_ref,
-                                customer_name=doc.get("guest_name", "Guest"),
-                                customer_email=guest_email,
-                                room_type=doc.get("room_type", ""),
-                                check_in=doc.get("check_in_date", ""),
-                                check_out=doc.get("check_out_date", ""),
-                                num_nights=doc.get("num_nights", 1),
-                                amount_paid=amount_total_cents / 100.0 if mode == "payment" else 0.0,
-                                mode=mode,
-                            )
-                            logger.info("📧 Staff payment notification sent to %s", staff_email)
-                        except Exception as staff_err:
-                            logger.error("❌ Staff notification failed (non-fatal): %s", staff_err)
-
-                        # 2. Notify Guest — isolated so staff email failure cannot block this
-                        if guest_email:
-                            try:
-                                await email_service.send_guest_booking_confirmation(
-                                    guest_email=guest_email,
-                                    guest_name=doc.get("guest_name", "Guest"),
-                                    booking_reference=booking_ref,
-                                    room_type=doc.get("room_type", ""),
-                                    check_in=doc.get("check_in_date", ""),
-                                    check_out=doc.get("check_out_date", ""),
-                                    num_nights=doc.get("num_nights", 1),
-                                    total_amount=amount_total_cents / 100.0 if mode == "payment" else doc.get("total_amount", 0),
-                                    business_name=business_name,
-                                    business_phone=tenant_config.get("business_phone", ""),
-                                    business_location=tenant_config.get("location", ""),
-                                    tenant_id=tenant_id,
-                                )
-                                logger.info("📧 Guest confirmation sent to %s (%s)", guest_email, booking_ref)
-                            except Exception as guest_err:
-                                logger.error("❌ Guest confirmation failed for %s: %s", booking_ref, guest_err)
-                        else:
-                            logger.error("❌ No guest_email on booking doc — skipping guest confirmation for %s", booking_ref)
-
-                    except Exception as email_err:
-                        logger.error("Failed to send payment/setup emails for %s: %s", booking_ref, email_err)
-
-
-                else:
-                    logger.warning("Booking not found for webhook update: ref=%s sid=%s", booking_ref, stripe_session_id)
-
-
-        elif event_type == "checkout.session.expired":
-            session = event.get("data", {}).get("object", {})
-            metadata = session.get("metadata", {})
-            
-            if metadata.get("tenant_id") == "coalcreek":
-                booking_ref = metadata.get("booking_ref")
-                logger.info(f"⚠️ Booking {booking_ref} link EXPIRED")
-                
-                # Find booking by reference
-                query_endpoint = f"/databases/{MOTEL_DB_ID}/collections/motel_reservations/documents"
-                q_str = f'?queries[]=equal("booking_reference", "{booking_ref}")'
-                search_res = await appwrite_request("GET", query_endpoint + q_str)
-                
-                if search_res.get("documents"):
-                    doc = search_res["documents"][0]
-                    # Only expire if still strictly in 'link_sent' status (avoid race conditions if paid)
-                    if doc.get("status") == "link_sent":
-                        await appwrite_request("PATCH", f"{query_endpoint}/{doc.get('$id')}", {
-                            "data": {
-                                "status": "expired", 
-                                "updated_at": datetime.now().isoformat()
-                            }
-                        })
-                        
-                        # Notify Staff
-                        try:
-                            from services.email import email_service
-                            from services.appwrite import db_service
-                            
-                            tenant_id = doc.get("tenant_id", "coalcreek")
-                            tenant_config = await db_service.get_tenant_config(tenant_id)
-                            staff_email = tenant_config.get("staff_email")
-                            
-                            if hasattr(email_service, 'send_expiry_notification'):
-                                await email_service.send_expiry_notification(
-                                    staff_email=staff_email,
-                                    booking_ref=booking_ref,
-                                    customer_name=metadata.get("customer_name"),
-                                    room_type=metadata.get("room_type"),
-                                    check_in=metadata.get("check_in")
-                                )
-                        except Exception as ex:
-                            logger.error(f"Failed to send expiry email: {ex}")
-                            
-        return {"status": "received"}
-
     except Exception as e:
-        logger.warning(f"Stripe webhook processing warning (non-fatal): {type(e).__name__}: {e}")
+        verification = {"valid": False, "error": str(e)}
+
+    if not verification.get("valid"):
+        logger.warning("Invalid Stripe webhook signature")
+        # Don't return 400 to avoid Stripe retrying, just warn and 200
+        return {"status": "ignored", "reason": "invalid_signature"}
+
+    event = verification.get("event")
+    # stripe>=12 StripeObject is not a dict (.get raises AttributeError), which made
+    # the expired branch die on its first line and be swallowed as a 200. Work on
+    # a plain recursive dict so both branches read the event the same way.
+    if hasattr(event, "to_dict"):
+        event = event.to_dict()
+    event_id = event.get("id", "?")
+    event_type = event.get("type")
+
+    try:
+        if event_type == "checkout.session.completed":
+            return await _handle_checkout_completed(event, event_id, coalcreek_stripe_service)
+        if event_type == "checkout.session.expired":
+            return await _handle_checkout_expired(event, event_id)
         return {"status": "received"}
+    except Exception as e:
+        # Unknown failure mid-processing: assume transient. Every branch is
+        # replay-safe, so a retry costs nothing; a 200 here would lose the event.
+        logger.error("Stripe webhook %s (%s) failed: %s", event_id, event_type, e, exc_info=True)
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_exception(e)
+        except Exception:
+            pass
+        return JSONResponse(status_code=500, content={"status": "error"})
+
+
+async def _handle_checkout_completed(event: dict, event_id: str, coalcreek_stripe_service):
+    from services.appwrite import db_service as _db
+    from services.db.bookings import BookingLookupError
+
+    session = event.get("data", {}).get("object", {})
+
+    # Handle success (Payment or Setup)
+    result = await coalcreek_stripe_service.handle_checkout_completion(session)
+    if not result.get("success"):
+        # Other tenant, missing booking_ref or unparseable session: the payload will
+        # not change on redelivery, so retrying is pointless.
+        logger.info("Stripe webhook %s: completed event not processed: %s", event_id, result.get("error"))
+        return {"status": "ignored", "reason": result.get("error")}
+
+    booking_ref = result.get("booking_ref")
+    mode = result.get("mode", "payment")
+    stripe_session_id = session.get("id", "")
+    stripe_payment_id = result.get("payment_intent")
+    amount_total_cents = result.get("amount_total") or 0
+
+    # PRIMARY lookup: booking_reference from Stripe metadata
+    # FALLBACK: stripe_session_id stored on doc during booking creation
+    try:
+        booking_doc = await _db.find_booking_for_payment(booking_ref, stripe_session_id)
+    except BookingLookupError as e:
+        return _webhook_retry(event_id, f"booking lookup failed: {e}", booking_ref)
+
+    if not booking_doc:
+        _report_unmatched_payment(event_id, booking_ref, stripe_session_id)
+        return {"status": "ignored", "reason": "booking_not_found"}
+
+    doc_id = booking_doc.get("$id")
+
+    # Idempotency from the booking itself (no event-id table in the schema): if it
+    # already shows this outcome, an earlier delivery wrote it and sent the emails.
+    # A setup booking later paid in full is still processed ("card_on_file" is not
+    # a duplicate of a payment). Two deliveries racing through this read before
+    # either writes can still both send; Stripe does not deliver concurrently in
+    # practice, and closing that needs a conditional write Appwrite lacks.
+    done_states = _SECURED_PAYMENT_STATUSES if mode == "setup" else ("paid",)
+    already_paid_by = booking_doc.get("stripe_payment_id") or ""
+    if (mode != "setup" and booking_doc.get("payment_status") == "paid"
+            and already_paid_by and stripe_payment_id and already_paid_by != stripe_payment_id):
+        # Paid already, by a DIFFERENT payment: the guest paid two live links
+        # (a resend creates a new checkout session and the old one stays
+        # payable). Not a redelivery — money taken twice, and only a person can
+        # refund it. Recorded as handled (200) so Stripe stops, but loudly.
+        reason = (f"second payment {stripe_payment_id} on booking already paid by "
+                  f"{already_paid_by} — refund one of them")
+        msg = f"Stripe webhook {event_id}: {reason} (ref={booking_ref})"
+        logger.error(msg)
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_message(msg, level="error")
+        except Exception:
+            pass
+        _spawn_alert(_alert_staff_webhook_failure(
+            event_id, reason, booking_ref, subject="Possible double payment — please refund"))
+        return {"status": "double_payment_flagged"}
+    if (booking_doc.get("status") or "").lower() == "expired":
+        # Paid through a link whose hold had already lapsed: the room went back
+        # on sale when it expired, so confirming here could double-book it.
+        # The money is real, so a person decides (honour or refund) — 200 so
+        # Stripe stops, loud so nobody misses it.
+        reason = (f"payment {stripe_payment_id or '-'} arrived for a hold that had "
+                  "already EXPIRED — check the room is still free, then confirm or refund")
+        logger.error("Stripe webhook %s: %s (ref=%s)", event_id, reason, booking_ref)
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_message(f"Stripe webhook {event_id}: {reason} (ref={booking_ref})", level="error")
+        except Exception:
+            pass
+        _spawn_alert(_alert_staff_webhook_failure(
+            event_id, reason, booking_ref, subject="Payment on an expired hold — please check"))
+        return {"status": "expired_hold_flagged"}
+    if booking_doc.get("payment_status") in done_states:
+        logger.info(
+            "Stripe webhook %s: %s already %s — duplicate delivery, no side effects",
+            event_id, booking_ref, booking_doc.get("payment_status"),
+        )
+        return {"status": "duplicate"}
+
+    # Persist first and only then email: if the write fails we answer 5xx with
+    # nothing sent, so the redelivery is the first time the guest hears from us.
+    if mode == "setup":
+        # Card saved — mark confirmed but not paid
+        written = await _db.update_motel_reservation(doc_id, {
+            "status": "confirmed",
+            "payment_status": "card_on_file",
+            "stripe_setup_intent": result.get("setup_intent"),
+        })
+    else:
+        # Paid — mark paid and confirmed atomically
+        written = await _db.update_booking_payment_status(
+            booking_id=doc_id,
+            payment_status="paid",
+            stripe_payment_id=stripe_payment_id,
+            deposit_paid=float(amount_total_cents) / 100.0,
+            status="confirmed"
+        )
+    if not written:
+        return _webhook_retry(event_id, f"booking {doc_id} update returned no document", booking_ref)
+
+    if mode == "setup":
+        logger.info("💳 Booking %s card securely saved (SetupIntent)", booking_ref)
+    else:
+        logger.info("💰 Booking %s marked as PAID | amount=AUD$%.2f", booking_ref, amount_total_cents / 100.0)
+
+    # Send notifications using the fully-populated doc. Failures here are logged,
+    # not retried: the write landed, so a redelivery would be deduplicated anyway.
+    await _send_payment_emails(booking_doc, result, booking_ref, mode, amount_total_cents)
+    return {"status": "received"}
+
+
+async def _send_payment_emails(doc: dict, result: dict, booking_ref: str, mode: str, amount_total_cents) -> None:
+    try:
+        from services.email import email_service
+
+        tenant_id = doc.get("tenant_id", "coalcreek")
+
+        # Use DB email, but fallback to the email entered during Stripe checkout if missing
+        guest_email = doc.get("guest_email") or result.get("customer_email")
+        if not guest_email:
+            logger.error("❌ No guest_email found on booking doc or Stripe session for %s", booking_ref)
+
+        _COALCREEK_DEFAULTS = {
+            "staff_email": "officialcoalcreek@gmail.com",
+            "business_name": "Coal Creek Motel",
+            "business_phone": "+61348236219",
+            "location": "8444 South Gippsland Highway, Korumburra VIC 3950",
+        }
+        if tenant_id == "coalcreek":
+            tenant_config = _COALCREEK_DEFAULTS
+        else:
+            from services.appwrite import db_service as _db2
+            tenant_config = await _db2.get_tenant_config(tenant_id) or {}
+
+        staff_email = tenant_config.get("staff_email") or _COALCREEK_DEFAULTS["staff_email"]
+        business_name = tenant_config.get("business_name", "Coal Creek Motel")
+
+        # 1. Notify Staff — isolated so guest email still fires if this fails
+        try:
+            await email_service.send_staff_payment_notification(
+                staff_email=staff_email,
+                booking_reference=booking_ref,
+                customer_name=doc.get("guest_name", "Guest"),
+                customer_email=guest_email,
+                room_type=doc.get("room_type", ""),
+                check_in=doc.get("check_in_date", ""),
+                check_out=doc.get("check_out_date", ""),
+                num_nights=doc.get("num_nights", 1),
+                amount_paid=amount_total_cents / 100.0 if mode == "payment" else 0.0,
+                mode=mode,
+            )
+            logger.info("📧 Staff payment notification sent to %s", staff_email)
+        except Exception as staff_err:
+            logger.error("❌ Staff notification failed (non-fatal): %s", staff_err)
+
+        # 2. Notify Guest — isolated so staff email failure cannot block this
+        if guest_email:
+            try:
+                await email_service.send_guest_booking_confirmation(
+                    guest_email=guest_email,
+                    guest_name=doc.get("guest_name", "Guest"),
+                    booking_reference=booking_ref,
+                    room_type=doc.get("room_type", ""),
+                    check_in=doc.get("check_in_date", ""),
+                    check_out=doc.get("check_out_date", ""),
+                    num_nights=doc.get("num_nights", 1),
+                    total_amount=amount_total_cents / 100.0 if mode == "payment" else doc.get("total_amount", 0),
+                    business_name=business_name,
+                    business_phone=tenant_config.get("business_phone", ""),
+                    business_location=tenant_config.get("location", ""),
+                    tenant_id=tenant_id,
+                )
+                logger.info("📧 Guest confirmation sent to %s (%s)", guest_email, booking_ref)
+            except Exception as guest_err:
+                logger.error("❌ Guest confirmation failed for %s: %s", booking_ref, guest_err)
+        else:
+            logger.error("❌ No guest_email on booking doc — skipping guest confirmation for %s", booking_ref)
+
+    except Exception as email_err:
+        logger.error("Failed to send payment/setup emails for %s: %s", booking_ref, email_err)
+
+
+async def _handle_checkout_expired(event: dict, event_id: str):
+    from services.appwrite import db_service as _db
+    from services.db.bookings import BookingLookupError
+
+    session = event.get("data", {}).get("object", {})
+    metadata = session.get("metadata") or {}
+    if metadata.get("tenant_id") != "coalcreek":
+        return {"status": "ignored", "reason": "other_tenant"}
+
+    booking_ref = metadata.get("booking_ref")
+    logger.info(f"⚠️ Booking {booking_ref} link EXPIRED")
+
+    # Same tenant-scoped lookup as the completed branch (the old raw query had no
+    # tenant filter and used the legacy queries[] string syntax).
+    try:
+        doc = await _db.find_booking_for_payment(booking_ref, session.get("id"))
+    except BookingLookupError as e:
+        return _webhook_retry(event_id, f"booking lookup failed: {e}", booking_ref)
+    if not doc:
+        # Nothing is being held, so there is nothing to release: no retry, no page.
+        logger.warning("Stripe webhook %s: expired session for unknown booking ref=%s", event_id, booking_ref)
+        return {"status": "ignored", "reason": "booking_not_found"}
+
+    status = (doc.get("status") or "").lower()
+    # Never expire a booking whose money or card is secured, whatever its status
+    # says, and touch nothing outside the known unpaid-hold states (confirmed,
+    # already expired/cancelled on a redelivery, checked in, ...).
+    if doc.get("payment_status") in _SECURED_PAYMENT_STATUSES or status not in ("link_sent",) + _VOICE_HOLD_STATUSES:
+        logger.info(
+            "Stripe webhook %s: %s not released (status=%s payment_status=%s)",
+            event_id, booking_ref, status, doc.get("payment_status"),
+        )
+        return {"status": "ignored", "reason": "not_an_unpaid_hold"}
+
+    if _superseded_by_newer_link(doc, session):
+        logger.info("Stripe webhook %s: %s has a newer payment link — hold kept", event_id, booking_ref)
+        return {"status": "ignored", "reason": "superseded_session"}
+
+    # Every unpaid hold becomes "expired", voice and staff flow alike.
+    # Availability skips it (RELEASED_STATUSES), so the room goes back on sale;
+    # guest lookups still find it, so a caller ringing about it hears that the
+    # hold lapsed. "cancelled" would hide the booking from lookups entirely, and
+    # the prompt forbids telling a guest "cancelled" unless they cancelled.
+    new_status = "expired"
+    written = await _db.update_motel_reservation(doc.get("$id"), {"status": new_status})
+    if not written:
+        return _webhook_retry(event_id, f"booking {doc.get('$id')} expiry update returned no document", booking_ref)
+    logger.info("⌛ Booking %s %s → %s (checkout session expired unpaid)", booking_ref, status, new_status)
+
+    # Notify Staff
+    try:
+        from services.email import email_service
+        from services.appwrite import db_service
+
+        tenant_id = doc.get("tenant_id", "coalcreek")
+        tenant_config = await db_service.get_tenant_config(tenant_id)
+        staff_email = tenant_config.get("staff_email")
+
+        if hasattr(email_service, 'send_expiry_notification'):
+            await email_service.send_expiry_notification(
+                staff_email=staff_email,
+                booking_ref=booking_ref,
+                customer_name=metadata.get("customer_name"),
+                room_type=metadata.get("room_type"),
+                check_in=metadata.get("check_in")
+            )
+    except Exception as ex:
+        logger.error(f"Failed to send expiry email: {ex}")
+
+    return {"status": "received"}
 
 
 # -----------------------------------------------------------------------------

@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/actions", tags=["actions"])
 
+# Every db_service notification method is `async def` (services/db/notifications.py).
+# Calling them without `await` hands back a coroutine, so `next(... for n in
+# notifications)` raised TypeError and every staff magic link 500'd while the
+# update never ran. Each call below MUST be awaited.
+
 # Dashboard URL for redirects
 DASHBOARD_URL = "https://ovela.dev/motel/notifications"
 
@@ -103,7 +108,7 @@ async def complete_action(token: str = Query(...)):
     notification_id = payload.get("notification_id")
     
     # Get current status to check if already processed
-    notifications = db_service.get_staff_notifications()
+    notifications = await db_service.get_staff_notifications()
     notification = next((n for n in notifications if n.get("$id") == notification_id), None)
     
     if not notification:
@@ -122,7 +127,7 @@ async def complete_action(token: str = Query(...)):
         return HTMLResponse(content=error_page("Archived", "This notification was archived. Please use the dashboard to restore it if needed."), status_code=400)
     
     # Update the notification
-    result = db_service.update_staff_notification(notification_id, {"status": "completed"})
+    result = await db_service.update_staff_notification(notification_id, {"status": "completed"})
     
     if not result:
         return HTMLResponse(content=error_page("Update Failed", "Could not update the notification. Please try the dashboard instead."), status_code=400)
@@ -145,7 +150,7 @@ async def dismiss_action(token: str = Query(...)):
     notification_id = payload.get("notification_id")
     
     # Get current status to check if already processed
-    notifications = db_service.get_staff_notifications()
+    notifications = await db_service.get_staff_notifications()
     notification = next((n for n in notifications if n.get("$id") == notification_id), None)
     
     if not notification:
@@ -166,7 +171,7 @@ async def dismiss_action(token: str = Query(...)):
     if current_status == "archived":
         return HTMLResponse(content=error_page("Archived", "This notification was archived."), status_code=400)
     
-    result = db_service.update_staff_notification(notification_id, {"status": "dismissed"})
+    result = await db_service.update_staff_notification(notification_id, {"status": "dismissed"})
     
     if not result:
         return HTMLResponse(content=error_page("Update Failed", "Could not dismiss the notification."), status_code=400)
@@ -192,7 +197,7 @@ async def reject_action(token: str = Query(...)):
     notification_id = payload.get("notification_id")
     
     # Get the notification to find customer phone
-    notifications = db_service.get_staff_notifications()
+    notifications = await db_service.get_staff_notifications()
     notification = next((n for n in notifications if n.get("$id") == notification_id), None)
     
     if not notification:
@@ -244,7 +249,7 @@ async def reject_action(token: str = Query(...)):
     extra_data["first_action_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
     
     # Update notification status to rejected with consumed flag
-    db_service.update_staff_notification(notification_id, {
+    await db_service.update_staff_notification(notification_id, {
         "status": "rejected",
         "extra_data": json.dumps(extra_data)
     })
@@ -297,7 +302,7 @@ async def update_action(token: str = Query(...)):
     notification_id = payload.get("notification_id")
     
     # Mark as in_progress
-    db_service.update_staff_notification(notification_id, {"status": "in_progress"})
+    await db_service.update_staff_notification(notification_id, {"status": "in_progress"})
     
     # Redirect to dashboard
     return RedirectResponse(url=f"{DASHBOARD_URL}?highlight={notification_id}")
@@ -317,7 +322,7 @@ async def approve_action(token: str = Query(...)):
     notification_id = payload.get("notification_id")
     
     # Get notification with booking data
-    notifications = db_service.get_staff_notifications()
+    notifications = await db_service.get_staff_notifications()
     notification = next((n for n in notifications if n.get("$id") == notification_id), None)
     
     if not notification:
@@ -366,7 +371,7 @@ async def approve_action(token: str = Query(...)):
     extra_data["first_action_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
     
     # Mark as completed (approved)
-    result = db_service.update_staff_notification(notification_id, {
+    result = await db_service.update_staff_notification(notification_id, {
         "status": "completed",
         "staff_notes": "Approved via email",
         "extra_data": json.dumps(extra_data)

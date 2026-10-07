@@ -287,8 +287,8 @@ class TestHandleCreateBookingRequest:
 
         args = {
             "guest_name": "No DB Test",
-            "check_in_date": "2026-10-01",
-            "check_out_date": "2026-10-02",
+            "check_in_date": _soon(7),
+            "check_out_date": _soon(8),
             "room_type": "queen",
             "num_guests": 1,
             "guest_email": "nodbtest@example.com",

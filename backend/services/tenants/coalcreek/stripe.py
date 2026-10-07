@@ -9,6 +9,7 @@ Usage:
 """
 
 import logging
+import asyncio
 import stripe
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -61,7 +62,10 @@ class CoalCreekStripeService:
             expiry_time = int(datetime.now().timestamp() + 86400) # 24 Hours from now
             
             # Create Coupon for Checkout Session (One-time, expires)
-            session = stripe.checkout.Session.create(
+            # In a worker thread: the SDK is synchronous, and this runs on the
+            # event loop every live call shares (staff approve/regenerate).
+            session = await asyncio.to_thread(
+                stripe.checkout.Session.create,
                 mode="payment",
                 currency="aud",
                 customer_email=customer_email,
@@ -119,7 +123,11 @@ class CoalCreekStripeService:
         room_type: str,
         check_in: str,
         check_out: str,
-        num_nights: int
+        num_nights: int,
+        # Read below but never declared, so every call raised NameError and the
+        # card-on-file flow could not work at all.
+        success_url: str = None,
+        cancel_url: str = None
     ) -> dict:
         """
         Create a Setup Session to safely store card details without charging.
@@ -129,7 +137,8 @@ class CoalCreekStripeService:
             return {"success": False, "error": "Stripe not configured"}
             
         try:
-            session = stripe.checkout.Session.create(
+            session = await asyncio.to_thread(
+                stripe.checkout.Session.create,
                 mode="setup",
                 currency="aud",
                 customer_email=customer_email,

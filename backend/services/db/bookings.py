@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 from appwrite.id import ID
 from zoneinfo import ZoneInfo
 import logging
@@ -49,6 +50,11 @@ def normalise_lookup_value(field: str, value):
 
 
 INACTIVE_STATUSES = {"cancelled", "rejected"}
+# Statuses that no longer hold a room. Wider than INACTIVE_STATUSES on purpose:
+# an "expired" hold (payment link lapsed unpaid) gives the room back, but the
+# guest must still be FOUND when they ring about it — dropping it from lookups
+# too would turn "your hold lapsed, shall I rebook?" into "I can't find you".
+RELEASED_STATUSES = INACTIVE_STATUSES | {"expired"}
 
 
 def _live_only(docs: list) -> list:
@@ -66,6 +72,16 @@ def _live_only(docs: list) -> list:
     """
     return [d for d in (docs or [])
             if (d.get("status") or "").lower() not in INACTIVE_STATUSES]
+
+
+class BookingLookupError(RuntimeError):
+    """Appwrite could not be asked, as opposed to answering "no such booking".
+
+    The Stripe webhook has to tell these apart: a failed request deserves a 5xx so
+    Stripe redelivers the payment, while a definite miss (a test event for a
+    booking that never existed) must get a 200 or Stripe retries it for 3 days.
+    The plain lookups collapse both into None, so they cannot be used for that.
+    """
 
 
 class BookingsMixin:
@@ -293,37 +309,108 @@ class BookingsMixin:
             logger.error(f"Error fetching motel rooms: {e}")
             return []
 
-    async def get_motel_reservations(self, start_date: str, end_date: str, tenant_id: str = "coalcreek") -> list:
-        """
-        Get all motel reservations overlapping with the date range.
-        An overlap occurs if check_in < end_date AND check_out > start_date.
-        We fetch a broad range and filter accurately in python since Appwrite doesn't support complex OR overlap natively easily.
-        """
+    # Page size and page cap for the availability read. See get_motel_reservations.
+    _RESERVATION_PAGE_SIZE = 500
+    _RESERVATION_MAX_PAGES = 10
+
+    async def _read_reservation_pages(self, tenant_id: str, start_date: str, end_date: str,
+                                      extra: Optional[list] = None) -> Optional[list]:
+        """Every reservation row matching the queries, newest first, or None if
+        any page could not be read (a partial read is as dangerous as none)."""
+        path = f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
+        page_size = self._RESERVATION_PAGE_SIZE
+        all_res: list = []
+        cursor = None
         try:
-            path = f"/databases/{self.motel_db_id}/collections/motel_reservations/documents"
-            queries = [
-                self.Query.equal("tenant_id", tenant_id),
-                self.Query.limit(500) # Fetch up to 500 upcoming bookings
-            ]
-            
-            result = await self._make_request("GET", path, params={"queries": queries})
-            all_res = result.get("documents", []) if result else []
-            
-            # Filter in memory for precise overlap
-            overlapping = []
-            for res in all_res:
-                status = res.get("status", "")
-                if status in ["cancelled", "rejected"]:
-                    continue
-                c_in = res.get("check_in_date")
-                c_out = res.get("check_out_date")
-                if c_in and c_out:
-                    if c_in < end_date and c_out > start_date:
-                        overlapping.append(res)
-            return overlapping
+            for _ in range(self._RESERVATION_MAX_PAGES):
+                queries = [
+                    self.Query.equal("tenant_id", tenant_id),
+                    *(extra or []),
+                    self.Query.order_desc("$createdAt"),
+                    self.Query.limit(page_size),
+                ]
+                if cursor:
+                    queries.append(self.Query.cursor_after(cursor))
+                result = await self._make_request("GET", path, params={"queries": queries})
+                docs = result.get("documents") if isinstance(result, dict) else None
+                if docs is None:
+                    # None from _make_request = HTTP/network error (already logged
+                    # there). A booking on a missing page is a room handed out twice.
+                    logger.error(
+                        "🚨 Reservation read failed (tenant=%s, %s→%s, after %d rows) — "
+                        "availability is UNKNOWN, not empty.",
+                        tenant_id, start_date, end_date, len(all_res),
+                    )
+                    return None
+                all_res.extend(docs)
+                if len(docs) < page_size:
+                    return all_res
+                cursor = docs[-1].get("$id")
+                if not cursor:
+                    logger.error("🚨 Reservation page has no $id to page from — availability UNKNOWN.")
+                    return None
+            # Every page was full and we ran out of pages: rows we never saw.
+            logger.error(
+                "🚨 motel_reservations for %s exceeds %d matching rows; availability "
+                "read refused as UNKNOWN.",
+                tenant_id, page_size * self._RESERVATION_MAX_PAGES,
+            )
+            return None
         except Exception as e:
             logger.error(f"Error fetching motel reservations for availability: {e}")
-            return []
+            return None
+
+    async def get_motel_reservations(self, start_date: str, end_date: str, tenant_id: str = "coalcreek") -> Optional[list]:
+        """
+        Get all live motel reservations overlapping [start_date, end_date).
+        An overlap occurs if check_in < end_date AND check_out > start_date.
+
+        Returns a list (possibly empty: "nothing booked") or None ("could not
+        read"). The two used to be the same `[]`: `_make_request` swallows every
+        Appwrite error into None, this method turned that into "no
+        reservations", and the availability check then saw every room free and
+        auto-assigned one — an outage became a double booking. Callers MUST
+        treat None as "availability unknown", never as "empty".
+
+        Why page instead of one `limit(500)`: the old single page had no order,
+        and Appwrite's default order is oldest-first, so once the collection
+        passed 500 rows the NEWEST bookings — the ones overlapping future
+        stays — silently fell off the end. Now: filtered server-side to rows
+        checking out after the stay starts (falling back to an unfiltered read
+        if Appwrite rejects that filter), newest-first by `$createdAt`,
+        cursor-paged, and the exact overlap test done in Python.
+        """
+        # Ask Appwrite for only the rows that can overlap (checking out after
+        # the stay starts) — the whole history grows without bound, and paging
+        # all of it would one day hit the page cap and fail every availability
+        # check closed. The attribute's type is not in the repo, so if Appwrite
+        # rejects the filter (no index, unexpected type) fall back to reading
+        # everything rather than refusing; the overlap test below is exact
+        # either way, so the filter can only narrow what Python has to scan.
+        all_res = await self._read_reservation_pages(
+            tenant_id, start_date, end_date,
+            extra=[self.Query.greater_than("check_out_date", start_date)],
+        )
+        if all_res is None:
+            logger.warning(
+                "⚠️ Filtered reservation read failed for %s — retrying unfiltered", tenant_id)
+            all_res = await self._read_reservation_pages(tenant_id, start_date, end_date)
+        if all_res is None:
+            return None
+
+        # Case-insensitive like the identity lookups' `_live_only`, so a
+        # "Cancelled" row puts the room back on sale just as "cancelled" does —
+        # but against RELEASED_STATUSES, so an expired unpaid hold does too.
+        overlapping = []
+        for res in all_res:
+            if (res.get("status") or "").lower() in RELEASED_STATUSES:
+                continue
+            c_in = res.get("check_in_date")
+            c_out = res.get("check_out_date")
+            if c_in and c_out:
+                if c_in < end_date and c_out > start_date:
+                    overlapping.append(res)
+        return overlapping
 
 
     # ==================== MOTEL RESERVATION UPDATES ====================
@@ -394,6 +481,10 @@ class BookingsMixin:
     ) -> dict:
         """
         Update payment status for a booking in motel_reservations.
+
+        Returns the patched document, or None if the write did not happen (Appwrite
+        error or exception — both are swallowed). The Stripe webhook treats None as
+        "not persisted" and answers 5xx so Stripe redelivers, so keep that contract.
         """
         try:
             now = datetime.now(ZoneInfo("Australia/Melbourne")).isoformat()
@@ -532,6 +623,49 @@ class BookingsMixin:
         except Exception as e:
             logger.error("Error finding booking by stripe_session_id %s: %s", stripe_session_id, e)
             return None
+
+    async def find_booking_for_payment(
+        self,
+        booking_ref: str,
+        stripe_session_id: str = None,
+        tenant_id: str = "coalcreek",
+    ) -> dict:
+        """
+        Webhook lookup: the booking doc, None if it definitely does not exist, or
+        BookingLookupError if Appwrite could not be asked.
+
+        _make_request turns every failure into None, while a successful empty
+        search still returns {"documents": [], ...}; that difference is the only
+        signal left, so this queries directly instead of reusing
+        get_booking_by_reference (which flattens both to None).
+
+        Only the booking_reference query is strict. The stripe_session_id fallback
+        stays best-effort via get_booking_by_stripe_session: that attribute is
+        not in the Appwrite schema yet (see coalcreek_handlers), so the query can
+        fail on every call, and treating that as transient would make Stripe
+        retry an unknown booking for three days.
+        """
+        if booking_ref:
+            result = await self._motel_request(
+                "GET",
+                f"/databases/{self.motel_db_id}/collections/motel_reservations/documents",
+                params={"queries": [
+                    self.Query.equal("booking_reference", booking_ref),
+                    self.Query.equal("tenant_id", tenant_id),
+                ]},
+            )
+            if result is None:
+                raise BookingLookupError(f"Appwrite lookup failed for booking_ref={booking_ref}")
+            docs = result.get("documents") or []
+            if docs:
+                return docs[0]
+        if stripe_session_id:
+            logger.warning(
+                "⚠️ Webhook: booking_ref lookup missed for %s — falling back to stripe_session_id",
+                booking_ref,
+            )
+            return await self.get_booking_by_stripe_session(stripe_session_id, tenant_id=tenant_id)
+        return None
 
     # A cancelled booking is not a booking. get_motel_reservations already drops
     # these before the availability check sees them; the identity lookups did

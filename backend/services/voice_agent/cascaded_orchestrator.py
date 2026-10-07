@@ -13,8 +13,11 @@ Decoupled real-time voice orchestration pipeline that coordinates:
 
 import asyncio
 import base64
+import copy
+import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 import inspect
@@ -29,6 +32,7 @@ from sentry_sdk.ai import set_conversation_id
 from fastapi import WebSocket
 
 from core.config import settings
+from core.stream_auth import check_stream_start, stream_auth_mode
 # is_backchannel_word is applied through route_transcript, not here — the
 # decision belongs with the state it depends on.
 from services.voice_agent.vad import VadProcessor, ConversationState
@@ -87,6 +91,21 @@ PLAYBACK_DRAIN_GRACE_S = 0.8
 # counting elapsed playback as heard (see trigger_barge_in).
 PLAYBACK_START_DELAY_S = 0.3
 
+# Reopening a dropped Deepgram socket (see process_deepgram_events). The waits
+# before each attempt; the whole effort is also capped at the budget, after
+# which the call is ended rather than left deaf. Audio arriving in the gap is
+# dropped — a second or two of the caller is the price of hearing the rest.
+STT_RECONNECT_BACKOFF_S = (0.25, 0.5, 1.0, 2.0, 2.0)
+STT_RECONNECT_BUDGET_S = 10.0
+STT_CONNECT_TIMEOUT_S = 3.0
+# A socket that keeps dying within the budget of being reopened is not
+# recovering, it is flapping: after this many in a row, stop and hang up.
+STT_MAX_SHORT_LIVED = 3
+# Said when the line can no longer hear the caller. The agent can still speak
+# through Cartesia, so the caller is told rather than left talking to nobody.
+STT_DEAF_LINE = ("I'm sorry, I can't hear you on this line any more. "
+                 "Please give us a call back. Goodbye.")
+
 
 # What the agent says, in code, when the model reaches for a tool without
 # having said anything: the same move as Pipecat's on_function_calls_started
@@ -110,30 +129,52 @@ def tool_acknowledgement(tool_name: Optional[str], already_spoken: int) -> Optio
     return options[already_spoken % len(options)] + " "
 
 
+# Words whose own full stop does not end the phrase. Small on purpose: a miss
+# here only merges two phrases, it never mangles one.
+_NO_BREAK_AFTER = frozenset({"mr.", "mrs.", "ms.", "dr.", "st.", "a.m.", "p.m.", "e.g.", "i.e.", "etc."})
+
+
+def _phrase_end(text_buffer: str, is_final: bool) -> int:
+    """Index of the punctuation mark that ends the first phrase, or -1."""
+    for i, char in enumerate(text_buffer):
+        if char not in ".?!,;:":
+            continue
+        if i == len(text_buffer) - 1:
+            # The next token decides: "$129." may yet become "$129.50".
+            return i if is_final else -1
+        if not text_buffer[i + 1].isspace():
+            continue    # "129.50", "2:30", "1,000", "ada@example.com", "p.m"
+        if char == "." and text_buffer[:i + 1].split()[-1].lstrip("(\"'").lower() in _NO_BREAK_AFTER:
+            continue
+        return i
+    return -1
+
+
 def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[str], str]:
     """
     Split text_buffer into phrases based on punctuation or length (>= 6 words).
     Returns list of phrases and the remaining text_buffer.
+
+    Each phrase is normalised by prepare_for_tts on its own, so a split inside
+    a token is spoken wrong. Splitting at the first . , : anywhere turned
+    "$129.50 per night" into "129 dollars." + "50 per night", gave the email
+    rewrite "ada@example." + "com" so it never matched, and cut "2:30 p.m."
+    into four pieces — on the booking read-back, where the prompt has the
+    model say exactly those. So punctuation ends a phrase only when whitespace
+    follows it or the stream has ended, and a length split only counts words a
+    space has closed off: the last word of a streaming buffer may still grow.
     """
     phrases = []
-    punctuation_marks = ['.', '?', '!', ',', ';', ':']
-    
+
     while text_buffer:
-        first_punc_idx = -1
-        for char in punctuation_marks:
-            idx = text_buffer.find(char)
-            if idx != -1:
-                if first_punc_idx == -1 or idx < first_punc_idx:
-                    first_punc_idx = idx
-        
-        if first_punc_idx != -1:
-            phrase = text_buffer[:first_punc_idx + 1]
-            text_buffer = text_buffer[first_punc_idx + 1:]
-            phrases.append(phrase)
+        end = _phrase_end(text_buffer, is_final)
+        if end != -1:
+            phrases.append(text_buffer[:end + 1])
+            text_buffer = text_buffer[end + 1:]
             continue
-            
+
         words = text_buffer.split()
-        if len(words) >= 6:
+        if len(words) > 6 or (len(words) == 6 and (is_final or text_buffer[-1].isspace())):
             phrase_words = words[:6]
             phrase = " ".join(phrase_words)
             idx = text_buffer.find(phrase)
@@ -158,6 +199,70 @@ def split_buffer_into_phrases(text_buffer: str, is_final: bool) -> tuple[List[st
 
 WARMUP_MAX_TOKENS = 64   # room for a short tool call; see _warm_llm
 MODEL_REQUEST_FIELDS = ("reasoning_effort", "service_tier")   # from voice_settings; see _model_options
+
+# The OpenAI client's own limits. The SDK default is a 600 s timeout with two
+# retries — a caller would hang up long before either. `read` is the gap
+# allowed between bytes, so it bounds a stalled stream as well as a slow
+# response; the per-round deadlines in _open_llm_round are tighter still and
+# are what a caller actually experiences. One retry: a connection that fails
+# twice will not be saved by a third try inside a phone call.
+OPENAI_TIMEOUT = httpx.Timeout(connect=3.0, read=15.0, write=10.0, pool=3.0)
+OPENAI_MAX_RETRIES = 1
+
+# Said when the model could not answer in time. It used to say "I am checking
+# those details right now. Just one moment please." — a promise nothing kept:
+# the turn ended there, and the caller waited in silence for an answer that
+# was never coming. This asks for the one thing that does recover the call.
+LLM_TROUBLE_LINE = "Sorry, I'm having a little trouble on my end. Could you say that again?"
+
+
+class LLMDeadlineExceeded(Exception):
+    """The model missed its first-token or between-tokens deadline."""
+
+
+def normalise_transcript(text: str) -> str:
+    """Lowercase, sentence punctuation gone, whitespace collapsed. Flux
+    re-punctuates between EagerEndOfTurn and EndOfTurn ("yes" / "Yes.",
+    "a room for Friday" / "a room, for Friday"), and that alone must not throw
+    a speculation away; any difference in the WORDS must.
+
+    Only . , ! ? ; : that END a word are dropped ("?" included: the eager
+    transcript of a question usually has none, and treating it as a
+    different turn would discard nearly every question). Stripping every mark
+    made "we'll" equal "well", "$40" equal "40" and an email equal its
+    spoken-out letters — and the model then answered words the caller did not
+    finally say."""
+    t = re.sub(r"[.,!?;:]+(?=\s|$)", "", (text or "").lower())
+    return " ".join(t.split())
+
+
+class _Speculation:
+    """
+    One first model round started on EagerEndOfTurn, before the caller's turn
+    is confirmed. It owns nothing but an HTTP stream: no history entry, no
+    call_state change, no tool, no audio. See `_start_speculation`.
+
+    Exactly one of `adopted` / `discarded` ends it, and both are final. The
+    task holds the stream open after the first event until one of them
+    happens, and closes it itself unless it was adopted — so discarding is a
+    plain `task.cancel()`, safe from the read loop, and every exit path closes
+    the stream in the same place.
+    """
+
+    def __init__(self, transcript: str):
+        self.transcript = transcript
+        self.key = normalise_transcript(transcript)
+        self.task: Optional[asyncio.Task] = None
+        self.streams: list = []                 # every stream it opened
+        self.fingerprint: Optional[str] = None  # of the request it sent
+        self.opened = None                      # (stream, first_event)
+        self.error: Optional[Exception] = None
+        self.ready = asyncio.Event()            # `opened` or `error` is final
+        self.sent_at = 0.0
+        self.first_at = 0.0
+        self.claimed_at = 0.0
+        self.adopted = False
+        self.discarded = False
 
 
 class CascadedPipelineOrchestrator:
@@ -247,6 +352,10 @@ class CascadedPipelineOrchestrator:
         self._unsourced: List[str] = []
         self._barge_ins: int = 0
         self._backchannels_held: int = 0
+        # Replies the model wrote that never reached the caller as audio. Kept
+        # out of history (the agent must not believe it said them) and counted
+        # here so the call's record still shows they happened.
+        self._silent_turns: int = 0
 
         # True once this turn's first audio chunk has reached Twilio. Barge-in
         # stays disarmed until then so LLM think-time can't be interrupted.
@@ -271,6 +380,9 @@ class CascadedPipelineOrchestrator:
         # follow-up, gets it answered, and the call ends.
         self._pending_hangup: bool = False
         self._pending_transfer: Optional[str] = None
+        # True on the leg Twilio redirects back after an unanswered transfer.
+        # Same CallSid as the first leg, so its transcript needs its own id.
+        self._transfer_return_leg: bool = False
         self._pending_turn: int = 0
 
         # The single Cartesia reader. One socket, one consumer — see
@@ -285,6 +397,23 @@ class CascadedPipelineOrchestrator:
         self._finished_turns: asyncio.Queue = asyncio.Queue()
         self._turn_worker_task: Optional[asyncio.Task] = None
         self._hangup_triggered: bool = False
+        # Set by stop(), so a Deepgram reconnect sleeping out its backoff
+        # wakes and gives up at once instead of reopening a socket for a call
+        # that has ended.
+        self._stopped: asyncio.Event = asyncio.Event()
+
+        # Speculative first round (see _start_speculation). `_speculation` is
+        # the one waiting for its EndOfTurn; once a turn claims it, it belongs
+        # to that turn, so a later Deepgram event cannot pull it from under
+        # the reply. `_claimed_speculation` remembers it only so stop() can
+        # close it too. The counters go into the saved call record:
+        # every discarded speculation is tokens spent for nothing, and this is
+        # where the owner sees whether the hit rate pays for it.
+        self._speculation: Optional[_Speculation] = None
+        self._claimed_speculation: Optional[_Speculation] = None
+        self._speculation_stats: Dict[str, Any] = {
+            "started": 0, "used": 0, "discarded": 0, "saved_ms": 0, "discard_reasons": {},
+        }
 
         # Sentry transaction and span tracking
         self._sentry_transaction = None
@@ -362,6 +491,9 @@ class CascadedPipelineOrchestrator:
         logger.info(f"🛑 [CascadedOrchestrator] Barge-in triggered ({reason}). Cutting audio!")
         self.state = ConversationState.AWAITING_INPUT
         self._barge_ins += 1
+        # Below, history gains the heard part of this reply and loses the
+        # rest, so a speculation built before now asked the wrong question.
+        self._discard_speculation("barge-in")
 
         # 1. Cancel ongoing Cartesia TTS generation
         if self.current_context_id:
@@ -403,12 +535,27 @@ class CascadedPipelineOrchestrator:
         self.history = prune_conversation_history(self.history, confirmed_word_index=confirmed_idx)
         self.mark_tracker.reset()
 
-    async def trigger_initial_greeting(self) -> None:
+    async def trigger_initial_greeting(
+        self, greeting: Optional[str] = None, clip: Optional[str] = "smart_greeting",
+        expected_turn: Optional[int] = None,
+    ) -> None:
         """
         Streams pre-recorded zero-latency greeting audio clip (`smart_greeting.mulaw.raw`)
         immediately upon call connect, falling back to Cartesia TTS if missing.
+
+        `greeting`/`clip` let the same floor-taking, interruptible path speak a
+        different opening — the `transfer_failed` clip when the caller is back
+        from an unanswered transfer — or, with clip=None, synthesise any short
+        system line.
         """
-        greeting = "Hello! Thanks for calling Coal Creek Accommodation. How can I help you today?"
+        # Scheduled with create_task, so it starts a tick after it was asked
+        # for. If the caller's next turn took the floor in that tick, this line
+        # must not take it back: claiming `_turn_id` below would make that
+        # turn's mine() false and silently drop the caller's reply.
+        if expected_turn is not None and self._turn_id != expected_turn:
+            logger.info("🗣️ [CascadedOrchestrator] Scripted line skipped — a newer turn holds the floor")
+            return
+        greeting = greeting or "Hello! Thanks for calling Coal Creek Accommodation. How can I help you today?"
         logger.info(f"🗣️ [CascadedOrchestrator] Triggering initial greeting: '{greeting}'")
         self.history.append({"role": "assistant", "content": greeting})
         self.state = ConversationState.AGENT_SPEAKING
@@ -428,6 +575,10 @@ class CascadedPipelineOrchestrator:
         self._turn_id += 1
         my_turn = self._turn_id
         self._turn_task = asyncio.current_task()
+        # Mid-call (the failed-transfer line) the tracker still holds the last
+        # reply's confirmed words; a barge-in would prune history against them
+        # and record words as heard that this line never played.
+        self.mark_tracker.reset()
 
         def mine() -> bool:
             return (self.is_running
@@ -440,11 +591,11 @@ class CascadedPipelineOrchestrator:
         self.vad.arm_immunity(duration_s=3.0)
 
         # Check for pre-recorded cached audio clip to eliminate cold-start TTS latency
-        audio_clip_path = Path(__file__).resolve().parent / "audio" / "f786b574-daa5-4673-aa0c-cbe3e8534c02" / "smart_greeting.mulaw.raw"
-        if audio_clip_path.exists():
+        audio_clip_path = Path(__file__).resolve().parent / "audio" / "f786b574-daa5-4673-aa0c-cbe3e8534c02" / f"{clip}.mulaw.raw"
+        if clip and audio_clip_path.exists():
             try:
                 raw_bytes = audio_clip_path.read_bytes()
-                logger.info(f"⚡ [CascadedOrchestrator] Playing zero-latency cached smart_greeting ({len(raw_bytes)} bytes)")
+                logger.info(f"⚡ [CascadedOrchestrator] Playing zero-latency cached {clip} ({len(raw_bytes)} bytes)")
                 
                 # Stream in 1600-byte (200ms) chunks to Twilio
                 chunk_size = 1600
@@ -499,6 +650,13 @@ class CascadedPipelineOrchestrator:
         # `async for` raised AttributeError before a single byte existed and
         # the caller heard nothing at all.
         try:
+            # Mid-call (the failed-transfer line) a previous turn's reader may
+            # still be parked on the one Cartesia socket; a second reader gets
+            # ConcurrencyError and the socket is marked dead. At call start
+            # there is none and this returns at once.
+            await self._stop_audio_reader()
+            if not mine():
+                return
             self.current_context_id = f"greeting_{int(time.time()*1000)}"
             self._audio_bytes_sent = 0
             self._playback_started_at = 0.0
@@ -574,7 +732,166 @@ class CascadedPipelineOrchestrator:
 
     async def process_deepgram_events(self) -> None:
         """
-        Process conversational events from Deepgram Flux v2.
+        Read Deepgram for the life of the call, reopening the socket if it dies.
+
+        The read loop used to just end when the socket closed, and
+        `send_audio` no-ops on a dead socket — so a single drop left the call
+        deaf until the caller gave up: the agent heard nothing, said nothing,
+        and logged one INFO line. This stays the ONLY reader of the socket:
+        the reconnect happens here, between reads, never alongside one.
+        """
+        short_lived = 0
+        while True:
+            opened_at = time.monotonic()
+            try:
+                await self._read_deepgram_events()
+            except Exception as exc:
+                # An event we could not handle ends the read exactly as a dead
+                # socket does, so it is recovered the same way: the old socket
+                # is closed before a new one opens, keeping one reader.
+                logger.error(
+                    "🔴 [CascadedOrchestrator] Deepgram read loop failed: %s", exc, exc_info=True)
+            if not self._stt_still_needed():
+                return          # the call ended, and closing the socket ended the read
+            short_lived = (short_lived + 1
+                           if time.monotonic() - opened_at < STT_RECONNECT_BUDGET_S else 0)
+            logger.error(
+                "🔴 [CascadedOrchestrator] Deepgram stream ended mid-call — the agent "
+                "cannot hear the caller. Reconnecting."
+            )
+            sentry_sdk.capture_message("Deepgram STT stream ended mid-call", level="error")
+            if short_lived <= STT_MAX_SHORT_LIVED and await self._reconnect_deepgram():
+                continue
+            if self._stt_still_needed():
+                await self._end_deaf_call()
+            return
+
+    def _stt_still_needed(self) -> bool:
+        return self.is_running and not self._hangup_triggered
+
+    async def _reconnect_deepgram(self) -> bool:
+        """
+        Reopen Deepgram with backoff, within STT_RECONNECT_BUDGET_S. Reuses the
+        bridge's current attributes, so the tenant's turn-taking thresholds
+        (set by `_apply_voice_settings`) go back on the new connect URL.
+
+        Re-checks the call after every await: `stop()` can land at any of
+        them, and a socket opened after it has closed the bridges would be
+        leaked open for the life of the process.
+        """
+        deadline = time.monotonic() + STT_RECONNECT_BUDGET_S
+        try:
+            await asyncio.wait_for(self.deepgram.close(), timeout=1.0)   # the dead one
+        except Exception:
+            pass
+        for attempt, delay in enumerate(STT_RECONNECT_BACKOFF_S, start=1):
+            try:
+                await asyncio.wait_for(self._stopped.wait(), timeout=delay)
+                return False                    # stop() was called while we waited
+            except asyncio.TimeoutError:
+                pass
+            remaining = deadline - time.monotonic()
+            if not self._stt_still_needed() or remaining <= 0:
+                return False
+            try:
+                ok = await asyncio.wait_for(
+                    self.deepgram.connect(), timeout=min(STT_CONNECT_TIMEOUT_S, remaining))
+            except asyncio.TimeoutError:
+                ok = False
+            except Exception as exc:
+                logger.warning(f"🟡 [CascadedOrchestrator] Deepgram reconnect raised: {exc}")
+                ok = False
+            if not self._stt_still_needed():
+                if ok:
+                    await self.deepgram.close()
+                return False
+            if ok:
+                logger.warning(
+                    "🟢 [CascadedOrchestrator] Deepgram reconnected on attempt %d — "
+                    "listening again", attempt,
+                )
+                sentry_sdk.capture_message(
+                    f"Deepgram STT reconnected mid-call (attempt {attempt})", level="warning")
+                return True
+            logger.warning("🟡 [CascadedOrchestrator] Deepgram reconnect attempt %d failed", attempt)
+        return False
+
+    async def _end_deaf_call(self) -> None:
+        """
+        The call can no longer hear the caller and will not again. Say so, and
+        hang up through the normal path.
+
+        Never raises: it runs on the Deepgram task at the end of a call that
+        is already failing, and an exception here would leave the line open
+        and deaf — the outcome this exists to prevent.
+        """
+        logger.error(
+            "🔴 [CascadedOrchestrator] Deepgram could not be reconnected — ending the call"
+        )
+        sentry_sdk.capture_message(
+            "Deepgram STT unrecoverable mid-call; call ended", level="error")
+        try:
+            # No turn may start while the line is ending. The queue is fed only
+            # by the dead socket, but a reply in flight would otherwise carry
+            # on talking under the apology.
+            worker = self._turn_worker_task
+            if worker is not None and not worker.done():
+                worker.cancel()
+                try:
+                    await worker
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise
+            await self._abandon_current_turn()
+            if self._stt_still_needed():
+                await self._speak_line(STT_DEAF_LINE)
+        except asyncio.CancelledError:
+            # Only OUR cancellation (stop()) may skip the hang-up. A turn that
+            # was already in flight can cancel the goodbye's pipeline when it
+            # takes the floor, and that CancelledError surfaces here too —
+            # re-raising it left the line open and deaf, the one outcome this
+            # method exists to prevent.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            logger.warning("🟡 [CascadedOrchestrator] Deaf-line goodbye was cut short; hanging up anyway")
+        except Exception as exc:
+            logger.error(
+                "🔴 [CascadedOrchestrator] Could not say goodbye on a deaf line: %s", exc,
+                exc_info=True,
+            )
+        try:
+            if self.is_running:
+                await self._call_owned(self._hangup_call())
+        except Exception as exc:
+            logger.error("🔴 [CascadedOrchestrator] Hang-up of a deaf call failed: %s", exc)
+        # Even if Twilio refused the hang-up, nothing here can hear the caller
+        # again. Standing down lets run_loop close the stream on its next
+        # message instead of holding a deaf line open.
+        self.is_running = False
+
+    async def _speak_line(self, line: str) -> None:
+        """
+        Speak a fixed line as a turn of its own, through the same pipeline and
+        the same floor-taking a reply uses — so the one-reader rule, barge-in
+        and the history append all hold for it too.
+        """
+        self.state = ConversationState.AGENT_SPEAKING
+        self._agent_audio_started = False
+        self._speech_frames = 0
+        self.mark_tracker.reset()
+        self._current_turn_word_count = 0
+        self.current_context_id = f"ctx_{uuid.uuid4().hex[:8]}"
+        self._turn_id += 1
+        self._turn_task = asyncio.create_task(self._run_parallel_streaming_pipeline(
+            self._turn_id, context_id=self.current_context_id, scripted=line))
+        await self._turn_task
+
+    async def _read_deepgram_events(self) -> None:
+        """
+        Process conversational events from Deepgram Flux v2 until the socket
+        ends.
         """
         async for event in self.deepgram.receive_events():
             event_type = event.get("type")
@@ -612,12 +929,17 @@ class CascadedPipelineOrchestrator:
 
             elif turn_state == "EagerEndOfTurn":
                 logger.info("⚡ [CascadedOrchestrator] EagerEndOfTurn received. Pre-warming LLM...")
+                # Off by default, and then this branch is the log line above
+                # and nothing else. On, it only creates a task: this loop
+                # must never wait on the model.
+                if transcript and self._speculation_enabled():
+                    self._start_speculation(transcript)
 
             elif turn_state == "TurnResumed":
                 # The caller paused and carried on, so Flux withdraws the end
-                # of turn it had proposed. There is nothing of ours to undo:
-                # the EagerEndOfTurn branch above only logs, so no speculative
-                # work was ever started.
+                # of turn it had proposed. The only thing of ours to undo is a
+                # speculative round started on that proposal (flag on), which
+                # this cancels. A turn being spoken is never touched here.
                 #
                 # This branch used to cancel `_pending_llm_task`, which was
                 # also the handle for the live turn — so it could cancel the
@@ -632,6 +954,7 @@ class CascadedPipelineOrchestrator:
                 # no-op. It is a hazard that fix created, not one it found —
                 # and the repeated question on call 2 is explained by the
                 # backlog, not by this.
+                self._discard_speculation("resumed")
                 logger.info("🔄 [CascadedOrchestrator] TurnResumed — caller is still talking.")
 
             elif turn_state in ("EndOfTurn", "SpeechEnded", "Results"):
@@ -677,6 +1000,12 @@ class CascadedPipelineOrchestrator:
                     self._report_turn_failure(turn)
                     pending = await self._finished_turns.get()
             except asyncio.CancelledError:
+                # Take the in-flight turn down with the worker. Left running, an
+                # orphaned turn could take the floor after whoever cancelled us
+                # (the deaf-line goodbye, stop()) and talk over or cancel it.
+                for task in (turn, nxt):
+                    if not task.done():
+                        task.cancel()
                 raise
             except Exception as exc:
                 # This loop is the only thing draining the queue. If it dies
@@ -748,6 +1077,7 @@ class CascadedPipelineOrchestrator:
             )
             self._speech_frames = 0
             self._backchannels_held += 1
+            self._discard_speculation("backchannel")
             return
 
         # A short but genuine interruption — "stop", "no, wait" — never reaches
@@ -810,15 +1140,31 @@ class CascadedPipelineOrchestrator:
         # Not awaiting it at all was worse: two turns then shared one
         # orchestrator, and every piece of per-turn state on `self` became a
         # race. The worker reads ahead and this awaits, so neither happens.
+        #
+        # A speculative first round for exactly these words, if one is
+        # running, is handed to this turn as an argument — the same way the
+        # turn's context id is, and for the same reason. Claimed only now,
+        # after the old turn has let go and with no await between here and
+        # the `finally`, so it can never be stranded unclosed.
+        speculation = self._claim_speculation(transcript)
         self._turn_task = asyncio.create_task(
             self._run_parallel_streaming_pipeline(
                 my_turn,
                 context_id=self.current_context_id,
                 transaction=self._sentry_transaction,
                 span_1=self._span_1,
+                speculation=speculation,
             )
         )
-        await self._turn_task
+        try:
+            await self._turn_task
+        finally:
+            if speculation is not None:
+                # No-op once the model round adopted it; otherwise the turn
+                # ended or was cancelled before getting that far.
+                self._discard_speculation("unused", speculation)
+                if self._claimed_speculation is speculation:
+                    self._claimed_speculation = None
 
     async def _run_parallel_streaming_pipeline(
         self,
@@ -826,6 +1172,8 @@ class CascadedPipelineOrchestrator:
         context_id: str,
         transaction=None,
         span_1=None,
+        scripted: Optional[str] = None,
+        speculation: Optional[_Speculation] = None,
     ) -> None:
         """
         Coordinates parallel LLM token generation, phrase extraction,
@@ -845,6 +1193,12 @@ class CascadedPipelineOrchestrator:
         AWAITING_INPUT and `handle_user_turn_complete` sets AGENT_SPEAKING
         straight back for the new turn, so a loop watching only that flag
         wakes up, sees "speaking", and keeps working for a turn that is over.
+
+        `scripted` speaks that text instead of asking the model (see
+        `_speak_line`). `speculation` is a first round already started for
+        this turn's words (see `_claim_speculation`); only ever set when the
+        model is `_default_llm_callback`, the one place that knows how to
+        adopt it.
         """
         start_time = time.time()
         llm_queue = asyncio.Queue()
@@ -857,9 +1211,17 @@ class CascadedPipelineOrchestrator:
                     and self._turn_id == my_turn)
 
         # 1. Start LLM Producer Task
+        async def say_scripted() -> str:
+            return scripted
+
         async def llm_producer():
             try:
-                res = self.llm_callback(self.history)
+                if scripted is not None:
+                    res = say_scripted()
+                elif speculation is not None:
+                    res = self._default_llm_callback(self.history, speculation=speculation)
+                else:
+                    res = self.llm_callback(self.history)
                 first_token = True
                 if hasattr(res, "__anext__") or inspect.isasyncgen(res):
                     async for token in res:
@@ -920,17 +1282,30 @@ class CascadedPipelineOrchestrator:
         # websockets 15.0.1 server, not a mock).
         await self._stop_audio_reader()
 
+        # A dropped Cartesia socket used to stay dropped: every later turn ran
+        # the model, `send_transcript_chunk` returned at its first line, and
+        # the call went on in silence. Checked here — after the old reader is
+        # gone, before this turn's reader opens — so the reader below is the
+        # one and only consumer of whichever socket this leaves in place. A
+        # failed reconnect is not fatal here; the silent-turn check in the
+        # teardown is the backstop.
+        try:
+            await self._ensure_tts_connected()
+        except asyncio.CancelledError:
+            producer_task.cancel()      # nothing else would ever stop it
+            raise
+
         self._current_turn_parts = []
         full_response_parts = self._current_turn_parts
         self._audio_bytes_sent = 0
         self._playback_started_at = 0.0
 
-        async def audio_receiver():
+        # After a barge-in cancel the killed context still emits trailing
+        # chunks and a `done`; without the context filter that stale `done`
+        # breaks the next turn's receiver and the caller hears silence. A
+        # parameter so the silent-turn retry below can read its own context.
+        async def audio_receiver(turn_context_id: str = context_id):
             first_chunk_ingested = False
-            # After a barge-in cancel the killed context still emits trailing
-            # chunks and a `done`; without this filter that stale `done` breaks
-            # the next turn's receiver and the caller hears silence.
-            turn_context_id = context_id
             try:
                 async for audio_evt in self.cartesia.receive_audio_events():
                     if not mine():
@@ -1014,6 +1389,7 @@ class CascadedPipelineOrchestrator:
 
         text_buffer = ""
         is_first_phrase = True
+        context_open = False    # sent with continue=True, not yet closed
 
         try:
             while True:
@@ -1079,8 +1455,26 @@ class CascadedPipelineOrchestrator:
                         transcript=clean_phrase_stripped,
                         continue_stream=not is_last_phrase,
                     )
+                    context_open = not is_last_phrase
 
                 if is_final:
+                    # The peek above only sees the sentinel if it is already
+                    # queued, and with include_usage OpenAI ends the stream one
+                    # network read after the last token — so the last phrase
+                    # usually went with continue=True and nothing ever closed
+                    # the context. Cartesia then sent `done` only on its own
+                    # timeout, the agent stayed AGENT_SPEAKING meanwhile, and a
+                    # caller's "yes" in that window was dropped as a
+                    # backchannel. An empty transcript with continue=false is
+                    # Cartesia's way to close a context. Turn-local id, and only
+                    # while the floor is ours, for the reasons given at the send.
+                    if context_open and mine():
+                        await self.cartesia.send_transcript_chunk(
+                            context_id=context_id,
+                            transcript="",
+                            continue_stream=False,
+                        )
+                        context_open = False
                     break
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] Phrase streaming error: {e}", exc_info=True)
@@ -1093,7 +1487,16 @@ class CascadedPipelineOrchestrator:
             # measured at 15.4 SECONDS of dead air after a barge-in whenever
             # the cancelled context happened not to emit a trailing chunk.
             # Whether it does is a provider detail this code must not bet on.
-            if not mine():
+            #
+            # A cancelled turn has lost the floor too, even while mine() still
+            # says otherwise: when the caller overtakes a reply, the worker
+            # cancels this turn BEFORE the next turn's barge-in flips the
+            # state, so mine() was still true here and the teardown waited out
+            # the full 15 s below — dead air after "actually, do you have
+            # parking?". (Reproduced in review; present since the worker.)
+            current = asyncio.current_task()
+            overtaken = current is not None and current.cancelling() > 0
+            if overtaken or not mine():
                 for task in (producer_task, receiver_task):
                     if not task.done():
                         task.cancel()
@@ -1120,6 +1523,43 @@ class CascadedPipelineOrchestrator:
                     pass
                 except Exception as e:
                     logger.error(f"🔴 [CascadedOrchestrator] {name} task failed: {e}", exc_info=True)
+
+            # Words went to Cartesia, not one byte came back, and the socket
+            # is what failed: the caller heard nothing. Say it again, ONCE,
+            # into a fresh context on a reopened socket, before the playback
+            # wait below — so that wait, barge-in and the history append all
+            # see the retry's audio exactly as they would a first attempt.
+            #
+            # Only for a dead socket. Cartesia alive and answering `error` (a
+            # bad voice_id) or nothing at all would fail the same way again,
+            # after another 15 s of dead air. Safe for the one-reader rule:
+            # this turn's reader has finished or is stopped below before the
+            # retry's reader opens, and the retry reader is registered as
+            # `_audio_reader` so the next turn's `_stop_audio_reader` finds it.
+            # Our own cancellation is not swallowed here — a caller who spoke
+            # meanwhile owns the floor, and barge-in records what was heard.
+            if (mine() and total_words_sent and not self._audio_bytes_sent
+                    and not self.cartesia.is_connected):
+                logger.warning(
+                    "🟡 [CascadedOrchestrator] Turn %s: TTS socket dropped before any "
+                    "audio reached the caller — reconnecting to say it once more", my_turn,
+                )
+                if await self._ensure_tts_connected() and mine():
+                    retry_context = f"{context_id}_retry"
+                    self.current_context_id = retry_context     # what barge-in cancels
+                    await self._stop_audio_reader()
+                    receiver_task = asyncio.create_task(audio_receiver(retry_context))
+                    self._audio_reader = receiver_task
+                    retry_text, _ = prepare_for_tts(" ".join(full_response_parts))
+                    await self.cartesia.send_transcript_chunk(
+                        context_id=retry_context,
+                        transcript=retry_text.strip(),
+                        continue_stream=False,
+                    )
+                    try:
+                        await asyncio.wait_for(asyncio.shield(receiver_task), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        receiver_task.cancel()
 
             # Swept only once the producer and the receiver have stopped, so
             # nothing can write to a finished span afterwards. Sweeping first
@@ -1159,7 +1599,25 @@ class CascadedPipelineOrchestrator:
             if not interrupted:
                 full_text = " ".join(full_response_parts).strip()
                 self._current_turn_parts = []
-                if full_text:
+                if full_text and total_words_sent and not self._audio_bytes_sent:
+                    # Written, synthesised, never heard. This used to go into
+                    # history and the transcript as if spoken, so the model
+                    # built its next answer on a reply the caller never got
+                    # ("as I said...") and the saved call read as normal.
+                    # History gets nothing: the caller's question stands
+                    # unanswered, which is the truth, and the model answers it
+                    # again when they say "hello?".
+                    self._silent_turns += 1
+                    logger.error(
+                        "🔇 [CascadedOrchestrator] Turn %s produced no audio: %d words "
+                        "sent to TTS, 0 bytes reached the caller — reply NOT recorded "
+                        "as spoken", my_turn, total_words_sent,
+                    )
+                    sentry_sdk.capture_message(
+                        "Turn produced no audio: reply generated but never reached the caller",
+                        level="error",
+                    )
+                elif full_text:
                     self.history.append({"role": "assistant", "content": full_text})
                     # Did any price, date or reference in that come from
                     # nowhere? Logged, never blocked. Measured over ten replays
@@ -1172,8 +1630,8 @@ class CascadedPipelineOrchestrator:
                     # find out whether a real phone line says otherwise.
                     # NOTE: full_response_parts holds the MODEL's text. The
                     # spoken text is rewritten by prepare_for_tts, which turns
-                    # "2026-09-19" into "2026-9th-19" — checking that end finds
-                    # nothing, forever.
+                    # "2026-09-19" into "September 19th, 2026" and "$135" into
+                    # "135 dollars" — checking that end finds nothing, forever.
                     try:
                         for kind, claim in unsourced_claims(
                                 full_text,
@@ -1274,6 +1732,18 @@ class CascadedPipelineOrchestrator:
         except Exception:
             pass
 
+    async def _ensure_tts_connected(self) -> bool:
+        """
+        Reopen the Cartesia socket if it has dropped. Never raises: a failed
+        reconnect costs this turn its audio, which the silent-turn check
+        reports; it must not also cost the turn itself.
+        """
+        try:
+            return bool(await self.cartesia.ensure_connected())
+        except Exception as exc:
+            logger.warning(f"🟡 [CascadedOrchestrator] TTS reconnect check failed: {exc}")
+            return False
+
     @staticmethod
     async def _call_owned(action) -> None:
         """
@@ -1332,21 +1802,31 @@ class CascadedPipelineOrchestrator:
 
         If nobody answers within TRANSFER_TIMEOUT, Twilio falls through to the
         redirect and the caller lands back on the AI rather than on dead air.
+        If the update itself fails, the caller is told so and staff are asked
+        to call back — see the except below.
         """
         if not self.call_sid:
             logger.warning("🟡 [CascadedOrchestrator] Cannot transfer: no Call SID")
             return
+        # Who held the floor when the transfer was asked for. The request can
+        # take up to 5 s; if the caller has started another turn by the time
+        # it fails, that turn must not be talked over.
+        floor = self._turn_id
 
         masked = f"{'*' * max(len(transfer_to) - 4, 0)}{transfer_to[-4:]}"
         logger.info(f"📞 [CascadedOrchestrator] Transferring call to {masked}")
         try:
             from twilio.twiml.voice_response import VoiceResponse, Dial
+            from urllib.parse import quote
 
             twiml = VoiceResponse()
             dial = Dial(
                 timeout=settings.TRANSFER_TIMEOUT,
                 caller_id=settings.TWILIO_PHONE_NUMBER,
-                action=f"{settings.BACKEND_URL}/twilio/transfer-status",
+                # tenant_id rides along so a failed transfer's callback request
+                # and return leg land on this tenant, not the default one.
+                action=f"{settings.BACKEND_URL}/twilio/transfer-status"
+                       f"?tenant_id={quote(self.tenant_id or '', safe='')}",
             )
             dial.number(transfer_to)
             twiml.append(dial)
@@ -1368,9 +1848,43 @@ class CascadedPipelineOrchestrator:
             logger.info("✅ [CascadedOrchestrator] Transfer initiated")
             # Stop generating AI audio into a leg that now belongs to staff.
             self.is_running = False
+        except httpx.ReadTimeout as e:
+            # The request reached Twilio and the answer did not come back, so the
+            # <Dial> may well be ringing staff right now. Announcing a failure
+            # and texting "missed transfer" here would be wrong half the time,
+            # and /transfer-status reports a real no-answer anyway. If the
+            # update never landed, the call simply carries on with the AI.
+            logger.warning(f"🟡 [CascadedOrchestrator] Transfer request timed out; outcome unknown: {e}")
+            sentry_sdk.capture_message("Twilio transfer update timed out — outcome unknown", level="warning")
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] Transfer failed: {e}")
             sentry_sdk.capture_exception(e)
+            # The caller has just heard "transferring you" and, before this,
+            # got silence: no <Dial> was ever placed, so no transfer-status
+            # callback will come to record anything either. Do it here.
+            # `is_running` stays True — the AI still owns the call.
+            from services.transfer_fallback import (
+                TRANSFER_FAILED_NOTE, TRANSFER_NOT_STARTED_LINE,
+                schedule_failed_transfer_notification,
+            )
+            try:
+                schedule_failed_transfer_notification(
+                    caller_phone=self.user_phone,
+                    tenant_id=self.tenant_id,
+                    call_sid=self.call_sid,
+                    reason=f"transfer could not be started: {type(e).__name__}",
+                )
+            except Exception as notify_error:
+                logger.error(f"🔴 [CascadedOrchestrator] Callback request not scheduled: {notify_error}")
+            self.history.append({"role": "system", "content": TRANSFER_FAILED_NOTE})
+            # Spoken as its own floor-taking turn (the greeting path, synthesised),
+            # so the caller can interrupt it like any other — but only if nobody
+            # has spoken since; a newer turn already has the note in history.
+            if self.is_running and self._turn_id == floor:
+                asyncio.create_task(
+                    self.trigger_initial_greeting(TRANSFER_NOT_STARTED_LINE, clip=None,
+                                                  expected_turn=floor)
+                )
 
     async def _await_playback(self, interrupted: bool, turn_id: int = 0) -> None:
         """
@@ -1442,7 +1956,9 @@ class CascadedPipelineOrchestrator:
                 text = (message.get("content") or "").strip()
                 if not text:
                     continue
-                lines.append(f"{'Caller' if message.get('role') == 'user' else 'Agent'}: {text}")
+                # A system note (e.g. a failed transfer) was never spoken.
+                who = {"user": "Caller", "system": "Note"}.get(message.get("role"), "Agent")
+                lines.append(f"{who}: {text}")
             if not lines:
                 return
 
@@ -1463,6 +1979,10 @@ class CascadedPipelineOrchestrator:
                 status="completed",
                 room_type=state.room_type or "",
                 customer_name=state.guest_name or state.heard_name or "Not provided",
+                # "CA" + 32 hex is 34 chars; "-r" keeps it within Appwrite's 36.
+                document_id=(f"{self.call_sid}-r"
+                             if self._transfer_return_leg and self.call_sid
+                             and len(self.call_sid) <= 34 else None),
                 metadata={
                     # The things that turned out to matter when reading these
                     # calls by hand. Barge-ins first: seventeen of them in one
@@ -1470,6 +1990,7 @@ class CascadedPipelineOrchestrator:
                     # an interrupted reply was dropped from the agent's memory.
                     "barge_ins": self._barge_ins,
                     "backchannels_held": self._backchannels_held,
+                    "silent_turns": self._silent_turns,
                     "turns": sum(1 for m in self.history if m.get("role") == "user"),
                     "tools": dict(tools),
                     "refusals": self._refusals,
@@ -1480,6 +2001,11 @@ class CascadedPipelineOrchestrator:
                     "availability_quoted": state.availability,
                     "heard_email": state.heard_email,
                     "heard_name": state.heard_name,
+                    # Hit rate and cost of the speculative first round; absent
+                    # on a call that never started one, so a call with the
+                    # flag off saves exactly what it always did.
+                    **({"speculation": self._speculation_stats}
+                       if self._speculation_stats["started"] else {}),
                 },
             )
             logger.info(
@@ -1496,6 +2022,7 @@ class CascadedPipelineOrchestrator:
         Stop the orchestrator and close all active bridges.
         """
         self.is_running = False
+        self._stopped.set()
         for task in (self._turn_worker_task, self._turn_task, self._audio_reader):
             if task and not task.done():
                 task.cancel()
@@ -1506,6 +2033,18 @@ class CascadedPipelineOrchestrator:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+        # A speculative round has no turn to end it now. Discarding cancels
+        # its task, which closes its stream; awaited, so no request outlives
+        # the call. Before the save, so the record counts it.
+        for spec in (self._speculation, self._claimed_speculation):
+            if spec is None:
+                continue
+            self._discard_speculation("call ended", spec)
+            try:
+                await spec.task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._speculation = self._claimed_speculation = None
         await self._save_transcript()
         await self.deepgram.close()
         await self.cartesia.close()
@@ -1624,7 +2163,11 @@ class CascadedPipelineOrchestrator:
         # Fire the caller's booking lookup now so it overlaps the first model
         # round instead of landing inside the turn as a ~250ms tool call.
         self.dispatcher.prefetch_caller_reservation()
-        self._openai = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+        self._openai = AsyncOpenAI(
+            api_key=settings.OPENAI_API_KEY,
+            timeout=OPENAI_TIMEOUT,
+            max_retries=OPENAI_MAX_RETRIES,
+        )
         await self._apply_voice_settings()
         self._context_ready = True
         if self.warm_llm_on_start:
@@ -1849,7 +2392,355 @@ class CascadedPipelineOrchestrator:
         self.call_state.observe(name, args, result)
         return result
 
-    async def _default_llm_callback(self, history: List[Dict[str, Any]]) -> AsyncGenerator[str, None]:
+    async def _open_llm_round(self, model: str, messages: list, tools: list,
+                              track: Optional[list] = None,
+                              quiet: Optional[Callable[[], bool]] = None):
+        """
+        Start one model round and wait for its first event, under a deadline.
+        Returns `(stream, first_event)`; `first_event` is None for an empty
+        stream.
+
+        There was no deadline at all: the turn waited on the SDK's 600 s and
+        the caller on silence. A first event that misses
+        LLM_FIRST_TOKEN_TIMEOUT_S gets ONE more attempt — on
+        LLM_FALLBACK_MODEL when that is set — and then the round fails, which
+        the caller hears as LLM_TROUBLE_LINE. Worst case is twice the
+        deadline. The defaults sit well above a normal first token (~0.5 s,
+        tool rounds ~1.1-1.7 s) so a slow-but-fine reply is never cut.
+
+        A retry repeats the request exactly — the same messages, tool results
+        included — so no tool runs twice. The per-model options are sent only
+        to the model they were configured for: gpt-4.1-nano rejects
+        `reasoning_effort`, so carrying a luna option over would turn the
+        fallback into a guaranteed 400.
+
+        `track`, when given, collects every stream opened, so a caller that
+        can be cancelled mid-round (a speculation) can close them itself.
+        """
+        deadline_s = settings.LLM_FIRST_TOKEN_TIMEOUT_S
+        fallback = settings.LLM_FALLBACK_MODEL or model
+        attempts = (
+            (model, self._model_options()),
+            (fallback, self._model_options() if fallback == model else {}),
+        )
+        for attempt, (use_model, options) in enumerate(attempts, start=1):
+            opened = []
+
+            async def first_event():
+                stream = await self._openai.chat.completions.create(
+                    model=use_model, messages=messages, tools=tools, stream=True,
+                    # Adds a final chunk carrying usage; its `choices` is
+                    # empty, which the round's loop already skips.
+                    stream_options={"include_usage": True},
+                    **options,
+                )
+                opened.append(stream)
+                if track is not None:
+                    track.append(stream)
+                try:
+                    return stream, await stream.__anext__()
+                except StopAsyncIteration:
+                    return stream, None
+
+            try:
+                return await asyncio.wait_for(first_event(), timeout=deadline_s)
+            except asyncio.TimeoutError:
+                for stream in opened:
+                    await self._close_llm_stream(stream)
+                if quiet is not None and quiet():
+                    # A speculation nobody has claimed yet: if the caller keeps
+                    # talking it is thrown away, and paging Sentry at error
+                    # level for a turn that never happened is a false alarm.
+                    logger.info("🔮 Speculative round: no first token from %s in %.1fs "
+                                "(attempt %d of %d)", use_model, deadline_s, attempt, len(attempts))
+                    continue
+                logger.error(
+                    "🔴 [CascadedOrchestrator] No first token from %s in %.1fs "
+                    "(attempt %d of %d)", use_model, deadline_s, attempt, len(attempts),
+                )
+                sentry_sdk.capture_message(
+                    f"LLM first-token deadline missed ({use_model}, attempt {attempt})",
+                    level="warning" if attempt < len(attempts) else "error",
+                )
+        raise LLMDeadlineExceeded(f"no first token in {len(attempts)} attempts")
+
+    async def _bounded_events(self, stream, first):
+        """
+        The rest of a round's stream, with a deadline between events.
+
+        A stream that stalls mid-reply used to hold the turn open with the
+        caller hearing half a sentence and then nothing. Raising here lands in
+        the callback's error path, which ends the turn with LLM_TROUBLE_LINE.
+        Tool calls are only executed after their round's stream has ENDED, so
+        a stall part-way through streaming a tool call's arguments leaves
+        nothing to run: the truncated call is never dispatched.
+        """
+        if first is None:
+            return
+        yield first
+        gap_s = settings.LLM_STREAM_GAP_TIMEOUT_S
+        while True:
+            try:
+                event = await asyncio.wait_for(stream.__anext__(), timeout=gap_s)
+            except StopAsyncIteration:
+                return
+            except asyncio.TimeoutError:
+                await self._close_llm_stream(stream)
+                raise LLMDeadlineExceeded(f"stream stalled for {gap_s:.1f}s mid-reply") from None
+            yield event
+
+    @staticmethod
+    async def _close_llm_stream(stream) -> None:
+        """Release an abandoned stream's HTTP connection. Never raises."""
+        closer = getattr(stream, "aclose", None) or getattr(stream, "close", None)
+        if closer is None:
+            return
+        try:
+            result = closer()
+            if inspect.isawaitable(result):
+                await asyncio.wait_for(result, timeout=1.0)
+        except Exception as exc:
+            logger.debug("LLM stream close failed: %s", exc)
+
+    async def _turn_messages(self, history: List[Dict[str, Any]], call_state: CallState):
+        """
+        The request a turn sends. One builder for the real turn and the
+        speculative one, so the two can only differ where the call itself
+        has moved on — which the fingerprint then catches — and never because
+        two copies of this logic drifted apart, which would read as a 0% hit
+        rate with nothing to say why.
+        """
+        model, messages, tools = await self._request_prefix()
+        # Only the recent transcript goes in verbatim; what the older
+        # turns *established* is in the call-state note, which is placed
+        # immediately before the caller's latest words because that is
+        # where the model actually attends to it. Fourteen turns back, it
+        # did not.
+        messages += recent_transcript(history)
+        state_note = call_state.as_note()
+        if state_note and len(messages) > 1:
+            messages.insert(len(messages) - 1, {"role": "system", "content": state_note})
+        return model, messages, tools
+
+    def _request_fingerprint(self, model: str, messages: list, tools: list) -> str:
+        """
+        A hash of everything a model round sends. Hashing the whole request
+        rather than a summary of it (length, last message) is ~0.2 ms for the
+        full prompt, and it cannot miss a change a summary would: a pruned
+        reply, a call-state fact, the prompt's clock ticking over a minute.
+
+        Exact everywhere but the caller's latest words, which go in as
+        normalised words: the speculation sent the eager transcript, the turn
+        has the final one, and `_claim_speculation` has already required
+        those to be the same words. Flux re-punctuating "yes" as "Yes." must
+        not count as the call having changed.
+        """
+        if messages and messages[-1].get("role") == "user":
+            messages = messages[:-1] + [
+                {"role": "user", "content": normalise_transcript(messages[-1].get("content"))}]
+        return hashlib.sha256(json.dumps(
+            [model, self._model_options(), messages, tools], sort_keys=True, default=str,
+        ).encode()).hexdigest()
+
+    # ── Speculative first round on Flux EagerEndOfTurn ─────────────────────
+    #
+    # Flux says "probably done" (EagerEndOfTurn) a few hundred ms before it
+    # says "done" (EndOfTurn), and the model's first token takes ~0.5 s. Asking
+    # on the first and keeping the answer if the second confirms the same
+    # words takes up to that gap off every turn — Deepgram's own guidance.
+    #
+    # What a speculation may do is exactly one thing: open round 1's stream
+    # and wait for its first event. It reads no further, so there is no second
+    # reader and no second deadline implementation; what the model sends
+    # meanwhile waits in the connection's buffer and is read at once on
+    # adoption. It never touches history, call_state, tools or audio — those
+    # all live after the seam in `_default_llm_callback`, which only runs once
+    # EndOfTurn has confirmed the turn. A first event that is a tool call is
+    # kept like any other: the request is fingerprint-identical, so that tool
+    # call IS the round-1 answer the turn would have got, and the normal path
+    # runs the tool, once, after confirmation.
+
+    def _speculation_enabled(self) -> bool:
+        """SPECULATIVE_EOT_ENABLED, unless the tenant's voice_settings say
+        otherwise with `speculative_eot`."""
+        vs = (self.tenant_config or {}).get("voice_settings") or {}
+        flag = vs.get("speculative_eot")
+        if flag is None:
+            return bool(settings.SPECULATIVE_EOT_ENABLED)
+        if isinstance(flag, str):
+            return flag.strip().lower() in ("1", "true", "yes", "on")
+        return bool(flag)
+
+    def _start_speculation(self, transcript: str) -> None:
+        """
+        Start round 1 for `transcript` on its own task. Runs on the Deepgram
+        read loop, so it never awaits.
+        """
+        # Flux can propose the same words twice; the request in flight is
+        # already the right one, and a fresh one would be paid for twice.
+        current = self._speculation
+        if (current is not None and not current.adopted and not current.discarded
+                and current.key == normalise_transcript(transcript)):
+            return
+        # A newer proposal supersedes the last, whether or not one starts.
+        self._discard_speculation("replaced")
+        # Only when the floor is free. While the agent is speaking, these
+        # words will either cut it — barge-in rewrites history, so the request
+        # would differ — or be held as a backchannel and never answered:
+        # tokens spent either way for an answer nobody can use. A custom model
+        # callback (tests, harnesses) has no round to hand over.
+        if not (self.is_running and self._context_ready and self._openai is not None
+                and self.state == ConversationState.AWAITING_INPUT
+                and not self._hangup_triggered
+                and self.llm_callback == self._default_llm_callback):
+            return
+        spec = _Speculation(transcript)
+        spec.task = asyncio.create_task(self._speculate(spec))
+        self._speculation = spec
+        self._speculation_stats["started"] += 1
+
+    async def _speculate(self, spec: _Speculation) -> None:
+        """
+        The speculation's task: build the request this turn WOULD send if
+        confirmed, send it, wait for the first event, then hold the stream
+        until it is adopted or discarded (both end this by cancelling it).
+        """
+        try:
+            try:
+                # Copies, never the originals. history gets the caller's
+                # words the way handle_user_turn_complete will append them,
+                # and call_state hears them the way the callback will — so an
+                # unchanged call produces a byte-identical request.
+                history = self.history + [{"role": "user", "content": spec.transcript}]
+                call_state = copy.deepcopy(self.call_state)
+                call_state.hear_caller(
+                    spec.transcript,
+                    agent_asked=next((m.get("content", "") for m in reversed(history)
+                                      if m.get("role") == "assistant"), ""),
+                )
+                model, messages, tools = await self._turn_messages(history, call_state)
+                spec.fingerprint = self._request_fingerprint(model, messages, tools)
+                spec.sent_at = time.perf_counter()
+                # The real round's own deadline and retry, measured from now.
+                spec.opened = await self._open_llm_round(
+                    model, messages, tools, track=spec.streams,
+                    # Quiet until a turn claims it; from then on a missed
+                    # deadline is the caller's, and is reported as one.
+                    quiet=lambda: not spec.claimed_at)
+                spec.first_at = time.perf_counter()
+            except Exception as exc:
+                spec.error = exc
+                return
+            finally:
+                spec.ready.set()
+            await asyncio.Event().wait()
+        finally:
+            # Every exit but adoption: the stream is nobody's, so close it,
+            # including one cancelled mid-open, before its first event.
+            if not spec.adopted:
+                for stream in spec.streams:
+                    await self._close_llm_stream(stream)
+
+    def _discard_speculation(self, reason: str, spec: Optional[_Speculation] = None) -> None:
+        """
+        Drop a speculation — the waiting one by default. Synchronous, so it is
+        safe on the read loop and inside barge-in: cancelling the task is all
+        it takes, and the task closes its own stream. Idempotent, and an
+        adopted speculation belongs to its turn and is left alone.
+        """
+        if spec is None:
+            spec = self._speculation
+        if spec is not None and spec is self._speculation:
+            self._speculation = None
+        if spec is None or spec.adopted or spec.discarded:
+            return
+        spec.discarded = True
+        if spec.task is not None:
+            spec.task.cancel()
+        stats = self._speculation_stats
+        stats["discarded"] += 1
+        stats["discard_reasons"][reason] = stats["discard_reasons"].get(reason, 0) + 1
+        logger.info("🔮 [CascadedOrchestrator] Speculative first round discarded (%s)", reason)
+
+    def _claim_speculation(self, transcript: str) -> Optional[_Speculation]:
+        """
+        EndOfTurn confirmed `transcript`. The waiting speculation goes to this
+        turn if it was started on the same words, and is dropped otherwise.
+        The slot is empty either way: this EndOfTurn closes the eager/resumed
+        cycle the speculation belonged to.
+        """
+        spec, self._speculation = self._speculation, None
+        if spec is None:
+            return None
+        if spec.discarded or spec.key != normalise_transcript(transcript):
+            self._discard_speculation("different words", spec)
+            return None
+        if self.llm_callback != self._default_llm_callback:
+            self._discard_speculation("custom model callback", spec)
+            return None
+        spec.claimed_at = time.perf_counter()
+        self._claimed_speculation = spec
+        return spec
+
+    async def _adopt_speculation(self, spec: _Speculation, model: str, messages: list, tools: list):
+        """
+        Round 1's `(stream, first_event)` from the speculation, or None to
+        open a fresh round as if it had never existed.
+
+        Used only if it sent byte-for-byte the request this turn is about to
+        send. Deadlines are unchanged: a first event already in hand has met
+        the first-token deadline; one still pending is under the speculation's
+        own `_open_llm_round` deadline and retry, which started earlier, so
+        the caller never waits longer than without it. The gap deadline is
+        `_bounded_events`, applied by the caller to this stream as to any.
+        """
+        if spec.adopted or spec.discarded:
+            return None
+        if spec.fingerprint != self._request_fingerprint(model, messages, tools):
+            self._discard_speculation(
+                "request changed" if spec.fingerprint else "not sent yet", spec)
+            return None
+        decided_at = time.perf_counter()
+        waited = not spec.ready.is_set()
+        try:
+            await spec.ready.wait()
+        except asyncio.CancelledError:
+            self._discard_speculation("unused", spec)
+            raise
+        if spec.discarded:           # barge-in or stop() while we waited
+            return None
+        if spec.error is not None:
+            if waited:
+                # It failed on the caller's time, exactly as this round would
+                # have: same outcome, and a second full deadline here would
+                # double the silence.
+                self._discard_speculation("failed", spec)
+                raise spec.error
+            # It failed before anyone was waiting; a fresh round costs the
+            # caller nothing they would not have paid without speculation.
+            self._discard_speculation("failed before EndOfTurn", spec)
+            return None
+        spec.adopted = True
+        spec.task.cancel()           # ends the hold; adopted, so it closes nothing
+        # Without it, the first token would have come one model latency after
+        # this point; with it, at the later of now and when it actually came.
+        model_ms = (spec.first_at - spec.sent_at) * 1000
+        saved_ms = max(0.0, min((decided_at - spec.sent_at) * 1000, model_ms))
+        after_eot_ms = max(0.0, (max(spec.first_at, decided_at)
+                                 - (spec.claimed_at or decided_at)) * 1000)
+        stats = self._speculation_stats
+        stats["used"] += 1
+        stats["saved_ms"] += int(round(saved_ms))
+        logger.info(
+            "🔮 [CascadedOrchestrator] Speculative first round used | first token %.0f ms "
+            "after EndOfTurn | model took %.0f ms, asked %.0f ms early | saved ~%.0f ms",
+            after_eot_ms, model_ms, (decided_at - spec.sent_at) * 1000, saved_ms,
+        )
+        return spec.opened
+
+    async def _default_llm_callback(
+        self, history: List[Dict[str, Any]], speculation: Optional[_Speculation] = None,
+    ) -> AsyncGenerator[str, None]:
         """
         Generate the agent's reply for this turn with OpenAI.
 
@@ -1879,18 +2770,11 @@ class CascadedPipelineOrchestrator:
                               if m.get("role") == "assistant"), ""),
         )
 
+        # Read by the error path, which may run before the first round.
+        assistant_text = ""
         try:
             await self._ensure_call_context()
-            model, messages, tools = await self._request_prefix()
-            # Only the recent transcript goes in verbatim; what the older
-            # turns *established* is in the call-state note, which is placed
-            # immediately before the caller's latest words because that is
-            # where the model actually attends to it. Fourteen turns back, it
-            # did not.
-            messages += recent_transcript(history)
-            state_note = self.call_state.as_note()
-            if state_note and len(messages) > 1:
-                messages.insert(len(messages) - 1, {"role": "system", "content": state_note})
+            model, messages, tools = await self._turn_messages(history, self.call_state)
             # Bounded so a tool-calling loop can never stall the voice turn.
             # Whether the caller has heard anything this turn. A tool round
             # with nothing said first is dead air for as long as the tool and
@@ -1911,13 +2795,19 @@ class CascadedPipelineOrchestrator:
                 # open otherwise — a leaked span in the code that exists to
                 # repair leaked spans.
                 try:
-                    stream = await self._openai.chat.completions.create(
-                        model=model, messages=messages, tools=tools, stream=True,
-                    # Adds a final chunk carrying usage; its `choices` is empty,
-                    # which the guard below already skips.
-                        stream_options={"include_usage": True},
-                        **self._model_options(),
-                    )
+                    # THE seam for a speculative first round, and the only
+                    # one: round 1 takes a stream already opened for this
+                    # exact request instead of opening its own. Everything
+                    # from here down — content, tool calls, acks, the gap
+                    # deadline, the error path — runs exactly as it would on
+                    # a stream opened here, because it is the same object in
+                    # the same state. Tools still run only below, in this
+                    # turn, after EndOfTurn confirmed it.
+                    adopted = None
+                    if _round == 0 and speculation is not None:
+                        adopted = await self._adopt_speculation(
+                            speculation, model, messages, tools)
+                    stream, first = adopted or await self._open_llm_round(model, messages, tools)
                 except Exception:
                     if llm_span:
                         llm_span.finish()
@@ -1926,7 +2816,7 @@ class CascadedPipelineOrchestrator:
                 assistant_text = ""
                 first_event = True
 
-                async for event in stream:
+                async for event in self._bounded_events(stream, first):
                     usage = getattr(event, "usage", None)
                     if usage and self._sentry_transaction:
                         # Proves whether the prompt cache was warm. The first
@@ -1962,6 +2852,14 @@ class CascadedPipelineOrchestrator:
                         said_this_turn = True
                         yield delta.content
                     for tc in (delta.tool_calls or []):
+                        # The phrase splitter holds a trailing "." until the
+                        # next token shows it is not "$129.50" — and the next
+                        # token comes after the tool, without a leading space.
+                        # Unmarked, "Let me check those dates." waited out the
+                        # lookup and then ran into "Great news" as one word.
+                        if assistant_text and not assistant_text[-1].isspace():
+                            assistant_text += " "
+                            yield " "
                         # Acknowledge the moment the model reaches for a tool,
                         # not when it has finished writing the call. Done in
                         # code: the prompt asks for this and the model rarely
@@ -2068,7 +2966,30 @@ class CascadedPipelineOrchestrator:
                     return
         except Exception as e:
             logger.error(f"🔴 [CascadedOrchestrator] LLM generation failed: {e}", exc_info=True)
-            yield "I am checking those details right now. Just one moment please."
+            sentry_sdk.capture_exception(e)
+            # Honest, and attached to whatever was already said: a reply cut
+            # off mid-sentence gets a full stop first, or the phrase splitter
+            # runs "We have a queen" straight into "Sorry". Nothing half-built
+            # survives this: tool calls in flight lived only in this round's
+            # local `pending`, and `messages` is local to the turn — history
+            # receives only the words actually spoken.
+            tail = assistant_text.rstrip()
+            if tail and tail[-1] not in ".?!":
+                yield "."
+            yield " " + LLM_TROUBLE_LINE
+
+    async def _reject_stream(self, why: str) -> None:
+        """
+        Close the Twilio socket as a policy violation (1008). The caller breaks
+        out of run_loop, whose `finally` runs stop() — that cancels the turn
+        worker and closes the bridges, so nothing is left running.
+        """
+        logger.warning("🔐 [CascadedOrchestrator] Rejecting stream: %s", why)
+        self.is_running = False
+        try:
+            await self.twilio_ws.close(code=1008)
+        except Exception:
+            pass
 
     async def run_loop(self) -> None:
         """
@@ -2081,6 +3002,11 @@ class CascadedPipelineOrchestrator:
 
         dg_task = asyncio.create_task(self.process_deepgram_events())
         self._turn_worker_task = asyncio.create_task(self._turn_worker())
+        # Whether this socket has presented a start we accept. Twilio always
+        # sends `connected` then `start` before any audio, so under "enforce"
+        # anything else arriving first is not Twilio: rejected before it can
+        # feed Deepgram or drive a turn on our bill.
+        admitted = False
         try:
             async for message in self.twilio_ws.iter_text():
                 if not self.is_running:
@@ -2088,7 +3014,19 @@ class CascadedPipelineOrchestrator:
                 try:
                     data = json.loads(message)
                     event_type = data.get("event")
+                    if (not admitted and event_type in ("media", "mark")
+                            and stream_auth_mode() == "enforce"):
+                        await self._reject_stream(f"{event_type} before an authenticated start")
+                        break
                     if event_type == "start":
+                        # First, before the identity below is believed: an
+                        # unverified user_phone is what the privacy gates key
+                        # on. Under "enforce" a bad token never reaches the
+                        # greeting, the caller lookup or the LLM warm-up.
+                        if not check_stream_start(data["start"]):
+                            await self._reject_stream("invalid or missing stream_token")
+                            break
+                        admitted = True
                         self.stream_sid = data["start"].get("streamSid", self.stream_sid)
                         # Twilio <Parameter> values: user_phone (privacy-bound
                         # lookups), tenant_id (voice_settings), user_to.
@@ -2112,7 +3050,23 @@ class CascadedPipelineOrchestrator:
                         # so voice_settings are live before the first synthesis
                         # instead of arriving a turn late.
                         asyncio.create_task(self._ensure_call_context())
-                        asyncio.create_task(self.trigger_initial_greeting())
+                        # Back from an unanswered transfer (/twilio/transfer-status
+                        # redirects with transfer_failed=true; staff have already
+                        # been sent a callback request). A fresh "Hello! Thanks
+                        # for calling" here sounded like the call had restarted,
+                        # and the model, seeing no trace of the failure, offered
+                        # the same transfer again. Acknowledge it instead, and
+                        # leave the model a note it reads but the caller never hears.
+                        if str(params.get("transfer_failed", "")).lower() == "true":
+                            self._transfer_return_leg = True
+                            from services.transfer_fallback import (
+                                TRANSFER_FAILED_LINE, TRANSFER_FAILED_NOTE,
+                            )
+                            self.history.append({"role": "system", "content": TRANSFER_FAILED_NOTE})
+                            asyncio.create_task(self.trigger_initial_greeting(
+                                TRANSFER_FAILED_LINE, clip="transfer_failed"))
+                        else:
+                            asyncio.create_task(self.trigger_initial_greeting())
                     elif event_type == "media":
                         payload = data["media"].get("payload")
                         if payload:

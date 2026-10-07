@@ -6,7 +6,12 @@ surfacing a payment link that can be SMS'd or emailed to the guest
 immediately after a booking is confirmed over the phone.
 
 Hot-path contract:
-  - create_checkout_session() NEVER raises — returns None on any Stripe error.
+  - create_checkout_session() is async and NEVER raises — returns (None, None)
+    on any Stripe error.
+  - The Stripe SDK is synchronous, so the network call runs in a worker thread
+    (asyncio.to_thread). Run inline it froze the event loop — and with it the
+    audio of every concurrent call on the dyno — for the full Stripe round trip,
+    which with the SDK defaults (80s timeout, 2 retries) could be minutes.
   - All errors are logged but never re-raised into the voice agent handler.
 
 Stripe SDK note:
@@ -14,6 +19,7 @@ Stripe SDK note:
   If not configured, create_checkout_session() returns None gracefully.
 """
 
+import asyncio
 import logging
 import time
 from typing import Optional
@@ -33,8 +39,35 @@ _STRIPE_CONFIGURED = bool(settings.STRIPE_SECRET_KEY)
 if _STRIPE_CONFIGURED:
     stripe.api_key = settings.STRIPE_SECRET_KEY
 
+# The SDK default is an 80s per-attempt timeout with 2 retries. Even off the
+# event loop that pins a worker thread and leaves the guest without a payment
+# link for minutes; a checkout create normally answers in well under 2s.
+# Process-global and installed unconditionally: the SDK creates its own 80s
+# client on first use, so a "only if unset" guard lost to any dashboard Stripe
+# call made before the first voice booking imported this module. main.py
+# imports this module at startup for the same reason.
+_STRIPE_TIMEOUT_S = 10
+stripe.max_network_retries = 1
+try:
+    stripe.default_http_client = stripe.new_default_http_client(
+        timeout=_STRIPE_TIMEOUT_S,
+        verify_ssl_certs=stripe.verify_ssl_certs,
+        proxy=stripe.proxy,
+    )
+except Exception as _exc:  # older SDK layout — keep its defaults, never break import
+    logger.warning("💳 Could not set Stripe HTTP timeout: %s", _exc)
 
-def create_checkout_session(
+
+async def create_checkout_session(**kwargs):
+    """
+    Async entry point for the voice path. Same kwargs and ``(url, session_id)``
+    return as ``_create_checkout_session_sync``; the blocking SDK call runs in a
+    worker thread so the event loop keeps streaming audio meanwhile.
+    """
+    return await asyncio.to_thread(_create_checkout_session_sync, **kwargs)
+
+
+def _create_checkout_session_sync(
     amount_aud: int,
     room_type: str,
     booking_ref: Optional[str] = None,

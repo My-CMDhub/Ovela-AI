@@ -23,7 +23,21 @@ class Settings(BaseSettings):
 
     # OpenAI
     OPENAI_API_KEY: str
+    # Live-call deadlines for each model round (see CascadedPipelineOrchestrator
+    # ._open_llm_round). Conservative on purpose: a normal first token is
+    # ~0.5 s and a tool round ~1.1-1.7 s, so these only fire on a real stall.
+    LLM_FIRST_TOKEN_TIMEOUT_S: float = 6.0
+    LLM_STREAM_GAP_TIMEOUT_S: float = 10.0
+    # Model for the one retry after a missed first token; empty = same model.
+    LLM_FALLBACK_MODEL: str = ""
     
+    # Start the first model round on Deepgram Flux's EagerEndOfTurn and keep it
+    # if EndOfTurn confirms the same words (see CascadedPipelineOrchestrator
+    # ._start_speculation). Off by default: it spends tokens on every eager
+    # turn the caller then carries on from. A tenant can override it with
+    # voice_settings.speculative_eot.
+    SPECULATIVE_EOT_ENABLED: bool = False
+
     # Cartesia (Direct TTS Bypass)
     CARTESIA_API_KEY: Optional[str] = ""
 
@@ -67,7 +81,23 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_PHONE_NUMBER: str = ""  # set via env
-    
+
+    # Inbound authentication for Twilio traffic. Each is "off" | "report" |
+    # "enforce". "report" only logs (and alerts Sentry) on a missing/invalid
+    # credential and lets the call through, so the checks can ship without
+    # risking a real call; flip to "enforce" once the logs show verdict=valid
+    # on live calls. Unknown values behave as "report".
+    #  - STREAM_AUTH_MODE: the signed `stream_token` <Parameter> that ties a
+    #    Media Stream socket to the TwiML we issued (core/stream_auth.py).
+    #  - TWILIO_SIGNATURE_MODE: X-Twilio-Signature on the Twilio webhooks
+    #    (core/twilio_signature.py). Needs TWILIO_AUTH_TOKEN.
+    # The stream token is only as strong as the webhook that hands it out:
+    # an unsigned /twilio/voice will mint a token for any From. Enforce both.
+    STREAM_AUTH_MODE: str = "report"
+    TWILIO_SIGNATURE_MODE: str = "report"
+    # Optional. Unset -> derived from the magic-link secret (domain-separated).
+    STREAM_TOKEN_SECRET: str = ""
+
 
     # Personal Assistant Target Number
     MY_NUMBER: Optional[str] = None
@@ -83,7 +113,11 @@ class Settings(BaseSettings):
     STAFF_PHONE_NUMBER: str = ""  # set via env
     
     # Demo Settings
-    TRANSFER_TIMEOUT: int = 10  # Seconds before fallback to AI
+    # Seconds the staff phone rings on a transfer before the caller is handed
+    # back to the AI (and a callback request is recorded). 10s is only ~2-3
+    # rings — short on purpose so nobody waits in silence, but tunable via env
+    # (TRANSFER_TIMEOUT=20) if staff need longer to reach the phone.
+    TRANSFER_TIMEOUT: int = 10
     
     # Phone to Tenant Mapping (Ingress)
     # Maps Twilio 'To' number -> Tenant ID (Can be set via env var as JSON)

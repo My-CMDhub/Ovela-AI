@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 import asyncio
 import re
+import weakref
 from zoneinfo import ZoneInfo
 
 # Import knowledge base services
@@ -25,8 +26,23 @@ from services.motel_knowledge_base import set_tenant_context
 from services.voice_agent.text_utils import normalize_phone_number
 from services.knowledge_base.coalcreek import COALCREEK_DATA
 from core.config import settings
+from core.utils import mask_email, mask_phone
 
 logger = logging.getLogger(__name__)
+
+# Tool args carry guest names, emails and phone numbers. Logs ship to a third
+# party and outlive any booking, so never log `args` itself — only its keys
+# plus the few scalar fields that identify nobody.
+_LOGGABLE_ARG_VALUES = frozenset({
+    "check_in_date", "check_out_date", "check_in", "check_out",
+    "room_type", "num_nights", "num_guests", "has_user_confirmed_summary",
+})
+
+
+def _args_for_log(args) -> dict:
+    if not isinstance(args, dict):
+        return {}
+    return {k: (args[k] if k in _LOGGABLE_ARG_VALUES else "<redacted>") for k in sorted(args)}
 
 MELBOURNE_TZ = ZoneInfo("Australia/Melbourne")
 WEEKDAY_INDEX = {
@@ -95,7 +111,7 @@ def not_your_booking(tool: str, doc: dict, caller_phone: str, what: str) -> dict
     logger.warning(
         "🔒 Privacy boundary: %s refused — caller '%s' owns none of the bookings "
         "found%s.",
-        tool, caller_phone,
+        tool, mask_phone(caller_phone),
         f" (nearest: {doc.get('booking_reference')})" if doc.get("booking_reference") else "",
     )
     return {
@@ -293,97 +309,135 @@ def _resolve_relative_dates(check_in_raw: str, check_out_raw: str, user_utteranc
 
     return None, None, "unresolved"
 
+def _map_room_type(raw_type) -> str:
+    """Map a raw DB room_type to the display names used throughout the system.
+    Null-safe; any unrecognised room_type passes through as-is (safe fallback)."""
+    mapped_type = (raw_type or "").title()
+    if mapped_type == "Queen":
+        return "Double Room"
+    if mapped_type == "Twin":
+        return "Twin Room"
+    if mapped_type == "Family":
+        return "Family Suite"
+    if mapped_type in ("Spa", "Deluxe", "Suite"):
+        return "Deluxe Spa Suite"
+    return mapped_type
+
+
 async def _check_appwrite_availability(db_service, check_in_str: str, check_out_str: str, room_type: str = None) -> dict:
     """
     Check availability purely from Appwrite DB.
     Mimics the scraper output format.
+
+    A room type is available only if ONE room of that type is free on EVERY
+    night. It used to be "some room of the type is free each night", and the
+    booking path then took night 1's sample room: room 1 free Fri / booked Sat
+    plus room 2 free both nights read as available and assigned room 1 — a
+    Saturday double booking. Nobody moves rooms mid-stay at a motel, so the
+    unit of availability is the room, not the type.
+
+    Return keys (all pre-existing ones keep their shape):
+      available_all_nights  bool — `room_type` (or any type) bookable in one room
+      available_rooms       [type] — types with >=1 room free all nights
+      per_night_results     {date: [one sample room per type free that night]};
+                            the sample prefers a room free ALL nights, so
+                            night-1 pricing quotes a room we would actually give
+      rooms_free_all_nights {type: [room, ...]} — NEW: what the booking path
+                            assigns from; never infer a room from per_night
+      blocked_dates         nights with nothing free of `room_type` (or of any
+                            type when none given) — same meaning as the scraper
+    On failure returns success=False; callers already map that to "unknown".
     """
     try:
         tenant_id = "coalcreek"
         rooms = await db_service.get_motel_rooms(tenant_id)
         reservations = await db_service.get_motel_reservations(check_in_str, check_out_str, tenant_id)
-        
+
+        # Fail CLOSED. None means "couldn't read", not "nothing booked": treating
+        # it as empty is how an Appwrite outage showed every room free and the
+        # booking path assigned one anyway.
+        if reservations is None:
+            return {"success": False, "error": "reservations_unreadable"}
+        # get_motel_rooms still folds errors into [] (its contract is tested
+        # elsewhere). A motel with no rooms is never true, so empty inventory is
+        # a failed read too — otherwise an outage is told to callers as "fully
+        # booked", which loses the booking just as wrongly.
+        if not rooms:
+            return {"success": False, "error": "room_inventory_unreadable"}
+
         # Parse dates
         start_date = datetime.strptime(check_in_str, "%Y-%m-%d").date()
         end_date = datetime.strptime(check_out_str, "%Y-%m-%d").date()
         nights = (end_date - start_date).days
         if nights <= 0:
             return {"success": False, "error": "Invalid date range"}
-            
+
+        night_strs = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(nights)]
+
         # Filter active rooms
         active_rooms = [r for r in rooms if r.get("status") == "available"]
-        
+
+        # Room numbers booked on each night. A reservation covers night D when
+        # check-in is on/before D and check-out is strictly after D.
+        booked_by_night = {
+            night: {res.get("room_number") for res in reservations
+                    if res.get("room_number")
+                    and res.get("check_in_date") <= night
+                    and res.get("check_out_date") > night}
+            for night in night_strs
+        }
+
+        candidates = []  # (room dict, set of nights it is free)
+        for room in active_rooms:
+            room_num = room.get("room_number")
+            candidates.append((
+                {
+                    "room_type": _map_room_type(room.get("room_type")),
+                    "room_number": room_num,
+                    # CRITICAL: use `or` not .get(key, default) because Appwrite stores
+                    # null values as None even when the key exists — .get() returns None,
+                    # not the default, when the key is present but null.
+                    "price_per_night": room.get("base_rate") or 150,
+                    "available": True,
+                },
+                {night for night in night_strs if room_num not in booked_by_night[night]},
+            ))
+
+        # The per-room answer: rooms free on every night of the stay, by type,
+        # in inventory order (deterministic, so the room quoted is the room
+        # assigned).
+        rooms_free_all_nights: Dict[str, List[dict]] = {}
+        for r, free_nights in candidates:
+            if len(free_nights) == nights:
+                rooms_free_all_nights.setdefault(r["room_type"], []).append(r)
+
+        # Free-all-nights rooms first (stable sort keeps inventory order), so the
+        # per-night sample for a type is a room we would actually hand out.
+        ordered = sorted(candidates, key=lambda c: len(c[1]) != nights)
         per_night_results = {}
-        available_all_nights = True
-        all_available_room_types = set()
-        
-        for i in range(nights):
-            current_date = start_date + timedelta(days=i)
-            current_date_str = current_date.strftime("%Y-%m-%d")
-            
-            # Find reservations that overlap with this specific night
-            # Check-in on current_date or earlier, AND check-out strictly after current_date
-            night_res = [res for res in reservations 
-                         if res.get("check_in_date") <= current_date_str 
-                         and res.get("check_out_date") > current_date_str]
-                         
-            booked_room_numbers = set(res.get("room_number") for res in night_res if res.get("room_number"))
-            available_this_night = []
-
-            for room in active_rooms:
-                room_num = room.get("room_number")
-                r_type = room.get("room_type") or ""
-
-                # Map raw DB room_type to the display names used throughout the system.
-                # Handles null-safe: r_type is coerced to "" above.
-                mapped_type = r_type.title()
-                if mapped_type == "Queen":
-                    mapped_type = "Double Room"
-                elif mapped_type == "Twin":
-                    mapped_type = "Twin Room"
-                elif mapped_type == "Family":
-                    mapped_type = "Family Suite"
-                elif mapped_type in ("Spa", "Deluxe", "Suite"):
-                    mapped_type = "Deluxe Spa Suite"
-                # Any unrecognised room_type passes through as-is (safe fallback)
-
-                # CRITICAL: use `or` not .get(key, default) because Appwrite stores
-                # null values as None even when the key exists — .get() returns None,
-                # not the default, when the key is present but null.
-                base_rate = room.get("base_rate") or 150
-
-                if room_num not in booked_room_numbers:
-                    available_this_night.append({
-                        "room_type":      mapped_type,
-                        "room_number":    room_num,
-                        "price_per_night": base_rate,
-                        "available":      True
-                    })
-            
-            # Aggregate available room types for this night
+        blocked_dates = []
+        for night in night_strs:
             night_types = {}
-            for r in available_this_night:
-                rtype = r["room_type"]
-                if rtype not in night_types:
-                    night_types[rtype] = r
-            
-            per_night_results[current_date_str] = list(night_types.values())
-            
-            if i == 0:
-                all_available_room_types = set(night_types.keys())
-            else:
-                all_available_room_types = all_available_room_types.intersection(set(night_types.keys()))
-        
+            for r, free_nights in ordered:
+                if night in free_nights and r["room_type"] not in night_types:
+                    night_types[r["room_type"]] = dict(r)
+            per_night_results[night] = list(night_types.values())
+            if (room_type not in night_types) if room_type else not night_types:
+                blocked_dates.append(night)
+
+        available_types = list(rooms_free_all_nights.keys())
         if room_type:
-            available_all_nights = room_type in all_available_room_types
+            available_all_nights = room_type in rooms_free_all_nights
         else:
-            available_all_nights = len(all_available_room_types) > 0
+            available_all_nights = len(available_types) > 0
 
         return {
             "success": True,
             "available_all_nights": available_all_nights,
-            "available_rooms": list(all_available_room_types),
-            "per_night_results": per_night_results
+            "available_rooms": available_types,
+            "per_night_results": per_night_results,
+            "rooms_free_all_nights": rooms_free_all_nights,
+            "blocked_dates": blocked_dates,
         }
     except Exception as e:
         logger.error(f"Appwrite DB availability error: {e}", exc_info=True)
@@ -503,7 +557,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                         logger.info(f"✅ Scraping success on attempt {attempt}")
                         break
                     else:
-                        logger.warning("ARGS DUMP: %s", args); logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
+                        logger.debug("tool args: %s", _args_for_log(args)); logger.warning(f"⚠️ Scraping attempt {attempt} failed: {result.get('error')}")
                         
                 except Exception as scrape_err:
                     logger.error(f"⚠️ Scraping exception on attempt {attempt}: {scrape_err}")
@@ -637,8 +691,24 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
         else:
             # NOT available - explain why
             if target_room:
-                # Specific room requested but blocked
+                # Specific room requested but blocked. The scrape is always for
+                # ALL rooms, so `blocked_dates` is "nights with nothing free at
+                # all" — not this type's nights (and the PMS path never set it,
+                # so the model was told "sold out on ."). Derive this type's own
+                # blocked nights from the per-night lists both sources return.
+                per_night = result.get("per_night_results") or {}
+                blocked_dates = [
+                    night for night, night_rooms in per_night.items()
+                    if not any(r.get("room_type") == target_room and r.get("available")
+                               for r in (night_rooms or []))
+                ] or blocked_dates
                 blocked_str = ", ".join(blocked_dates)
+                if blocked_str:
+                    why = f"it's sold out on {blocked_str}"
+                else:
+                    # Every night has a {target_room} free, just never the same
+                    # one: we won't hold a stay that means changing rooms.
+                    why = "there isn't one room free for the whole stay"
                 payload = {
                     "available": False,
                     "verified": True,
@@ -647,7 +717,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                     "check_in": check_in,
                     "check_out": check_out,
                     "nights": nights,
-                    "ai_should_say": f"I'm sorry, the {target_room} isn't available for all {nights} night{'s' if nights > 1 else ''} - it's sold out on {blocked_str}. However, I have other room types available. Would you like to hear those options?"
+                    "ai_should_say": f"I'm sorry, the {target_room} isn't available for all {nights} night{'s' if nights > 1 else ''} - {why}. However, I have other room types available. Would you like to hear those options?"
                 }
                 if isinstance(availability_cache, dict):
                     availability_cache[cache_key] = copy.deepcopy(payload)
@@ -655,6 +725,9 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
             else:
                 # All rooms sold out
                 blocked_str = ", ".join(blocked_dates)
+                # Empty means every night has something free but no single room
+                # spans the stay (per-room availability) — don't say "booked on ."
+                sold_out = f"fully booked on {blocked_str}" if blocked_str else "unable to offer one room for the whole stay"
                 payload = {
                     "available": False,
                     "verified": True,
@@ -662,7 +735,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                     "check_in": check_in,
                     "check_out": check_out,
                     "nights": nights,
-                    "ai_should_say": f"I'm sorry, we're fully booked on {blocked_str}. Would you like to check different dates, or can I have someone call you if we get a cancellation?"
+                    "ai_should_say": f"I'm sorry, we're {sold_out}. Would you like to check different dates, or can I have someone call you if we get a cancellation?"
                 }
                 if isinstance(availability_cache, dict):
                     availability_cache[cache_key] = copy.deepcopy(payload)
@@ -682,6 +755,20 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
         if isinstance(availability_cache, dict):
             availability_cache[cache_key] = copy.deepcopy(payload)
         return payload
+
+
+# In-process booking locks, keyed (tenant, room type) and scoped per event
+# loop. asyncio.Lock binds to the loop it first waits on, so one lock shared
+# across loops (pytest runs a loop per test; a worker could run several) would
+# raise "bound to a different event loop". Weak keys drop a loop's locks when
+# the loop is collected; per loop the dict is bounded by the number of types.
+_BOOKING_LOCKS: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, Dict[tuple, asyncio.Lock]]" = weakref.WeakKeyDictionary()
+
+
+def _booking_lock(tenant_id: str, room_type: str) -> asyncio.Lock:
+    """The lock serialising check-then-save for one tenant's room type."""
+    per_loop = _BOOKING_LOCKS.setdefault(asyncio.get_running_loop(), {})
+    return per_loop.setdefault((tenant_id, room_type), asyncio.Lock())
 
 
 async def handle_create_booking_request(args: dict, user_phone: str, save_reservation_fn, db_service=None) -> dict:
@@ -712,10 +799,10 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     has_confirmed_val = args.get("has_user_confirmed_summary", "NO")
     has_confirmed = (str(has_confirmed_val).upper() == "YES" or has_confirmed_val is True)
     if not has_confirmed:
-        logger.warning("ARGS DUMP: %s", args); logger.warning(
+        logger.debug("tool args: %s", _args_for_log(args)); logger.warning(
             "N1 gate: create_booking_request called WITHOUT caller summary confirmation — rejecting. "
-            "guest=%s email=%s check_in=%s room=%s",
-            guest_name, guest_email, check_in, room_type
+            "guest_name_given=%s email=%s check_in=%s room=%s",
+            bool(guest_name), mask_email(guest_email), check_in, room_type
         )
         return {
             "success": False,
@@ -869,53 +956,78 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         "tenant_id": "coalcreek"
     }
 
-    if not settings.USE_LIVE_SCRAPING:
-        # P11-F: Skip redundant Appwrite re-check if availability was already confirmed
-        # in this session (availability_cache passed via args from check_availability call).
-        # Falls back to a fresh check if no cached result available.
-        _avail_cache = args.get("_availability_cache") or {}
-        _cache_key = f"{check_in}|{check_out}|{room_data['name']}"
-        _cached = _avail_cache.get(_cache_key) if isinstance(_avail_cache, dict) else None
-        if _cached and _cached.get("available") is True:
-            avail_res = {"success": True, "available_all_nights": True, "per_night_results": _cached.get("per_night_results", {})}
-            logger.info("♻️ PMS booking: skipping re-check — using session availability cache for %s", _cache_key)
-        else:
-            avail_res = await _check_appwrite_availability(db_service, check_in, check_out, room_data["name"])
-        if avail_res.get("success") and avail_res.get("available_all_nights"):
-            per_night = avail_res.get("per_night_results", {})
-            first_night_date = list(per_night.keys())[0] if per_night else None
-            if first_night_date:
-                rooms_for_night = per_night[first_night_date]
-                for r in rooms_for_night:
-                    if r["room_type"] == room_data["name"] and r["available"]:
-                        reservation_data["room_number"] = r["room_number"]
-                        reservation_data["status"] = "reserved"
-                        reservation_data["source"] = "voice_ai_pms_auto"
-                        logger.info(f"✅ PMS Mode: Auto-assigned room {r['room_number']} to {booking_ref}")
-                        break
-        else:
+    async def _save() -> Optional[dict]:
+        """Persist the hold. Returns the refusal to send back, or None on success."""
+        if not save_reservation_fn:
+            return None  # test mode: nothing to write
+        save_res = await save_reservation_fn(reservation_data)
+        if save_res is None or not save_res.get("success"):
+            err_detail = (save_res or {}).get("error", "unknown") if save_res else "None returned"
+            logger.error(f"Failed to save reservation: {err_detail}")
             return {
                 "success": False,
-                "message": f"Unfortunately, the {room_data['name']} is no longer available for those dates."
+                "message": "There was a system error securing your hold. Please try again or contact reception."
             }
-    
-    try:
-        # Save to DB (if saving function provided)
-        if save_reservation_fn:
-            save_res = await save_reservation_fn(reservation_data)
-            
-            if save_res is None or not save_res.get("success"):
-                err_detail = (save_res or {}).get("error", "unknown") if save_res else "None returned"
-                logger.error(f"Failed to save reservation: {err_detail}")
-                return {
-                    "success": False,
-                    "message": "There was a system error securing your hold. Please try again or contact reception."
-                }
+        # P11-C: Capture saved doc $id so cold-path skips race-prone re-fetch
+        saved_doc_id = (save_res.get("document") or {}).get("$id")
+        if saved_doc_id:
+            reservation_data["_saved_doc_id"] = saved_doc_id
+        return None
 
-            # P11-C: Capture saved doc $id so cold-path skips race-prone re-fetch
-            saved_doc_id = (save_res.get("document") or {}).get("$id")
-            if saved_doc_id:
-                reservation_data["_saved_doc_id"] = saved_doc_id
+    try:
+        if not settings.USE_LIVE_SCRAPING:
+            # Always a fresh check, never the per-call memo: the memo (P11-F
+            # used to read it from args) cannot see a room taken since it was
+            # filled, and the check below is what makes the write safe.
+            #
+            # Check and write happen under one in-process lock per room type.
+            # Without it two calls on this dyno can both read "room 2 free",
+            # both pick room 2 and both save — the last room sold twice. Rooms
+            # are only ever assigned to bookings of their own type, so a
+            # per-type lock is as safe as a per-tenant one and lets different
+            # types book in parallel. It does NOT cover two dynos; that needs a
+            # unique constraint in the DB.
+            async with _booking_lock("coalcreek", room_data["name"]):
+                avail_res = await _check_appwrite_availability(db_service, check_in, check_out, room_data["name"])
+                if not avail_res.get("success"):
+                    # Fail CLOSED. We could not read the calendar, so we neither
+                    # assign a room nor claim one is free, and we do not save a
+                    # hold that would send a payment link for a room that may not
+                    # exist. Same "unknown → offer reception" path that
+                    # check_availability takes when the calendar is unreachable.
+                    logger.error(
+                        "🚨 PMS booking refused for %s: availability unknown (%s)",
+                        booking_ref, avail_res.get("error"),
+                    )
+                    return {
+                        "success": False,
+                        "available": "unknown",
+                        "verified": False,
+                        "message": (
+                            "Sorry, I couldn't confirm that room on the live calendar just now, "
+                            "so I haven't placed the hold. If you'd like, I can put you through to reception."
+                        ),
+                    }
+                # Assign only a room free on EVERY night of the stay — never a
+                # night-1 sample, which may be booked later in the stay.
+                free_rooms = (avail_res.get("rooms_free_all_nights") or {}).get(room_data["name"]) or []
+                if not free_rooms:
+                    return {
+                        "success": False,
+                        "message": f"Unfortunately, the {room_data['name']} is no longer available for those dates."
+                    }
+                room = free_rooms[0]
+                reservation_data["room_number"] = room["room_number"]
+                reservation_data["status"] = "reserved"
+                reservation_data["source"] = "voice_ai_pms_auto"
+                logger.info(f"✅ PMS Mode: Auto-assigned room {room['room_number']} to {booking_ref}")
+                # Save while still holding the lock: releasing first would let a
+                # waiter re-check before this row exists and take the same room.
+                refusal = await _save()
+        else:
+            refusal = await _save()
+        if refusal:
+            return refusal
 
         # Speak the booking reference — natural cadence: "CC, AB 1 2 3 4"
         # Split on dash: "CC-AB1234" → prefix="CC", suffix="AB1234"
@@ -1073,9 +1185,9 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
                     normalized_doc_phone = doc_phone
             
             if not caller_phone or not phone_numbers_match(normalized_doc_phone, caller_phone):
-                logger.warning("ARGS DUMP: %s", args); logger.warning(
-                    "🔒 Privacy boundary triggered: Caller phone '%s' attempted to access booking for '%s' (phone: '%s'). Refusing access.",
-                    caller_phone, doc.get("guest_name"), doc_phone
+                logger.debug("tool args: %s", _args_for_log(args)); logger.warning(
+                    "🔒 Privacy boundary triggered: Caller phone '%s' attempted to access booking %s (phone: '%s'). Refusing access.",
+                    mask_phone(caller_phone), doc.get("booking_reference") or "?", mask_phone(doc_phone)
                 )
                 return {
                     "found": False,
@@ -1096,9 +1208,15 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "status":                 doc.get("status", ""),
             "payment_status":         doc.get("payment_status") or "outstanding",
             "payment_confirmed":      doc.get("payment_status") == "paid",
-            "payment_outstanding":    doc.get("payment_status") not in ("paid", "card_on_file"),
+            # An expired hold is not "outstanding": the prompt answers
+            # payment_outstanding=true with "resend the link", and that link
+            # is dead and its room released. hold_expired says what is true.
+            "payment_outstanding":    (doc.get("payment_status") not in ("paid", "card_on_file")
+                                       and (doc.get("status") or "").lower() != "expired"),
+            "hold_expired":           (doc.get("status") or "").lower() == "expired",
             "payment_link_sent":      bool(doc.get("payment_link_url") or doc.get("payment_link_sent_at")),
-            "payment_link_url":       doc.get("payment_link_url", ""),
+            "payment_link_url":       ("" if (doc.get("status") or "").lower() == "expired"
+                                       else doc.get("payment_link_url", "")),
             "payment_link_sent_at":   doc.get("payment_link_sent_at", ""),
             "payment_link_expires_at":doc.get("payment_expires_at", ""),
             "email_status":           doc.get("payment_status") or "unknown",
@@ -1118,6 +1236,16 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             result["payment_status_message"] = (
                 "Card securely saved (pre-authorisation). "
                 "Payment will be charged at check-in. Booking is confirmed."
+            )
+        elif _bstatus == "expired":
+            # Checked before the pending branch: an expired hold still carries
+            # payment_status "pending_payment", and that branch would offer to
+            # resend a link for a room that has already gone back on sale.
+            result["payment_status_message"] = (
+                "The hold on this booking EXPIRED because payment was not completed, "
+                "and the room was released. Do NOT resend the payment link and do NOT "
+                "say 'cancelled'. Tell the caller the hold lapsed, then offer to check "
+                "availability for the same dates and make a new booking."
             )
         elif _pstatus == "email_failed":
             result["payment_status_message"] = (
@@ -1363,7 +1491,7 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
     guest_phone = user_phone or args.get("guest_phone", "") or ""
     guest_email = args.get("guest_email", "")
     
-    logger.info(f"Captured Guest Info: {guest_name} - {guest_phone}")
+    logger.info("Captured Guest Info: name_given=%s phone=%s", bool(guest_name), mask_phone(guest_phone))
 
     # ── Correction path: patch reservation + resend Stripe link ──
     email_resent = False
@@ -1379,7 +1507,10 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
             for doc in (docs or []):
                 _ps = doc.get("payment_status") or ""
                 _bs = doc.get("status") or ""
-                is_pending = (
+                # Same guard as resend_payment_link: an expired hold keeps
+                # payment_status "pending_payment", and correcting an email on
+                # it would mail a fresh checkout for a room back on sale.
+                is_pending = (_bs or "").lower() != "expired" and (
                     _bs in ("reserved", "pending", "pending_payment", "link_sent")
                     or _ps in ("pending", "pending_payment", "email_failed", "")
                 )
@@ -1651,7 +1782,10 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
             # - 'pending' / 'pending_payment' (explicit payment pending statuses)
             # - 'link_sent' (link was sent but not paid)
             # - null/empty payment_status (pipeline glitch — treat as outstanding)
-            is_pending = (
+            # An expired hold keeps payment_status "pending_payment", so the
+            # status check has to come first: a fresh link would take money for
+            # a room that was released when the old link lapsed.
+            is_pending = _bs != "expired" and (
                 _bs in ("reserved", "pending", "pending_payment", "link_sent")
                 or _ps in ("pending", "pending_payment", "email_failed", "")
             )
@@ -1667,6 +1801,18 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
                 if doc.get("payment_status") == "paid":
                     paid_doc = doc
                     break
+            expired_doc = next((d for d in (docs or []) if d.get("status") == "expired"), None)
+            if expired_doc and not paid_doc:
+                return {
+                    "success": False,
+                    "hold_expired": True,
+                    "booking_reference": expired_doc.get("booking_reference", ""),
+                    "error": (
+                        "This booking's hold EXPIRED unpaid and the room was released, so "
+                        "the old payment link cannot be resent. Do NOT say 'cancelled'. "
+                        "Offer to check availability for the same dates and make a new booking."
+                    ),
+                }
             if paid_doc:
                 return {
                     "success": False,
@@ -1796,7 +1942,7 @@ async def _handle_stripe_and_guest_email(
             if existing_stripe_url:
                 logger.info("💳 Existing Stripe URL is expired or expiring soon. Forcing new session generation.")
                 existing_stripe_url = None  # Ensure we PATCH Appwrite with the new link
-            stripe_url, stripe_session_id = create_checkout_session(
+            stripe_url, stripe_session_id = await create_checkout_session(
                 amount_aud=int(total_amt),
                 room_type=room_type,
                 booking_ref=booking_ref,
@@ -2215,7 +2361,7 @@ class CoalCreekFunctionDispatcher:
                 try:
                     await asyncio.wait_for(email_notify_event.wait(), timeout=6.0)
                 except asyncio.TimeoutError:
-                    logger.warning("ARGS DUMP: %s", args); logger.warning("N2: Email dispatch timeout (6s) for %s — continuing", booking_ref)
+                    logger.debug("tool args: %s", _args_for_log(args)); logger.warning("N2: Email dispatch timeout (6s) for %s — continuing", booking_ref)
 
                 # N2: If email failed propagate the error into the function result
                 # so the AI is forced to tell the caller immediately.
@@ -2229,7 +2375,7 @@ class CoalCreekFunctionDispatcher:
                         "booking_reference": booking_ref,
                         "_email_bounce": True,
                     }
-                    logger.warning("ARGS DUMP: %s", args); logger.warning("N2: SMTP bounce injected into function result for %s", booking_ref)
+                    logger.debug("tool args: %s", _args_for_log(args)); logger.warning("N2: SMTP bounce injected into function result for %s", booking_ref)
 
                 # ── Task 3: ADK Cold Path session state update ─────────────────
                 if self.call_sid:
@@ -2273,7 +2419,12 @@ class CoalCreekFunctionDispatcher:
                  project = os.getenv("GOOGLE_CLOUD_PROJECT", "project-bd29d7f8-c65f-4597-b7b")
                  location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
                  client = genai.Client(vertexai=True, project=project, location=location)
-                 response = client.models.generate_content(
+                 # MUST be the async client (`.aio`). The sync call blocked the
+                 # event loop for the whole search (up to the 8s timeout), which
+                 # froze audio on EVERY concurrent call on this dyno and stopped
+                 # execute()'s wait_for from firing. The per-request
+                 # http_options timeout below is honoured by the async path too.
+                 response = await client.aio.models.generate_content(
                      model="gemini-2.5-flash-lite",
                      contents=query,
                      config=genai_types.GenerateContentConfig(
@@ -2288,6 +2439,15 @@ class CoalCreekFunctionDispatcher:
              except Exception as e:
                  logger.error(f"Live search failed: {e}")
                  return {"success": False, "error": str(e), "message": "My search service is currently unavailable."}
+             finally:
+                 # The async path opens its own HTTP session per client; close
+                 # it rather than leave one per search for the GC to find.
+                 _client = locals().get("client")
+                 if _client is not None:
+                     try:
+                         await _client.aio.aclose()
+                     except Exception:
+                         pass
 
 
         # Human / Reporting
@@ -2325,7 +2485,7 @@ class CoalCreekFunctionDispatcher:
              negation_words = {"no", "dont", "don't", "stop", "never", "cancel"}
              words = set(re.sub(r'[^\w\s]', '', user_utt).split())
              if negation_words & words or user_utt in ("no", "no no", "no thanks", "no thank you"):
-                 logger.warning("ARGS DUMP: %s", args); logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
+                 logger.debug("tool args: %s", _args_for_log(args)); logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
                  return {
                      "success": False,
                      "error": "The user explicitly said NO to the transfer. Do not transfer them. Ask how else you can help.",

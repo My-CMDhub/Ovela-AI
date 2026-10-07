@@ -304,6 +304,13 @@ MARKDOWN_PATTERNS = [
 ]
 
 
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+           "August", "September", "October", "November", "December"]
+# Longest first so "September" wins over "Sep" in the alternation.
+_MONTH_NAMES = "|".join(sorted(_MONTHS + [m[:3] for m in _MONTHS] + ["Sept"],
+                               key=len, reverse=True))
+
+
 def clean_tts_output(text: str) -> str:
     """
     Clean text for TTS output.
@@ -334,7 +341,22 @@ def clean_tts_output(text: str) -> str:
     def _to_ordinal(n: int) -> str:
         suf = {1: 'st', 2: 'nd', 3: 'rd'}
         return f"{n}{'th' if 11 <= n <= 13 else suf.get(n % 10, 'th')}"
-    result = _re.sub(r'\b0(\d)\b', lambda m: _to_ordinal(int(m.group(1))), result)
+    # Only where it IS a day: after a month name, or "the 03". Applied to any
+    # zero-padded number it read "2:05 p.m." as "2:5th", "room 07" as
+    # "room 7th", "$1,200.00" as "1,200.0th" and "2026-09-05" as "2026-9th-5th".
+    def _iso(m) -> str:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if not (1 <= mo <= 12 and 1 <= d <= 31):
+            return m.group(0)
+        return f"{_MONTHS[mo - 1]} {_to_ordinal(d)}, {y}"
+    result = _re.sub(r'\b(\d{4})-(\d{2})-(\d{2})\b', _iso, result)
+    result = _re.sub(
+        r'\b(' + _MONTH_NAMES + r')(\.?\s+)0(\d)\b',
+        lambda m: f"{m.group(1)}{m.group(2)}{_to_ordinal(int(m.group(3)))}",
+        result, flags=_re.IGNORECASE)
+    result = _re.sub(r'\b(the\s+)0(\d)\b',
+                     lambda m: f"{m.group(1)}{_to_ordinal(int(m.group(2)))}",
+                     result, flags=_re.IGNORECASE)
 
     # ── Room type slash normalization (M1 extended: any letter/slash/letter combo)
     # Legacy: "Queen/Double" → "Double Room" (prevent TTS reading 'slash')
@@ -398,6 +420,29 @@ def extract_control_signals(text: str) -> tuple[str, list[str]]:
 # URL AND SPECIAL CONTENT HANDLING
 # =============================================================================
 
+# The whole amount, thousands commas and cents included. The old pattern took
+# only the leading digits, so the read-back the booking gate depends on came
+# out as "129 dollars.50" for $129.50 and "1 dollars,200.0th" for $1,200.00 —
+# the stray ".00" then caught by the ordinal-date rule.
+_PRICE = re.compile(r'\$\s?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?(?!\d)')
+
+
+def _speak_price(m: re.Match) -> str:
+    whole = int(m.group(1).replace(",", ""))
+    cents = (m.group(2) or "").ljust(2, "0") if m.group(2) else ""
+    if cents and int(cents) and whole == 0:
+        return f"{int(cents)} cents"
+    words = f"{whole} dollar{'' if whole == 1 else 's'}"
+    if cents and int(cents) >= 10:
+        # "129 dollars 50" is how a receptionist says it; "and 50 cents" is
+        # longer and no clearer on the phone.
+        words += f" {cents}"
+    elif cents and int(cents):
+        # "dollars 05" would be read "oh five"; a single-digit cent is not.
+        words += f" and {int(cents)} cent{'' if int(cents) == 1 else 's'}"
+    return words
+
+
 def make_speakable(text: str) -> str:
     """
     Convert text with URLs, emails, and special content into speakable form.
@@ -426,8 +471,8 @@ def make_speakable(text: str) -> str:
     result = re.sub(email_pattern, r'\1 at \2 dot \3', result)
     
     # Replace dollar amounts for cleaner speech
-    # $130 -> 130 dollars
-    result = re.sub(r'\$(\d+)', r'\1 dollars', result)
+    # $130 -> 130 dollars, $129.50 -> 129 dollars 50, $1,200.00 -> 1200 dollars
+    result = _PRICE.sub(_speak_price, result)
     
     # Replace % 
     result = re.sub(r'(\d+)%', r'\1 percent', result)

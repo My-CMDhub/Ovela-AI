@@ -174,6 +174,11 @@ class DeepgramStandaloneBridge:
                         yield data
                     except json.JSONDecodeError:
                         logger.warning(f"🟡 [DeepgramStandalone] Malformed JSON received: {message[:100]}")
+            # Only reached when the socket itself ran out (a clean close from
+            # the far end); a caller breaking out never gets here. Without
+            # this the flag stayed True on a closed socket.
+            logger.info("🔌 [DeepgramStandalone] Connection closed cleanly")
+            self.is_connected = False
         except websockets.exceptions.ConnectionClosed:
             logger.info("🔌 [DeepgramStandalone] Connection closed by server")
             self.is_connected = False
