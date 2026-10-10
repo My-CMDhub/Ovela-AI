@@ -291,3 +291,18 @@ async def test_the_old_checkout_is_expired_when_a_hold_moves(monkeypatch):
 async def test_expiring_a_link_with_no_session_id_is_a_quiet_no():
     from services.tenants.coalcreek.stripe import coalcreek_stripe_service
     assert await coalcreek_stripe_service.expire_checkout_from_url("https://example.com/pay") is False
+
+
+async def test_a_guest_checking_out_today_can_still_move_their_other_unpaid_hold():
+    """Third review round: the departing stay sorted first and blocked the move."""
+    leaving = _booking(_d(-2), _d(0), ref="CC-10000", doc_id="leaving")
+    db = MovesDb([leaving, UNPAID_AHEAD])
+    out = await _book(db)
+    assert out["needs_intent"] is True and out["existing_booking"] == "CC-41273"
+    assert "replaces_booking_reference" in out["error"]
+
+
+async def test_a_departing_guest_booking_a_new_stay_is_not_asked_instead_or_as_well():
+    db = MovesDb([_booking(_d(-2), _d(0))])
+    out = await _book(db)
+    assert out["success"] is True

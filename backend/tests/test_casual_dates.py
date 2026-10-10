@@ -487,3 +487,51 @@ def test_a_date_said_at_confirmation_that_differs_blocks(words):
 def test_nights_said_beat_the_weekend_keep_rule(words, model, nights):
     rec = reconcile(D(model[0]), D(model[1]), words, date(2026, 10, 14))
     assert (rec.check_out - rec.check_in).days == nights, (words, rec)
+
+
+# ── third review round (each reproduced against f4065cd) ──────────────────
+
+@pytest.mark.parametrize("words, check_in, check_out", [
+    ("12 to 14 november", "2026-11-12", "2026-11-14"),
+    ("staying 12 to 14 november", "2026-11-12", "2026-11-14"),
+    ("12-14 november", "2026-11-12", "2026-11-14"),
+    ("our 25th anniversary, friday to sunday", "2026-10-16", "2026-10-18"),
+])
+def test_ranges_and_milestones_round_three(words, check_in, check_out):
+    r = read_dates(words, SAT)
+    assert r is not None and (r.check_in, r.check_out) == (D(check_in), D(check_out)), (words, r)
+
+
+@pytest.mark.parametrize("words, model", [
+    ("yes, out sunday", ("2026-10-16", "2026-10-18")),
+    ("yes, till sunday", ("2026-10-16", "2026-10-18")),
+    ("yep, leaving sunday", ("2026-10-16", "2026-10-18")),
+    ("yes, until the 26th", ("2026-11-24", "2026-11-26")),
+    ("yeah, out the 26th", ("2026-11-24", "2026-11-26")),
+])
+def test_confirming_the_checkout_day_does_not_block(words, model):
+    rec = reconcile(D(model[0]), D(model[1]), words, date(2026, 10, 14), for_booking=True)
+    assert not rec.changed and not rec.ask, (words, rec)
+
+
+def test_a_different_checkout_day_moves_only_the_end():
+    rec = reconcile(D("2026-10-16"), D("2026-10-18"), "actually, till monday", date(2026, 10, 14))
+    assert (rec.check_in, rec.check_out) == (D("2026-10-16"), D("2026-10-19")) and rec.changed
+
+
+@pytest.mark.parametrize("words", [
+    "after christmas day", "the day after boxing day", "the week before christmas day",
+    "until boxing day", "till new year's day", "we can't do friday to sunday",
+])
+def test_not_a_check_in_round_three(words):
+    r = read_dates(words, SAT)
+    assert r is None or r.check_in is None, (words, r)
+
+
+def test_a_milestone_is_not_a_date_but_the_weekend_is():
+    r = read_dates("it's my 40th this weekend", SAT)
+    assert r.check_in == D("2026-10-10")
+
+
+def test_a_dashed_correction_between_day_numbers():
+    assert read_dates("no, not the 24th - the 25th", SAT).check_in == D("2026-10-25")

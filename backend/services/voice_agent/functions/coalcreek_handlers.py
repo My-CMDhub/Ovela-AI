@@ -1134,9 +1134,13 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                         "booking_reference": replacing_doc.get("booking_reference"),
                         "error": f"NOT BOOKED. {rule}"}
         if not replaces_ref and not additional:
+            # A stay ending today is not what new dates could replace. Upcoming
+            # bookings come first: a guest in the room asking about next month
+            # is asking about the next-month booking, not the room they're in.
             live = sorted(
-                (d for d in mine if _change_rule(d, today)[0] in ("paid", "in_house", "movable")),
-                key=lambda d: d.get("check_in_date") or "")
+                (d for d in mine if _change_rule(d, today)[0] in ("paid", "in_house", "movable")
+                 and _stay_timing(d, today) != "checkout_today"),
+                key=lambda d: (_stay_timing(d, today) != "upcoming", d.get("check_in_date") or ""))
             if live:
                 d = live[0]
                 kind, _rule = _change_rule(d, today)

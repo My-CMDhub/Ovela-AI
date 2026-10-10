@@ -215,7 +215,7 @@ def _share_month(m) -> str:
     # "rooms 2 to 4 may be free", "kids are 3 and 5, november 20th we arrive".
     if (m["m"] == "may" and not (has_suffix or re.search(r"\bof\s+may\b", whole))) \
             or (re.search(r"\s(?:and)\s", whole) and not has_suffix) \
-            or re.match(r"\s+\d", rest) or (not has_suffix and "the" not in whole.split()):
+            or re.match(r"\s+\d", rest):
         return whole
     w1 = f"{m['w1']} " if m["w1"] else ""
     w2 = f"{m['w2']} " if m["w2"] else ""
@@ -550,7 +550,7 @@ def _month_named(which: str, today: date) -> tuple:
 _HOLIDAY_RE = re.compile(r"\b(?:" + "|".join(f"(?:{p})" for p in _HOLIDAYS) + r")\b")
 
 
-_HOLIDAY_SEASON_BEFORE = re.compile(r"\b(?:over|around|during|between|across)\s+(?:the\s+)?$")
+_HOLIDAY_SEASON_BEFORE = re.compile(r"\b(?:over|around|during|between|across|after|before|until|till)\s+(?:the\s+)?$")
 _SEASON_WORDS_BEFORE = re.compile(r"\b(?:over|around|during|between|across|after|before|until|till|for)\s+(?:the\s+)?$")
 _HOLIDAY_SEASON_AFTER = re.compile(r"^\s*(?:long\s+)?(?:weekend|break|period|holidays?|week|time|party|function)\b")
 _HOLIDAY_JOINED_AFTER = re.compile(r"^\s*(?:and|to)\b")
@@ -661,8 +661,9 @@ def read_dates(text: str, today: date, anchor: Optional[date] = None) -> Optiona
         # word is not one of "floor", "available", "time"... — i.e. when this
         # number reads as a date.)
         if not any(s <= o.start() and o.end() <= e for s, e, _ in points) and \
-                re.match(_NOT_A_DATE_AFTER, scrubbed[o.end():]):
-            return None
+                re.match(_NOT_A_DATE_AFTER, scrubbed[o.end():]) and \
+                re.search(r"(?:\bthe|\bto|\btill|\buntil|\bfrom|\band|\bor|\bon|\bnot|-)\s*$", scrubbed[:o.start()]):
+            return None   # (not "my 40th", "our 25th anniversary")
     if not points:
         return DateReading(nights=nights) if nights else None
 
@@ -670,13 +671,15 @@ def read_dates(text: str, today: date, anchor: Optional[date] = None) -> Optiona
         (s1, e1, p1), (s2, e2, p2) = points
         # "No, not this weekend — next weekend": a correction. The second one
         # is what they mean, and the dash is not a range.
-        negated_first = re.search(r"\bnot\s+(?:the\s+|this\s+|that\s+)?$", scrubbed[max(0, s1 - 12):s1])
+        before = scrubbed[max(0, s1 - 30):s1]
+        negated_first = re.search(r"\bnot\s+(?:the\s+|this\s+|that\s+)?$", before)
+        join = scrubbed[e1:s2].strip()
+        word_range = _RANGE_JOIN_RE.match(scrubbed[e1:s2]) and join not in ("-",)
+        if word_range and re.search(r"\b(?:can'?t|cannot|won'?t|don'?t|not|no\s+longer)\b(?:\s+\w+){0,2}\s*$", before):
+            return None   # "we can't do Friday to Sunday", "we're not coming Friday to Sunday"
         if negated_first:
-            join = scrubbed[e1:s2].strip()
-            a_range = _RANGE_JOIN_RE.match(scrubbed[e1:s2]) and (
-                join != "-" or (p1.kind in ("dom", "dated") and p2.kind in ("dom", "dated")))
-            if re.search(r"\bif\b", scrubbed[:s1]) or a_range:
-                return None   # "if not Friday then Saturday", "we're not coming Friday to Sunday"
+            if re.search(r"\bif\b", scrubbed[:s1]):
+                return None   # "if not Friday then Saturday"
             if not re.search(r"\bnot\b", scrubbed[e1:s2]):
                 points = [points[1]]
                 phrase = t[s2:e2]
@@ -700,7 +703,12 @@ def read_dates(text: str, today: date, anchor: Optional[date] = None) -> Optiona
     if len(points) > 2:
         return None
 
-    _, _, p = points[0]
+    s0, _, p = points[0]
+    if not p.conflict and not p.span and p.day and re.search(
+            r"\b(?:out|leav\w*|till|til|until|depart\w*|home|checking\s+out|check\s+out)\s+(?:on\s+)?(?:the\s+)?$",
+            scrubbed[:s0]):
+        # "yes, out Sunday", "till the 26th": the end of the stay, not its start.
+        return DateReading(phrase=phrase, check_out=p.day)
     if p.conflict:
         return DateReading(phrase=phrase, check_in=p.day, alternative=p.alternative, conflict=p.conflict)
     if p.span:
@@ -844,6 +852,12 @@ def reconcile(model_in: Optional[date], model_out: Optional[date], utterance: st
             f"Sure — {spoken_short(lo)} to {spoken_short(hi)}. Which day were you thinking of checking in?"
             if hi > lo else f"Sure — that's {spoken_short(lo)}. Is that right?"))
 
+    if r.check_in is None and r.check_out and not r.span:   # only the end: "out Sunday"
+        if model_in and model_out == r.check_out:
+            return keep
+        if model_in and r.check_out > model_in:
+            return Reconciled(model_in, r.check_out, reading=r, changed=True)
+        return keep
     if r.check_in is None:  # a length on its own: "two nights"
         if r.nights and model_in and model_out and (model_out - model_in).days != r.nights:
             new_out = model_in + timedelta(days=r.nights)
