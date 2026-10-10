@@ -58,7 +58,9 @@ class CoalCreekStripeService:
             return {"success": False, "error": "Stripe not configured"}
         
         try:
-            total_cents = int(price_per_night * num_nights * 100)
+            # round, not int: a per-night price derived from a total (e.g.
+            # $244 / 7) multiplies back to 24399.999…, which int() cut to a cent short.
+            total_cents = int(round(price_per_night * num_nights * 100))
             expiry_time = int(datetime.now().timestamp() + 86400) # 24 Hours from now
             
             # Create Coupon for Checkout Session (One-time, expires)

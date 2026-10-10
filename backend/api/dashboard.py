@@ -621,6 +621,52 @@ async def _get_tenant_booking(booking_id: str, tenant_id: str) -> dict:
     return booking
 
 
+def _staff_charge(booking: dict) -> tuple:
+    """
+    (num_nights, price_per_night, total) for a link staff generate.
+
+    The Stripe webhook refuses to confirm a payment that differs from the
+    booking's total_amount, so a staff link must charge exactly that total.
+    These routes used to charge rate_per_night x num_nights (a flat $145 when
+    the rate was missing) and never read total_amount, so a dashboard booking,
+    or one whose dates or total staff had edited, was paid and then held as an
+    "amount mismatch". A booking with no usable total is charged from its rate
+    and the route writes that total back, so the webhook compares like with like.
+    """
+    nights = 0
+    try:
+        nights = int(booking.get("num_nights") or 0)
+    except (TypeError, ValueError):
+        pass
+    if nights < 1:
+        try:
+            nights = (datetime.strptime(booking.get("check_out_date") or "", "%Y-%m-%d")
+                      - datetime.strptime(booking.get("check_in_date") or "", "%Y-%m-%d")).days
+        except (TypeError, ValueError):
+            nights = 0
+    nights = max(nights, 1)
+    try:
+        total = float(booking.get("total_amount") or 0)
+    except (TypeError, ValueError):
+        total = 0.0
+    if total > 0:
+        return nights, total / nights, _whole_if_whole(total)
+    try:
+        rate = float(booking.get("rate_per_night") or 0)
+    except (TypeError, ValueError):
+        rate = 0.0
+    rate = rate or 145.0  # long-standing fallback rate
+    return nights, rate, _whole_if_whole(rate * nights)
+
+
+def _whole_if_whole(amount: float):
+    """Cents-rounded; an int when it is whole dollars. The repo has no schema
+    for total_amount, and other writers store whole totals as ints, so an
+    integer attribute must not be sent 400.0 (Appwrite rejects a float there)."""
+    amount = round(float(amount), 2)
+    return int(amount) if amount.is_integer() else amount
+
+
 @router.patch("/bookings/{booking_id}")
 async def update_booking(booking_id: str, data: dict, tenant_id: str = Depends(get_current_tenant_id)):
     """
@@ -692,10 +738,8 @@ async def approve_booking(booking_id: str, tenant_id: str = Depends(get_current_
         if days_until > 7:
             mode = "setup"
         
-        # Calculate price if missing
-        num_nights = booking.get("num_nights", 1)
-        rate = booking.get("rate_per_night", 145) # Fallback rate
-        if not rate: rate = 145
+        # Charge the booking's own total (see _staff_charge)
+        num_nights, rate, charge_total = _staff_charge(booking)
         
         payment_res = {}
         if use_stripe:
@@ -740,6 +784,9 @@ async def approve_booking(booking_id: str, tenant_id: str = Depends(get_current_
             "updated_at": datetime.now().isoformat(),
             "payment_mode_requested": mode  # Track what we asked for
         }
+        if payment_link and mode == "payment":
+            # What the link charges IS the total the webhook will check against.
+            update_data["total_amount"] = charge_total
         
         patch_res = await appwrite_request("PATCH", endpoint, {"data": update_data})
         
@@ -864,9 +911,8 @@ async def regenerate_payment_link(booking_id: str, tenant_id: str = Depends(get_
         if booking.get("payment_link_url") and booking.get("status") != "paid":
              return {"success": True, "payment_link": booking.get("payment_link_url")}
              
-        # Generate New
-        num_nights = booking.get("num_nights", 1)
-        rate = booking.get("rate_per_night", 145)
+        # Generate New, charging the booking's own total (see _staff_charge)
+        num_nights, rate, charge_total = _staff_charge(booking)
         
         payment_res = await coalcreek_stripe_service.create_payment_link(
             booking_ref=booking.get("booking_reference"),
@@ -885,6 +931,7 @@ async def regenerate_payment_link(booking_id: str, tenant_id: str = Depends(get_
         # Update DB
         update_data = {
             "payment_link_url": payment_res.get("payment_url"),
+            "total_amount": charge_total,
             "updated_at": datetime.now().isoformat()
         }
         await appwrite_request("PATCH", endpoint, {"data": update_data})
