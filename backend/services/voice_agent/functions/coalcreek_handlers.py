@@ -947,9 +947,11 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     total = rate * num_nights
 
     # ── Duplicate check: update existing pending reservation instead of creating new one ──
+    caller_docs = None   # None = not read; [] = read, nothing on file
     if db_service and guest_phone:
         try:
             docs = await db_service.lookup_motel_reservation(phone=guest_phone, tenant_id="coalcreek")
+            caller_docs = list(docs or [])
             for doc in (docs or []):
                 _ci = doc.get("check_in_date")
                 _rt = doc.get("room_type", "").lower()
@@ -1080,6 +1082,65 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         except Exception as dup_err:
             logger.error(f"Error checking for duplicate reservation in create_booking: {dup_err}", exc_info=True)
 
+    # ── A new hold must not quietly stand in for changing an existing booking ──
+    # "Can I move it to the weekend after?" used to reach this tool as an
+    # ordinary new booking: the paid stay kept its room and its payment, and
+    # the caller was sent a second checkout. The tool now has to be told which
+    # it is — a MOVE of a named booking, or an ADDITIONAL stay — whenever the
+    # caller already has a live booking, and a move is only done here for an
+    # unpaid hold. Paid, in-house and finished stays are refused in code, not
+    # left to a sentence in the prompt.
+    replaces_ref = _ref_key(args.get("replaces_booking_reference"))
+    additional = str(args.get("additional_stay", "")).strip().lower() in ("true", "yes", "1")
+    replacing_doc = None
+    if replaces_ref or (caller_docs and not additional):
+        today = _today_melbourne_date()
+        mine = [d for d in (caller_docs or []) if caller_owns(d, user_phone) or not user_phone]
+        if replaces_ref:
+            replacing_doc = next((d for d in mine if _ref_key(d.get("booking_reference")) == replaces_ref), None)
+            if replacing_doc is None:
+                return {
+                    "success": False,
+                    "error": (f"NOT BOOKED. There is no booking {args.get('replaces_booking_reference')} on this "
+                              "caller's number to move. Check the reference with lookup_booking first."),
+                }
+            kind, rule = _change_rule(replacing_doc, today)
+            if kind == "released":
+                replacing_doc = None   # nothing holds a room any more: this is simply a new booking
+            elif kind != "movable":
+                logger.info("🚫 Move refused: %s is %s", replacing_doc.get("booking_reference"), kind)
+                return {"success": False, "move_refused": kind,
+                        "booking_reference": replacing_doc.get("booking_reference"),
+                        "error": f"NOT BOOKED. {rule}"}
+        else:
+            live = sorted(
+                (d for d in mine if _change_rule(d, today)[0] in ("paid", "in_house", "movable")),
+                key=lambda d: d.get("check_in_date") or "")
+            if live:
+                d = live[0]
+                kind, _rule = _change_rule(d, today)
+                ref = d.get("booking_reference") or "on file"
+                stay = f"{d.get('check_in_date')} to {d.get('check_out_date')}"
+                if kind == "movable":
+                    move = (f"If they want to MOVE it: call create_booking_request again with "
+                            f"replaces_booking_reference=\"{ref}\" (the old hold is released).")
+                else:
+                    move = ("If they want to MOVE or change it: you cannot — "
+                            + ("it is paid; " if kind == "paid" else "they are staying now; ")
+                            + "offer to put them through to reception (transfer_to_staff). Do not book.")
+                return {
+                    "success": False,
+                    "needs_intent": True,
+                    "existing_booking": ref,
+                    "error": (
+                        f"NOT BOOKED YET. This caller already has booking {ref} ({stay}, "
+                        f"{'unpaid hold' if kind == 'movable' else kind}). Ask whether these new dates are INSTEAD "
+                        f"of that booking or a SECOND stay as well — do not assume. {move} If it is a second, "
+                        "separate stay: once they have said so, call create_booking_request again with "
+                        "additional_stay=true."
+                    ),
+                }
+
     # Booking Ref — 36^6 = 2.17B combos, effectively zero collision risk
     booking_ref = f"CC-{''.join(random.choices(string.ascii_uppercase + string.digits, k=6))}"
     now = datetime.now().isoformat()
@@ -1189,6 +1250,31 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
         if refusal:
             return refusal
 
+        released_old = None
+        if replacing_doc is not None:
+            # The new hold exists; now give the old one's room back. Its Stripe
+            # link stays payable until Stripe expires it, and a payment on a
+            # cancelled hold is flagged for staff by the webhook, not confirmed.
+            old_ref = replacing_doc.get("booking_reference")
+            try:
+                released_old = await db_service.update_motel_reservation(
+                    booking_id=replacing_doc["$id"],
+                    data={"status": "cancelled", "updated_at": datetime.now().isoformat(),
+                          "notes": f"Moved by the caller to {booking_ref}. "
+                                   f"{replacing_doc.get('notes') or ''}".strip()},
+                )
+            except Exception as move_err:
+                logger.error("Release of moved hold %s raised: %s", old_ref, move_err)
+            if not released_old:
+                logger.error("🚨 Moved %s → %s but the old hold was NOT released", old_ref, booking_ref)
+                try:
+                    import sentry_sdk
+                    sentry_sdk.capture_message(
+                        f"Moved hold {old_ref} to {booking_ref}; old hold not released — release it by hand",
+                        level="error")
+                except Exception:
+                    pass
+
         # Speak the booking reference — natural cadence: "CC, AB 1 2 3 4"
         # Split on dash: "CC-AB1234" → prefix="CC", suffix="AB1234"
         _parts = booking_ref.split("-", 1)
@@ -1209,7 +1295,12 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "room_type": room_data["name"],
             "total_amount": total,
             "_saved_doc_id": reservation_data.get("_saved_doc_id"),
+            "stay_timing": "upcoming",
+            "change_rule": _change_rule(reservation_data, _today_melbourne_date())[1],
+            **({"replaced_booking_reference": replacing_doc.get("booking_reference"),
+                "old_hold_released": bool(released_old)} if replacing_doc is not None else {}),
             "message": (
+                (f"I've moved your booking: the old hold is cancelled. " if replacing_doc is not None else "") +
                 f"I've placed a {num_nights} night hold for {ci_spoken}. Your reference is {ref_spoken}. "
                 f"A payment link has been sent to {guest_email} — "
                 "could you check your inbox now to confirm it arrived? I'll stay on the line."
@@ -1383,6 +1474,9 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "total_amount":           doc.get("total_amount", ""),
             "other_bookings":         total_docs - 1,
         }
+        _kind, _rule = _change_rule(doc, _today_melbourne_date())
+        result["stay_timing"] = _stay_timing(doc, _today_melbourne_date())
+        result["change_rule"] = _rule
         
         _pstatus = doc.get("payment_status") or ""   # null / missing treated as outstanding
         _bstatus = doc.get("status") or ""
@@ -1664,6 +1758,81 @@ def _is_awaiting_payment(doc: dict) -> bool:
     if bs == "expired" or ps in ("paid", "card_on_file"):
         return False
     return bs in _HOLD_STATUSES or ps in _UNPAID_PAYMENT_STATUSES
+
+
+def _stay_timing(doc: dict, today) -> str:
+    """'upcoming', 'in_house' (checking out today counts), 'finished', or 'unknown'."""
+    ci = _parse_iso_date(doc.get("check_in_date") or "")
+    if not ci:
+        return "unknown"
+    co = _parse_iso_date(doc.get("check_out_date") or "") or ci + timedelta(days=1)
+    if co < today:
+        return "finished"
+    if ci <= today:
+        return "in_house"
+    return "upcoming"
+
+
+def _ref_key(raw) -> str:
+    """A booking reference for comparison: "cc ab12 34" and "CC-AB1234" are one."""
+    return re.sub(r"[^A-Z0-9]", "", str(raw or "").upper())
+
+
+def _change_rule(doc: dict, today) -> tuple:
+    """
+    (kind, instruction): what may be done with this booking today, decided in
+    Python rather than left to a sentence in the prompt.
+
+    The Kaggle probe "move a paid booking" (dpquote/probe-move-a-paid-booking)
+    measured the prompt-only design: asked "can I move it to the weekend
+    after?", no model ever said a finished stay was over (0 of 108 runs), and
+    one model offered to re-book a paid stay 15 times in 18. Nothing in the
+    tools refused. So the kind decides what create_booking_request will do,
+    and the instruction travels with the booking into the call state.
+
+      finished  checked out before today: over, nothing to move
+      released  expired / cancelled / rejected: nothing to move
+      in_house  staying now: reception
+      movable   an unpaid hold: the agent may move it itself
+      paid      paid, carded or confirmed: reception, never a second hold
+    """
+    from services.db.bookings import RELEASED_STATUSES
+
+    ref = doc.get("booking_reference") or "this booking"
+    status = (doc.get("status") or "").lower()
+    timing = _stay_timing(doc, today)
+    if timing == "finished":
+        co = _parse_iso_date(doc.get("check_out_date") or "") or _parse_iso_date(doc.get("check_in_date"))
+        days = (today - co).days
+        return "finished", (
+            f"FINISHED STAY — they checked out on {_format_date_spoken(co)}, {days} day{'s' if days != 1 else ''} ago. "
+            "The stay is over, so it cannot be moved or changed. If they ask to move it, say first that this stay "
+            "has already finished. Do NOT check availability, offer a hold or send a payment link for it. "
+            "Coming again is a new booking, made only if they ask for one."
+        )
+    if status in RELEASED_STATUSES:
+        return "released", (
+            f"This hold is no longer active ({status}), so there is nothing to move. If they still want to come, "
+            "that is a new booking: check availability for the dates they want."
+        )
+    if timing == "in_house":
+        return "in_house", (
+            "THEY ARE STAYING NOW. Changes to a stay in progress are made by reception: say so and offer to put "
+            "them through (transfer_to_staff) or arrange a callback. Do not create a new booking for it."
+        )
+    if _is_awaiting_payment(doc):
+        return "movable", (
+            f"UNPAID HOLD — you can move it yourself. Check availability for the new dates, read the new summary "
+            f"back, then call create_booking_request with replaces_booking_reference=\"{ref}\". The old hold is "
+            "released automatically and a new payment link goes out. Do not send them to reception for this."
+        )
+    paid = (doc.get("payment_status") or "").lower() or status or "confirmed"
+    return "paid", (
+        f"PAID ({paid}) — you cannot change its dates, room or guest yourself, and you must NOT create a new "
+        "booking or hold to 'move' it: that would take a second payment for one stay. Changes to a paid booking "
+        "are made by reception — say that plainly and offer to put them through (transfer_to_staff), or arrange "
+        "a callback outside reception hours."
+    )
 
 
 async def handle_update_guest_info(args: dict, db_service, user_phone: str = None) -> dict:

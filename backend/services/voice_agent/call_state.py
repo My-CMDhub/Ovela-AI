@@ -97,6 +97,13 @@ class CallState:
     total_amount: str = ""
     payment_status: str = ""
     guest_email: str = ""
+    # What may be done with this booking today — worked out in Python from its
+    # dates and payment (see coalcreek_handlers._change_rule). A paid stay that
+    # finished last week and one that starts next week read the same in the
+    # fields above; on the Kaggle probe no model ever said a finished stay was
+    # over (0 of 108), because nothing told it the stay was in the past.
+    stay_timing: str = ""
+    change_rule: str = ""
 
     # What the CALLER gave us that no tool has confirmed. For a stranger with
     # no record these are the only copy in existence: update_guest_info used to
@@ -257,7 +264,8 @@ class CallState:
             ("room_type", "room_type"), ("check_in", "check_in_date"),
             ("check_out", "check_out_date"), ("num_nights", "num_nights"),
             ("total_amount", "total_amount"), ("payment_status", "payment_status"),
-            ("guest_email", "guest_email"),
+            ("guest_email", "guest_email"), ("stay_timing", "stay_timing"),
+            ("change_rule", "change_rule"),
         ):
             value = result.get(key) or args.get(key) or ""
             if value != "" and value is not None:
@@ -301,6 +309,8 @@ class CallState:
             if self.guest_email:
                 stay.append(f"email on the booking {self.guest_email}")
             lines.append(f"- Their booking: {', '.join(stay)}.")
+            if self.change_rule:
+                lines.append(f"- Changing or moving it: {self.change_rule}")
             if self.guest_name:
                 # The lookup matched the name the caller said to this one in
                 # Python, so what was heard is a mishearing of it. On a live

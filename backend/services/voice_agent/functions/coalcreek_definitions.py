@@ -64,7 +64,9 @@ MANDATORY GATE — you MUST complete ALL 3 steps before calling this function:
 
 If ANY step is incomplete — DO NOT call this function. Complete the missing step first.
 Set has_user_confirmed_summary="YES" ONLY after the caller said YES to the complete STEP 3 summary above.
-If this tool fails validation, it will return a natural language error (e.g., 'Email invalid'). You MUST read this error, inform the user, and ask for the specific correction required.""",
+If this tool fails validation, it will return a natural language error (e.g., 'Email invalid'). You MUST read this error, inform the user, and ask for the specific correction required.
+
+CALLER ALREADY HAS A BOOKING: this tool never changes a booking by itself. To MOVE an UNPAID hold to new dates, pass replaces_booking_reference. A PAID, in-progress or finished stay cannot be moved here at all (reception changes paid bookings; a finished stay is over). For a SECOND stay on top of an existing booking, pass additional_stay=true only after the caller said it is as well as, not instead of.""",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -100,6 +102,14 @@ If this tool fails validation, it will return a natural language error (e.g., 'E
                     "notes": {
                         "type": "string",
                         "description": "Any special requests or notes"
+                    },
+                    "replaces_booking_reference": {
+                        "type": "string",
+                        "description": "ONLY when the caller is moving their existing UNPAID hold to these new dates: that booking's reference. The old hold is cancelled once the new one is placed. Paid, in-progress and finished stays are refused."
+                    },
+                    "additional_stay": {
+                        "type": "boolean",
+                        "description": "true ONLY when the caller already has a booking and has said these dates are a second, separate stay as well — not instead of it."
                     },
                     "has_user_confirmed_summary": {
                         "type": "string",
