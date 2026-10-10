@@ -50,6 +50,10 @@ _MONTH_RE = (r"(?:january|february|march|april|june|july|august|september|octobe
              r"|november|december)")
 _MONTH_WITH_MAY_RE = r"(?:may|" + _MONTH_RE[3:]
 
+_SHARED_MONTH_RANGE = re.compile(
+    rf"\b(?:(?P<w1>{_WEEKDAY_RE})\s+)?(?:the\s+)?(?P<a>\d{{1,2}})(?:st|nd|rd|th)?\s*(?:-|to|till|until|through|and)\s*"
+    rf"(?:(?P<w2>{_WEEKDAY_RE})\s+)?(?:the\s+)?(?P<b>\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?(?P<m>{_MONTH_WITH_MAY_RE})\b")
+
 _NUMBER_WORDS = {
     "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
     "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
@@ -79,6 +83,7 @@ class DateReading:
     nights: Optional[int] = None
     past: bool = False
     conflict: str = ""
+    weekend: bool = False
 
     @property
     def ambiguous(self) -> bool:
@@ -195,7 +200,18 @@ def _normalise(text: str) -> str:
     for words, n in sorted(_ORDINAL_WORDS.items(), key=lambda kv: -len(kv[0])):
         t = re.sub(rf"\b{words.replace(' ', '[ -]')}\b", f"{n}{_suffix(n)}", t)
     t = re.sub(r"\b(\d{1,2})\s+(st|nd|rd|th)\b", r"\1\2", t)  # STT: "17 th"
-    return re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"\s+", " ", t).strip()
+    # "the 24th to the 26th of November": the month belongs to BOTH days. Read
+    # alone, "the 24th" was the next 24th (October), so a three-night stay in
+    # November became 33 nights from October.
+    return _SHARED_MONTH_RANGE.sub(_share_month, t)
+
+
+def _share_month(m) -> str:
+    w1 = f"{m['w1']} " if m["w1"] else ""
+    w2 = f"{m['w2']} " if m["w2"] else ""
+    a, b = int(m["a"]), int(m["b"])
+    return f"{w1}the {a}{_suffix(a)} of {m['m']} to {w2}the {b}{_suffix(b)} of {m['m']}"
 
 
 def _suffix(n: int) -> str:
@@ -230,7 +246,10 @@ class _Point:
     span: Optional[tuple] = None
     weekend: bool = False
     conflict: str = ""
-    kind: str = ""   # "weekday" | "dom" (day of month) | "dated" (day + month) | ""
+    kind: str = ""   # "weekday" | "dom" (day of month) | "dated" (day + month) | "veto" | ""
+
+
+_VETO = _Point(kind="veto")   # words that are about dates, but not ones we can read safely
 
 
 _COUNT_RE = r"(\d{1,2}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fourteen)"
@@ -254,6 +273,8 @@ def _day_month(m, today, anchor):
 @_pattern(rf"\b(?:(?P<wd>{_WEEKDAY_RE})\s+)?(?P<m>{_MONTH_WITH_MAY_RE})\s+(?:the\s+)?(?P<d>\d{{1,2}})"
           rf"(?:st|nd|rd|th)?\b(?:\s+(?P<y>20\d\d))?")
 def _month_day(m, today, anchor):
+    if m["m"] == "may" and not re.search(r"(?:st|nd|rd|th)\b|\bthe\b", m.group(0)):
+        return None   # "may 2 people stay"
     return _dated(m, today, int(m["d"]), _month_index(m["m"]))
 
 
@@ -274,7 +295,8 @@ def _dated(m, today, day, month):
 # Not "the 2nd floor", "the 1st night", "the first time": an ordinal that names
 # something else is not a date.
 _NOT_A_DATE_AFTER = (r"(?!\s+(?:floor|room|one|person|people|guest|bed|night|nights|time|option|choice"
-                     r"|car|level|name|bedroom|child|kid|adult|week|weekend|month|day|of\s+next\s+month))")
+                     r"|car|level|name|bedroom|child|kid|adult|week|weekend|month|day|of\s+next\s+month"
+                     r"|available|ones?|of\s+(?:those|them|these|the)\b))")
 
 
 @_pattern(rf"\b(?:(?P<wd>{_WEEKDAY_RE})\s+)?the\s+(?P<d>\d{{1,2}})(?:st|nd|rd|th)\b{_NOT_A_DATE_AFTER}")
@@ -379,6 +401,23 @@ def _weekday(m, today, anchor):
     return _Point(day=_upcoming(today, wd, include_today=False), kind="weekday")
 
 
+@_pattern(rf"\ba\s+week\s+on\s+(?P<wd>{_WEEKDAY_RE})\b")
+def _week_on(m, today, anchor):
+    wd = _weekday_index(m["wd"])
+    base = _upcoming(today, wd, include_today=False)
+    if wd == today.weekday():   # said on that day: a week today, or a week after next?
+        return _Point(day=today + timedelta(days=7), alternative=base + timedelta(days=7), kind="weekday")
+    return _Point(day=base + timedelta(days=7), kind="weekday")
+
+
+@_pattern(rf"\b(?:on\s+)?the\s+(?P<wd>{_WEEKDAY_RE})\s+after\b(?!\s+next)")
+def _weekday_after(m, today, anchor):
+    # "the Friday after" — after something said earlier; only the booking is known.
+    if anchor is None:
+        return _VETO
+    return _Point(day=_upcoming(anchor, _weekday_index(m["wd"]), include_today=False), kind="weekday")
+
+
 @_pattern(rf"\b(?:on\s+)?(?:the\s+)?(?P<wd>{_WEEKDAY_RE})\s+(?:of\s+)?(?P<q>this|next)\s+week\b(?!end)"
           rf"|\b(?P<q2>this|next)\s+week\s+(?:on\s+)?(?:the\s+)?(?P<wd2>{_WEEKDAY_RE})\b")
 def _weekday_of_week(m, today, anchor):
@@ -430,7 +469,7 @@ def _weekend_after_next(m, today, anchor):
 def _weekend_after(m, today, anchor):
     # "Can I move it to the weekend after?" — after the booking being talked about.
     if anchor is None:
-        return None
+        return _VETO
     return _Point(day=_saturday_of(anchor) + timedelta(days=7), weekend=True)
 
 
@@ -500,11 +539,23 @@ def _month_named(which: str, today: date) -> tuple:
 _HOLIDAY_RE = re.compile(r"\b(?:" + "|".join(f"(?:{p})" for p in _HOLIDAYS) + r")\b")
 
 
+_HOLIDAY_SEASON_BEFORE = re.compile(r"\b(?:over|around|during|between|across|after|before|until|till|for)\s+(?:the\s+)?$")
+_HOLIDAY_SEASON_AFTER = re.compile(r"^\s*(?:long\s+)?(?:weekend|break|period|holidays?|week|time|party|function|and|to)\b")
+
+
 def _holidays(text, today):
+    """A holiday named as a day ("Christmas Day", "we'd arrive on Boxing Day").
+    "Over Christmas", "Melbourne Cup weekend", "between Christmas and New Year"
+    name a season: claimed so no part of them is misread, and not read."""
     out = []
     for m in _HOLIDAY_RE.finditer(text):
+        name = m.group(0)
+        if (_HOLIDAY_SEASON_BEFORE.search(text[:m.start()]) or _HOLIDAY_SEASON_AFTER.match(text[m.end():])
+                or re.fullmatch(r"new year'?s|easter(?: weekend)?", name)):
+            out.append((m.start(), m.end(), _VETO))
+            continue
         for pattern, fn in _HOLIDAYS.items():
-            if re.fullmatch(pattern, m.group(0)):
+            if re.fullmatch(pattern, name):
                 out.append((m.start(), m.end(), _Point(day=_next_holiday(today, fn))))
                 break
     return out
@@ -580,12 +631,31 @@ def read_dates(text: str, today: date, anchor: Optional[date] = None) -> Optiona
 
     if _PAST_RE.search(t):
         return DateReading(phrase=phrase or t, past=True)
+    if any(p.kind == "veto" for _, _, p in points):
+        return None
+    # A day number nobody read ("24th-26th" with the month somewhere odd) means
+    # this is a date we only half understood. Half a date is worse than none.
+    for o in re.finditer(r"\b\d{1,2}(?:st|nd|rd|th)\b", scrubbed):
+        if not any(s <= o.start() and o.end() <= e for s, e, _ in points) and \
+                not re.match(_NOT_A_DATE_AFTER, scrubbed[o.end():]):
+            return None
     if not points:
         return DateReading(nights=nights) if nights else None
 
     if len(points) == 2:
         (s1, e1, p1), (s2, e2, p2) = points
-        if _RANGE_JOIN_RE.match(scrubbed[e1:s2]) and p1.day and p2.day and not (p1.span or p2.span):
+        # "No, not this weekend — next weekend": a correction. The second one
+        # is what they mean, and the dash is not a range.
+        if re.search(r"\bnot\s+(?:the\s+|this\s+|that\s+)?$", scrubbed[max(0, s1 - 12):s1]) and \
+                not re.search(r"\bnot\b", scrubbed[e1:s2]):
+            points = [points[1]]
+            phrase = t[s2:e2]
+    if len(points) == 2:
+        (s1, e1, p1), (s2, e2, p2) = points
+        join = scrubbed[e1:s2].strip()
+        numeric = p1.kind in ("dom", "dated") and p2.kind in ("dom", "dated")
+        if (_RANGE_JOIN_RE.match(scrubbed[e1:s2]) and p1.day and p2.day and not (p1.span or p2.span)
+                and (join != "-" or numeric)):
             if p1.conflict or p2.conflict:
                 return DateReading(phrase=phrase, conflict=p1.conflict or p2.conflict,
                                    check_in=p1.day, alternative=p1.alternative)
@@ -605,11 +675,16 @@ def read_dates(text: str, today: date, anchor: Optional[date] = None) -> Optiona
         return DateReading(phrase=phrase, check_in=p.day, alternative=p.alternative, conflict=p.conflict)
     if p.span:
         return DateReading(phrase=phrase, span=p.span, nights=nights)
-    check_out = p.day + timedelta(days=nights) if nights else None
+    day, alternative = p.day, p.alternative
+    if p.weekend and nights == 2:
+        # "this weekend, two nights": Friday and Saturday nights.
+        day = day - timedelta(days=1)
+        alternative = alternative - timedelta(days=1) if alternative else None
+    check_out = day + timedelta(days=nights) if nights else None
     if p.weekend and not nights:
-        check_out = p.day + timedelta(days=1)  # AU motel convention: Saturday in, Sunday out
-    return DateReading(phrase=phrase, check_in=p.day, check_out=check_out,
-                       alternative=p.alternative, nights=nights or (1 if p.weekend else None))
+        check_out = day + timedelta(days=1)  # AU motel convention: Saturday in, Sunday out
+    return DateReading(phrase=phrase, check_in=day, check_out=check_out, alternative=alternative,
+                       nights=nights or (1 if p.weekend else None), weekend=p.weekend)
 
 
 def _roll_forward(end: date, point: _Point) -> Optional[date]:
@@ -639,10 +714,13 @@ _STAY_CUE = re.compile(
     r"|looking|like|need|from|until|till|weekend|week|fortnight)\b")
 _OTHER_TOPIC = re.compile(
     r"\b(?:breakfast|pool|wifi|wi-fi|parking|park|pet|pets|dog|dogs|restaurant|open|opens|close|closes"
-    r"|weather|reception|office|checkout|what\s+time|laundry|bbq|barbecue|cot|towels?)\b")
+    r"|weather|reception|office|checkout|what\s+time|laundry|bbq|barbecue|cot|towels?"
+    r"|pay|paying|payment|card|call|calling|ring|email|text|phone|link)\b")
+# Words that say the dates themselves are being changed.
+_CHANGE_CUE = re.compile(r"\b(?:instead|change|changed|move|moved|actually|rather|not|switch|make\s+it|different)\b")
 
 
-def about_the_stay(utterance: str) -> bool:
+def about_the_stay(utterance: str, for_booking: bool = False) -> bool:
     """
     Whether the caller's words are about WHEN they are staying.
 
@@ -655,6 +733,11 @@ def about_the_stay(utterance: str) -> bool:
     if _OTHER_TOPIC.search(t) and not re.search(
             r"\b(?:stay|book|room|night|move|change|instead|check(?:ing)?[\s-]?in)\b", t):
         return False
+    if for_booking:
+        # At the moment of booking the caller is answering a read-back summary:
+        # "yes, this weekend is perfect" restates, it does not change anything.
+        # Only words that CHANGE the dates may stop the booking.
+        return bool(_CHANGE_CUE.search(t))
     return bool(_STAY_CUE.search(t)) or len(t.split()) <= 6
 
 def spoken(d: date) -> str:
@@ -678,7 +761,7 @@ class Reconciled:
 
 
 def reconcile(model_in: Optional[date], model_out: Optional[date], utterance: str,
-              today: date, anchor: Optional[date] = None) -> Reconciled:
+              today: date, anchor: Optional[date] = None, for_booking: bool = False) -> Reconciled:
     """
     The dates to use, given what the model sent and what the caller just said.
 
@@ -690,8 +773,25 @@ def reconcile(model_in: Optional[date], model_out: Optional[date], utterance: st
     """
     r = read_dates(utterance, today, anchor)
     keep = Reconciled(model_in, model_out, reading=r)
-    if r is None or r.past or not about_the_stay(utterance):
+    if r is None or r.past:
         return keep
+    if not about_the_stay(utterance, for_booking=for_booking):
+        if not (for_booking and (r.check_out or r.nights) and about_the_stay(utterance)):
+            return keep   # a range or a length at booking time is still checked
+
+    if r.weekend and r.check_in and model_in and model_out:
+        # "this weekend" covers Friday-to-Sunday as much as Saturday-to-Sunday.
+        # The model's stay stands if it starts that Friday or Saturday and
+        # includes the Saturday night.
+        for cand in (r.check_in, r.alternative):
+            if cand is None:
+                continue
+            sat = cand + timedelta(days=(5 - cand.weekday()) % 7)
+            if sat - timedelta(days=1) <= model_in <= sat < model_out:
+                other = r.alternative if cand == r.check_in else r.check_in
+                say = (f"Just so we're on the same page, that's {spoken_short(model_in)}, "
+                       f"not {spoken_short(other)}.") if other else ""
+                return Reconciled(model_in, model_out, say_first=say, reading=r)
 
     if r.conflict:
         if r.alternative:

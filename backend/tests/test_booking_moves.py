@@ -99,9 +99,12 @@ def test_a_finished_stay_says_how_long_ago():
     assert "3 days ago" in rule and "say first that this stay has already finished" in rule
 
 
-def test_checking_out_today_is_still_in_house():
-    assert ch._stay_timing(_booking(_d(-2), _d(0)), ch._today_melbourne_date()) == "in_house"
-    assert ch._stay_timing(_booking(_d(-3), _d(-1)), ch._today_melbourne_date()) == "finished"
+def test_checkout_day_is_finished_and_says_so():
+    """Review finding: a guest who checked out this morning heard "staying now"."""
+    today = ch._today_melbourne_date()
+    assert ch._stay_timing(_booking(_d(-2), _d(0)), today) == "finished"
+    assert "they check out today" in ch._change_rule(_booking(_d(-2), _d(0)), today)[1]
+    assert ch._stay_timing(_booking(_d(-2), _d(1)), today) == "in_house"
 
 
 # ── the rule reaches the model ───────────────────────────────────────────────
@@ -224,3 +227,58 @@ async def test_the_new_hold_carries_its_own_rule_into_the_call_state():
     db = MovesDb([])
     out = await _book(db)
     assert out["success"] and "you can move it yourself" in out["change_rule"]
+
+
+# ── found by the independent review ────────────────────────────────────────
+
+async def test_naming_a_lapsed_hold_does_not_skip_the_live_booking_check():
+    expired = _booking(_d(9), _d(11), ref="CC-11111", status="expired", payment="pending_payment", doc_id="e1")
+    db = MovesDb([expired, PAID_AHEAD])
+    out = await _book(db, replaces_booking_reference="CC-11111")
+    assert out["success"] is False and out["needs_intent"] is True and db.saved == []
+
+
+async def test_with_no_caller_number_nobody_elses_booking_is_read_back_or_cancelled():
+    db = MovesDb([UNPAID_AHEAD])
+    out = await ch.handle_create_booking_request(
+        args=_args(_d(16), _d(18), guest_phone=CALLER, replaces_booking_reference="CC-41273"),
+        user_phone="", save_reservation_fn=db.save, db_service=db)
+    assert out["success"] is False and "no booking" in out["error"]
+    assert "41273" not in out["error"].replace("CC-41273", "") and not db.update_motel_reservation.await_count
+
+
+async def test_a_hold_can_move_onto_overlapping_nights_when_its_room_is_the_last_one():
+    one_room = MovesDb([UNPAID_AHEAD])
+    one_room.rooms = [_room("1")]
+    one_room.reservations = [{"$id": "old1", "booking_reference": "CC-41273", "room_number": "1",
+                              "check_in_date": _d(9), "check_out_date": _d(11), "status": "pending"}]
+    out = await _book(one_room, ci=_d(10), co=_d(12), replaces_booking_reference="CC-41273")
+    assert out["success"] is True and out["old_hold_released"] is True
+
+
+async def test_an_old_hold_paid_during_the_call_is_not_cancelled():
+    db = MovesDb([UNPAID_AHEAD])
+    paid_now = dict(UNPAID_AHEAD, status="confirmed", payment_status="paid")
+    reads = iter([[dict(UNPAID_AHEAD)], [paid_now]])
+    db.lookup_motel_reservation = AsyncMock(side_effect=lambda **kw: next(reads))
+    out = await _book(db, replaces_booking_reference="CC-41273")
+    assert out["success"] is True and out["old_hold_released"] is False
+    assert not db.update_motel_reservation.await_count
+
+
+async def test_the_old_checkout_is_expired_when_a_hold_moves(monkeypatch):
+    from services.tenants.coalcreek.stripe import coalcreek_stripe_service
+    import stripe as stripe_mod
+    monkeypatch.setattr(coalcreek_stripe_service, "configured", True)
+    expire = MagicMock()
+    monkeypatch.setattr(stripe_mod.checkout.Session, "expire", expire)
+    linked = dict(UNPAID_AHEAD, payment_link_url="https://checkout.stripe.com/c/pay/cs_test_a1B2c3#fid")
+    db = MovesDb([linked])
+    out = await _book(db, replaces_booking_reference="CC-41273")
+    assert out["old_hold_released"] is True
+    expire.assert_called_once_with("cs_test_a1B2c3")
+
+
+async def test_expiring_a_link_with_no_session_id_is_a_quiet_no():
+    from services.tenants.coalcreek.stripe import coalcreek_stripe_service
+    assert await coalcreek_stripe_service.expire_checkout_from_url("https://example.com/pay") is False
