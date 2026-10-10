@@ -20,18 +20,32 @@ def _next_weekday(base_date, target_weekday: int) -> object:
         delta = 7
     return base_date + timedelta(days=delta)
 
+def _phrase_table(today) -> str:
+    """
+    The weekend phrases, worked out by the same resolver the tools check
+    against, so the prompt and the tools can never disagree. The prompt used
+    to say "this weekend" and "next weekend" were the same dates.
+    """
+    from services.voice_agent.date_phrases import read_dates
+
+    rows = []
+    for phrase in ("this weekend", "next weekend", "the weekend after next"):
+        r = read_dates(phrase, today)
+        line = (f'  - "{phrase}" = Saturday {r.check_in.strftime("%d %B %Y")} (check-in) → '
+                f'Sunday {r.check_out.strftime("%d %B %Y")} (check-out)')
+        if r.alternative:
+            line += f' — some callers mean Saturday {r.alternative.strftime("%d %B")}, so say the date back'
+        rows.append(line)
+    lo, hi = read_dates("next week", today).span
+    rows.append(f'  - "next week" = Monday {lo.strftime("%d %B")} to Sunday {hi.strftime("%d %B")} — ask which day')
+    return "\n".join(rows)
+
+
 def get_coalcreek_prompt(current_date: str, current_time: str) -> str:
     """
     Returns the system prompt specifically for Coal Creek Motel.
     """
-    # Pre-compute upcoming weekend dates (Python-authoritative — LLM must NOT recalculate)
     _today = datetime.now(_MELBOURNE_TZ).date()
-    _sat = _next_weekday(_today, 5)
-    _sun = _sat + timedelta(days=1)
-    _upcoming_weekend = (
-        f"Saturday {_sat.strftime('%d %B %Y')} (check-in) → "
-        f"Sunday {_sun.strftime('%d %B %Y')} (check-out)"
-    )
 
     # Parse base date for calendar view calculation
     base_date = _today
@@ -45,6 +59,8 @@ def get_coalcreek_prompt(current_date: str, current_time: str) -> str:
                 base_date = datetime.strptime(current_date, "%d %B %Y").date()
             except Exception:
                 pass
+
+    _date_phrases = _phrase_table(base_date)
 
     # Pre-compute current and next week's calendar reference for the LLM
     monday_of_current = base_date - timedelta(days=base_date.weekday())
@@ -79,25 +95,18 @@ TODAY: {current_date} | TIME: {current_time}
 {calendar_text}
 
 DATE RULES (CRITICAL):
-- Use the CALENDAR REFERENCE to resolve natural language dates relative to TODAY.
-- GENERAL "THIS" VS "NEXT" DAY RULE:
-  - "This [Day]" (e.g. "this Saturday", "this Wednesday", "this week") always means the nearest occurrence of that day/week, including today if today is that day.
-  - "Next [Day]" (e.g. "next Saturday", "next Wednesday", "next week") always means the occurrence after the nearest one (i.e. in the next week, or 7-8 days from now).
-  - For example, if today is Saturday:
-    - "This Saturday" = today.
-    - "Next Saturday" = 8 days from now (not today).
-  - If today is Friday:
-    - "This Saturday" or "next Saturday" = tomorrow.
-    - "Next next Saturday" = 8 days from now.
-  - Check the CALENDAR REFERENCE to locate "this [Day]" (under Current Week) and "next [Day]" (under Next Week) instantly.
-- All enquiries relative to {current_date}. "January" = NEXT January. NEVER assume past dates.
-- "upcoming/this/next weekend" = **{_upcoming_weekend}** — use these EXACT dates, do NOT compute.
-- NEVER produce invalid dates (e.g. 2026-02-29 is invalid).
-- Past date asked → tell today's date warmly, clarify it has passed, offer future dates.
-- Resolve natural language instantly: "next Monday" = nearest future Monday from today. "2nd January" = nearest future Jan 2nd. Any date without year = nearest future occurrence. Only treat as past if caller says "last [date]" or "when I stayed on...".
-- If user gives dates in first message, extract and use them immediately — do NOT ask again.
-- If user corrects "No, not X, it's Y" → accept Y immediately.
-- SPOKEN DATES: Map relative terms ("this Friday", "next weekend") directly to the CALENDAR REFERENCE below. Do NOT calculate dates yourself. Always express as ordinal words ("Friday the 6th of June").
+- Resolve dates from TODAY and the CALENDAR REFERENCE. Any date without a year = its next occurrence ("January" = next January). NEVER produce an invalid date.
+- Python has already worked these out — use them exactly, do not recompute:
+{_date_phrases}
+- "this Friday" = the nearest Friday from today (today counts). "next Friday" = the Friday in NEXT week. "Friday week" = a week after this coming Friday. "the 5th" = the next 5th that hasn't passed.
+- People use "next Friday" and "next weekend" both ways early in the week. Pick the NEXT-week reading, and say the date out loud so they can correct you ("next weekend — that's Saturday the 17th").
+- "next week", "end of the month", "mid November" name a period, not a day: ask which day. Do not pick one for them.
+- "Friday the 17th" when the 17th is not a Friday: ask which they meant. Never silently pick one.
+- "the weekend after" when they are talking about their booking = the weekend after THAT booking, not after today.
+- The booking tools check your dates against the caller's own words. If a tool result starts by naming the dates ("That's Saturday the 17th…"), say that part too. If it comes back with dates_unclear, ask the caller exactly what it says and wait.
+- Past date asked → tell today's date warmly, clarify it has passed, offer future dates. Only treat a date as past if the caller says "last [day]" or "when I stayed".
+- If the caller gives dates in their first message, use them immediately — do NOT ask again. If they correct you ("No, not X, it's Y") → accept Y.
+- SPOKEN DATES: always say dates as ordinal words ("Friday the 6th of June").
 DATA COLLECTION (ONE-BY-ONE):
 Collect: First Name → Last Name → Phone (already captured by Twilio in CURRENT MEMORY, do NOT ask for it as an open question; instead, only confirm it at the end of the verification process by saying "I'll use the number you are calling from, ending in [last 4 digits], is that correct?") → Email
 - If user gives multiple fields at once, acknowledge all but confirm each: "Got it, Jon. And the last name?"

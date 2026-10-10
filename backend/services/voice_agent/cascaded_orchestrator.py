@@ -2349,6 +2349,12 @@ class CascadedPipelineOrchestrator:
             if latest:
                 args = dict(args)
                 args["_user_utterance"] = latest
+            # "Can I move it to the weekend after?" — after the booking this
+            # caller was matched to, which only the call state knows.
+            cs = self.call_state
+            if cs.identity_confirmed and cs.check_in:
+                args = dict(args)
+                args["_booking_check_in"] = cs.check_in
 
         # create_booking_request holds a room, queues an email and raises a
         # Stripe checkout. Its own gate is `has_user_confirmed_summary`, an

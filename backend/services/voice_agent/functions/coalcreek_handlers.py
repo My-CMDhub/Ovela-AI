@@ -461,7 +461,59 @@ async def _check_appwrite_availability(db_service, check_in_str: str, check_out_
 # BOOKING HANDLERS (Read-Only + Soft Hold)
 # =============================================================================
 
+def _reconcile_with_caller(args: dict):
+    """
+    The model's ISO dates, checked against the caller's own latest words.
+
+    Returns (args to use, a sentence to say first, a question to ask instead,
+    the Reconciled record). See services/voice_agent/date_phrases.py for what
+    is and is not read; in short: one date phrase, or a range, that is about
+    the stay. "Next weekend" the model turned into this weekend is corrected
+    and read back; "next Friday" said on a Wednesday is confirmed either way;
+    "Friday the 17th" when the 17th is a Saturday is asked about.
+    """
+    from services.voice_agent.date_phrases import reconcile
+    model_in = _parse_iso_date(args.get("check_in_date", ""))
+    model_out = _parse_iso_date(args.get("check_out_date", ""))
+    anchor = _parse_iso_date(args.get("_booking_check_in", ""))
+    rec = reconcile(model_in, model_out, args.get("_user_utterance", ""), _today_melbourne_date(), anchor)
+    if rec.ask:
+        return args, "", rec.ask, rec
+    if rec.changed and rec.check_in:
+        logger.info("📅 Dates corrected from the caller's words %r: %s→%s, %s→%s",
+                    rec.reading.phrase if rec.reading else "", model_in, rec.check_in, model_out, rec.check_out)
+        args = dict(args)
+        args["check_in_date"] = rec.check_in.isoformat()
+        args["check_out_date"] = (rec.check_out or rec.check_in + timedelta(days=1)).isoformat()
+    return args, rec.say_first, "", rec
+
+
 async def handle_check_availability(args: dict, db_service, context: dict | None = None) -> dict:
+    """
+    check_availability, with the dates checked against what the caller said.
+
+    The answer is prefixed with the dates actually used whenever they were
+    corrected or the caller's phrase had two readings, so a wrong reading is
+    heard and fixed in the same breath rather than found at check-in.
+    """
+    args, say_first, ask, _rec = _reconcile_with_caller(args)
+    if ask:
+        return {
+            "available": "unknown",
+            "verified": False,
+            "dates_unclear": True,
+            "message": "The caller's dates need confirming before checking",
+            "ai_should_say": ask,
+        }
+    result = await _check_availability(args, db_service, context=context)
+    if say_first and isinstance(result, dict) and result.get("ai_should_say"):
+        result = dict(result)
+        result["ai_should_say"] = f"{say_first} {result['ai_should_say']}"
+        result["dates_read_back"] = True
+    return result
+
+
+async def _check_availability(args: dict, db_service, context: dict | None = None) -> dict:
     """
     Check room availability using real-time scraping.
     
@@ -833,6 +885,27 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "success": False,
             "error": "guest_name is missing. You must ask the user for their name before creating a booking."
         }
+
+    # The caller's latest words, if they name dates, must agree with the dates
+    # being booked. Usually they are "yes" and say nothing. When they don't
+    # agree, nothing is held: a hold on the wrong weekend takes a room and a
+    # payment from someone who asked for a different one.
+    _fixed_args, _say, ask, rec = _reconcile_with_caller(args)
+    if ask or (rec.changed and rec.check_in and _parse_iso_date(check_in)):
+        said = rec.reading.phrase if rec.reading else "their dates"
+        heard = (f"{_format_date_spoken(rec.check_in)} to {_format_date_spoken(rec.check_out)}"
+                 if rec.check_in and rec.check_out else "different dates")
+        return {
+            "success": False,
+            "dates_unclear": True,
+            "error": (
+                f"NOT BOOKED. The caller just said \"{said}\", which is {heard}, not the dates you sent "
+                f"({check_in} to {check_out}). Read the dates back and get a clear yes before booking."
+                if not ask else f"NOT BOOKED. The dates are unclear. Ask the caller: {ask}"
+            ),
+        }
+    if rec.changed and rec.check_in:  # no dates from the model at all: the caller's words are the dates
+        check_in, check_out = _fixed_args["check_in_date"], _fixed_args["check_out_date"]
 
     check_in_date, check_out_date, resolution_source = _resolve_relative_dates(check_in, check_out, user_utterance)
     if not check_in_date:
