@@ -57,6 +57,9 @@ class MovesDb(FakeMotelDb):
     async def lookup_motel_reservation(self, **kwargs):
         return [dict(e) for e in self.existing]
 
+    async def get_booking_by_reference(self, ref, tenant_id="coalcreek"):
+        return next((dict(e) for e in self.existing if e["booking_reference"] == ref), None)
+
 
 @pytest.fixture(autouse=True)
 def pms_mode(monkeypatch):
@@ -99,12 +102,14 @@ def test_a_finished_stay_says_how_long_ago():
     assert "3 days ago" in rule and "say first that this stay has already finished" in rule
 
 
-def test_checkout_day_is_finished_and_says_so():
-    """Review finding: a guest who checked out this morning heard "staying now"."""
+def test_checkout_day_is_its_own_case():
+    """Still in the room this morning: not "staying on", not "over" — reception
+    handles a late checkout or an extra night, and nothing is moved."""
     today = ch._today_melbourne_date()
-    assert ch._stay_timing(_booking(_d(-2), _d(0)), today) == "finished"
-    assert "they check out today" in ch._change_rule(_booking(_d(-2), _d(0)), today)[1]
-    assert ch._stay_timing(_booking(_d(-2), _d(1)), today) == "in_house"
+    assert ch._stay_timing(_booking(_d(-2), _d(0)), today) == "checkout_today"
+    kind, rule = ch._change_rule(_booking(_d(-2), _d(0)), today)
+    assert kind == "in_house" and "CHECK OUT TODAY" in rule and "FINISHED" not in rule
+    assert ch._stay_timing(_booking(_d(-3), _d(-1)), today) == "finished"
 
 
 # ── the rule reaches the model ───────────────────────────────────────────────
@@ -257,13 +262,17 @@ async def test_a_hold_can_move_onto_overlapping_nights_when_its_room_is_the_last
 
 
 async def test_an_old_hold_paid_during_the_call_is_not_cancelled():
-    db = MovesDb([UNPAID_AHEAD])
-    paid_now = dict(UNPAID_AHEAD, status="confirmed", payment_status="paid")
-    reads = iter([[dict(UNPAID_AHEAD)], [paid_now]])
-    db.lookup_motel_reservation = AsyncMock(side_effect=lambda **kw: next(reads))
-    out = await _book(db, replaces_booking_reference="CC-41273")
+    """Through the per-call lookup memo, as the dispatcher really calls it: the
+    memo still says unpaid, the database says paid. The database must win."""
+    raw = MovesDb([UNPAID_AHEAD])
+    raw.get_booking_by_reference = AsyncMock(return_value=dict(UNPAID_AHEAD, status="confirmed",
+                                                                payment_status="paid"))
+    db = ch._CachedReservationLookup(raw)
+    out = await ch.handle_create_booking_request(
+        args=_args(_d(16), _d(18), replaces_booking_reference="CC-41273"), user_phone=CALLER,
+        save_reservation_fn=raw.save, db_service=db)
     assert out["success"] is True and out["old_hold_released"] is False
-    assert not db.update_motel_reservation.await_count
+    assert not raw.update_motel_reservation.await_count
 
 
 async def test_the_old_checkout_is_expired_when_a_hold_moves(monkeypatch):

@@ -1281,8 +1281,13 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             # for a stay the system no longer shows.
             old_ref = replacing_doc.get("booking_reference")
             try:
-                fresh = await db_service.lookup_motel_reservation(phone=guest_phone, tenant_id="coalcreek")
-                fresh_doc = next((d for d in (fresh or []) if d.get("$id") == replacing_doc.get("$id")), None)
+                # By reference, not through lookup_motel_reservation: that is
+                # memoised for the whole call (_CachedReservationLookup), so it
+                # would hand back the hold as it was at the start of the call,
+                # and it is capped at 5 rows per phone.
+                fresh_doc = await db_service.get_booking_by_reference(old_ref, tenant_id="coalcreek")
+                if fresh_doc and fresh_doc.get("$id") != replacing_doc.get("$id"):
+                    fresh_doc = None
             except Exception as reread_err:
                 logger.error("Re-read of moved hold %s raised: %s", old_ref, reread_err)
                 fresh_doc = None
@@ -1805,15 +1810,15 @@ def _is_awaiting_payment(doc: dict) -> bool:
 
 
 def _stay_timing(doc: dict, today) -> str:
-    """'upcoming', 'in_house', 'finished' (checkout day included), or 'unknown'."""
+    """'upcoming', 'in_house', 'checkout_today', 'finished', or 'unknown'."""
     ci = _parse_iso_date(doc.get("check_in_date") or "")
     if not ci:
         return "unknown"
     co = _parse_iso_date(doc.get("check_out_date") or "") or ci + timedelta(days=1)
-    # Checkout day counts as finished: the last night has been slept, and a
-    # caller asking to "move" it is told the stay is over, not "staying now".
-    if co <= today:
+    if co < today:
         return "finished"
+    if co == today:
+        return "checkout_today"
     if ci <= today:
         return "in_house"
     return "upcoming"
@@ -1850,10 +1855,8 @@ def _change_rule(doc: dict, today) -> tuple:
     if timing == "finished":
         co = _parse_iso_date(doc.get("check_out_date") or "") or _parse_iso_date(doc.get("check_in_date"))
         days = (today - co).days
-        when = ("they check out today" if days == 0 else
-                f"they checked out on {_format_date_spoken(co)}, {days} day{'s' if days != 1 else ''} ago")
         return "finished", (
-            f"FINISHED STAY — {when}. "
+            f"FINISHED STAY — they checked out on {_format_date_spoken(co)}, {days} day{'s' if days != 1 else ''} ago. "
             "The stay is over, so it cannot be moved or changed. If they ask to move it, say first that this stay "
             "has already finished. Do NOT check availability, offer a hold or send a payment link for it. "
             "Coming again is a new booking, made only if they ask for one."
@@ -1862,6 +1865,13 @@ def _change_rule(doc: dict, today) -> tuple:
         return "released", (
             f"This hold is no longer active ({status}), so there is nothing to move. If they still want to come, "
             "that is a new booking: check availability for the dates they want."
+        )
+    if timing == "checkout_today":
+        # In the room this morning: telling them their stay "is over" is wrong,
+        # and moving dates already slept in is impossible.
+        return "in_house", (
+            "THEY CHECK OUT TODAY. The dates can't be moved. A late checkout or an extra night is arranged "
+            "by reception: offer to put them through (transfer_to_staff). Do not create a new booking for it."
         )
     if timing == "in_house":
         return "in_house", (

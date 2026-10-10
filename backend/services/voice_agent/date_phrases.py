@@ -208,6 +208,15 @@ def _normalise(text: str) -> str:
 
 
 def _share_month(m) -> str:
+    whole = m.group(0)
+    has_suffix = bool(re.search(r"\d(?:st|nd|rd|th)\b", whole))
+    rest = m.string[m.end():]
+    # Leave it alone unless it is plainly a pair of days: "ages 5 to 7 may come",
+    # "rooms 2 to 4 may be free", "kids are 3 and 5, november 20th we arrive".
+    if (m["m"] == "may" and not (has_suffix or re.search(r"\bof\s+may\b", whole))) \
+            or (re.search(r"\s(?:and)\s", whole) and not has_suffix) \
+            or re.match(r"\s+\d", rest) or (not has_suffix and "the" not in whole.split()):
+        return whole
     w1 = f"{m['w1']} " if m["w1"] else ""
     w2 = f"{m['w2']} " if m["w2"] else ""
     a, b = int(m["a"]), int(m["b"])
@@ -267,6 +276,8 @@ def _pattern(regex):
 @_pattern(rf"\b(?:(?P<wd>{_WEEKDAY_RE})\s+)?(?:the\s+)?(?P<d>\d{{1,2}})(?:st|nd|rd|th)?\s+(?:of\s+)?"
           rf"(?P<m>{_MONTH_WITH_MAY_RE})\b(?:\s+(?P<y>20\d\d))?")
 def _day_month(m, today, anchor):
+    if m["m"] == "may" and not re.search(r"(?:st|nd|rd|th)\b|\bthe\b|\bof\b", m.group(0)):
+        return None   # "ages 5 to 7 may come"
     return _dated(m, today, int(m["d"]), _month_index(m["m"]))
 
 
@@ -539,8 +550,14 @@ def _month_named(which: str, today: date) -> tuple:
 _HOLIDAY_RE = re.compile(r"\b(?:" + "|".join(f"(?:{p})" for p in _HOLIDAYS) + r")\b")
 
 
-_HOLIDAY_SEASON_BEFORE = re.compile(r"\b(?:over|around|during|between|across|after|before|until|till|for)\s+(?:the\s+)?$")
-_HOLIDAY_SEASON_AFTER = re.compile(r"^\s*(?:long\s+)?(?:weekend|break|period|holidays?|week|time|party|function|and|to)\b")
+_HOLIDAY_SEASON_BEFORE = re.compile(r"\b(?:over|around|during|between|across)\s+(?:the\s+)?$")
+_SEASON_WORDS_BEFORE = re.compile(r"\b(?:over|around|during|between|across|after|before|until|till|for)\s+(?:the\s+)?$")
+_HOLIDAY_SEASON_AFTER = re.compile(r"^\s*(?:long\s+)?(?:weekend|break|period|holidays?|week|time|party|function)\b")
+_HOLIDAY_JOINED_AFTER = re.compile(r"^\s*(?:and|to)\b")
+# Named DAYS ("Christmas Day", "Boxing Day", "New Year's Eve"): a check-in day,
+# and either end of a range. Bare names ("Christmas", "Easter", "New Year's")
+# are seasons as often as days.
+_HOLIDAY_DAY_NAME = re.compile(r".*(?:\bday|\beve|good friday|easter (?:saturday|sunday|monday)|melbourne cup)$")
 
 
 def _holidays(text, today):
@@ -549,9 +566,13 @@ def _holidays(text, today):
     name a season: claimed so no part of them is misread, and not read."""
     out = []
     for m in _HOLIDAY_RE.finditer(text):
-        name = m.group(0)
-        if (_HOLIDAY_SEASON_BEFORE.search(text[:m.start()]) or _HOLIDAY_SEASON_AFTER.match(text[m.end():])
-                or re.fullmatch(r"new year'?s|easter(?: weekend)?", name)):
+        name, before, after = m.group(0), text[:m.start()], text[m.end():]
+        if _HOLIDAY_DAY_NAME.match(name):
+            season = _HOLIDAY_SEASON_BEFORE.search(before) or _HOLIDAY_SEASON_AFTER.match(after)
+        else:
+            season = (_SEASON_WORDS_BEFORE.search(before) or _HOLIDAY_SEASON_AFTER.match(after)
+                      or _HOLIDAY_JOINED_AFTER.match(after) or re.fullmatch(r"new year'?s|easter(?: weekend)?", name))
+        if season:
             out.append((m.start(), m.end(), _VETO))
             continue
         for pattern, fn in _HOLIDAYS.items():
@@ -636,8 +657,11 @@ def read_dates(text: str, today: date, anchor: Optional[date] = None) -> Optiona
     # A day number nobody read ("24th-26th" with the month somewhere odd) means
     # this is a date we only half understood. Half a date is worse than none.
     for o in re.finditer(r"\b\d{1,2}(?:st|nd|rd|th)\b", scrubbed):
+        # (_NOT_A_DATE_AFTER is a negative lookahead: it MATCHES when the next
+        # word is not one of "floor", "available", "time"... — i.e. when this
+        # number reads as a date.)
         if not any(s <= o.start() and o.end() <= e for s, e, _ in points) and \
-                not re.match(_NOT_A_DATE_AFTER, scrubbed[o.end():]):
+                re.match(_NOT_A_DATE_AFTER, scrubbed[o.end():]):
             return None
     if not points:
         return DateReading(nights=nights) if nights else None
@@ -646,10 +670,16 @@ def read_dates(text: str, today: date, anchor: Optional[date] = None) -> Optiona
         (s1, e1, p1), (s2, e2, p2) = points
         # "No, not this weekend — next weekend": a correction. The second one
         # is what they mean, and the dash is not a range.
-        if re.search(r"\bnot\s+(?:the\s+|this\s+|that\s+)?$", scrubbed[max(0, s1 - 12):s1]) and \
-                not re.search(r"\bnot\b", scrubbed[e1:s2]):
-            points = [points[1]]
-            phrase = t[s2:e2]
+        negated_first = re.search(r"\bnot\s+(?:the\s+|this\s+|that\s+)?$", scrubbed[max(0, s1 - 12):s1])
+        if negated_first:
+            join = scrubbed[e1:s2].strip()
+            a_range = _RANGE_JOIN_RE.match(scrubbed[e1:s2]) and (
+                join != "-" or (p1.kind in ("dom", "dated") and p2.kind in ("dom", "dated")))
+            if re.search(r"\bif\b", scrubbed[:s1]) or a_range:
+                return None   # "if not Friday then Saturday", "we're not coming Friday to Sunday"
+            if not re.search(r"\bnot\b", scrubbed[e1:s2]):
+                points = [points[1]]
+                phrase = t[s2:e2]
     if len(points) == 2:
         (s1, e1, p1), (s2, e2, p2) = points
         join = scrubbed[e1:s2].strip()
@@ -684,7 +714,7 @@ def read_dates(text: str, today: date, anchor: Optional[date] = None) -> Optiona
     if p.weekend and not nights:
         check_out = day + timedelta(days=1)  # AU motel convention: Saturday in, Sunday out
     return DateReading(phrase=phrase, check_in=day, check_out=check_out, alternative=alternative,
-                       nights=nights or (1 if p.weekend else None), weekend=p.weekend)
+                       nights=nights, weekend=p.weekend)
 
 
 def _roll_forward(end: date, point: _Point) -> Optional[date]:
@@ -717,7 +747,9 @@ _OTHER_TOPIC = re.compile(
     r"|weather|reception|office|checkout|what\s+time|laundry|bbq|barbecue|cot|towels?"
     r"|pay|paying|payment|card|call|calling|ring|email|text|phone|link)\b")
 # Words that say the dates themselves are being changed.
-_CHANGE_CUE = re.compile(r"\b(?:instead|change|changed|move|moved|actually|rather|not|switch|make\s+it|different)\b")
+_CHANGE_CUE = re.compile(r"\b(?:instead|change|changed|move|moved|actually|rather|not|switch|make\s+it|different|meant)\b"
+                         r"|^(?:no|nah|nope|wait|hang\s+on|hold\s+on|sorry|oops|hmm|um|uh)\b")
+_AGREE_LEAD = re.compile(r"^(?:yes|yeah|yep|yup|sure|ok|okay|right|correct|perfect|great)\b[\s,]*")
 
 
 def about_the_stay(utterance: str, for_booking: bool = False) -> bool:
@@ -736,8 +768,11 @@ def about_the_stay(utterance: str, for_booking: bool = False) -> bool:
     if for_booking:
         # At the moment of booking the caller is answering a read-back summary:
         # "yes, this weekend is perfect" restates, it does not change anything.
-        # Only words that CHANGE the dates may stop the booking.
-        return bool(_CHANGE_CUE.search(t))
+        # Only words that CHANGE the dates may stop the booking — or a bare
+        # date as the whole answer ("yeah, the 24th"), which is the caller
+        # naming the dates they mean.
+        rest = _AGREE_LEAD.sub("", t)
+        return bool(_CHANGE_CUE.search(t)) or len(rest.split()) <= 3
     return bool(_STAY_CUE.search(t)) or len(t.split()) <= 6
 
 def spoken(d: date) -> str:
@@ -779,7 +814,8 @@ def reconcile(model_in: Optional[date], model_out: Optional[date], utterance: st
         if not (for_booking and (r.check_out or r.nights) and about_the_stay(utterance)):
             return keep   # a range or a length at booking time is still checked
 
-    if r.weekend and r.check_in and model_in and model_out:
+    if r.weekend and r.check_in and model_in and model_out and \
+            (not r.nights or r.nights == (model_out - model_in).days):
         # "this weekend" covers Friday-to-Sunday as much as Saturday-to-Sunday.
         # The model's stay stands if it starts that Friday or Saturday and
         # includes the Saturday night.

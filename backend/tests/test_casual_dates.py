@@ -427,3 +427,63 @@ def test_a_holiday_season_is_not_a_check_in_day(words):
 def test_a_correction_means_the_second_date(words, check_in):
     r = read_dates(words, SAT)
     assert r.check_in == D(check_in) and r.check_out in (None, D(check_in) + timedelta(days=1)), (words, r)
+
+
+
+# ── second review round (each reproduced against fd6030c) ──────────────────
+
+@pytest.mark.parametrize("words, check_in, check_out", [
+    ("it's our first time staying, friday to sunday please", "2026-10-16", "2026-10-18"),
+    ("a room on the second floor from the 5th to the 7th", "2026-11-05", "2026-11-07"),
+    ("christmas day to boxing day", "2026-12-25", "2026-12-26"),
+    ("from christmas eve to boxing day", "2026-12-24", "2026-12-26"),
+    ("new year's eve to new year's day", "2026-12-31", "2027-01-01"),
+    ("christmas day to the 27th", "2026-12-25", "2026-12-27"),
+])
+def test_readings_the_first_fix_lost(words, check_in, check_out):
+    r = read_dates(words, SAT)
+    assert r is not None and (r.check_in, r.check_out) == (D(check_in), D(check_out)), (words, r)
+
+
+@pytest.mark.parametrize("words, check_in", [("a room for boxing day", "2026-12-26"),
+                                             ("for christmas day", "2026-12-25")])
+def test_a_named_holiday_day_is_read(words, check_in):
+    assert read_dates(words, SAT).check_in == D(check_in)
+
+
+@pytest.mark.parametrize("words", [
+    "the 24th to 26th",                 # the month is missing: half a date
+    "the 20th or 21st",
+    "ages 5 to 7 may come",
+    "rooms 2 to 4 may be free",
+    "we're 2 to 3 may we bring a dog",
+    "if not friday then saturday",
+    "if not this weekend then next weekend",
+    "we're not coming friday to sunday any more",
+    "no, not friday to sunday",
+])
+def test_not_read(words):
+    r = read_dates(words, SAT)
+    assert r is None or (r.check_in is None and r.span is None), (words, r)
+
+
+def test_ages_and_a_later_date_read_the_date():
+    r = read_dates("kids are 3 and 5 november 20th we arrive", SAT)
+    assert r is None or r.check_in == D("2026-11-20"), r
+
+
+@pytest.mark.parametrize("words", ["no, the 24th", "yeah the 24th", "hang on, the 17th", "wait, it's the 23rd",
+                                   "no wait friday the 23rd", "sorry, sunday"])
+def test_a_date_said_at_confirmation_that_differs_blocks(words):
+    rec = reconcile(D("2026-10-16"), D("2026-10-18"), words, SAT, for_booking=True)
+    assert rec.changed or rec.ask, (words, rec)
+
+
+@pytest.mark.parametrize("words, model, nights", [
+    ("this weekend for 3 nights", ("2026-10-17", "2026-10-18"), 3),
+    ("this weekend, one night", ("2026-10-16", "2026-10-18"), 1),
+    ("this weekend, two nights", ("2026-10-17", "2026-10-18"), 2),
+])
+def test_nights_said_beat_the_weekend_keep_rule(words, model, nights):
+    rec = reconcile(D(model[0]), D(model[1]), words, date(2026, 10, 14))
+    assert (rec.check_out - rec.check_in).days == nights, (words, rec)
