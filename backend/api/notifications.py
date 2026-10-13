@@ -8,9 +8,10 @@ Production-ready with:
 - Soft delete (archive, not hard delete)
 - Clear error messages for staff
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from core.auth import get_current_tenant_id
 from services.appwrite import db_service
 import logging
 
@@ -63,13 +64,20 @@ class NotificationCreate(BaseModel):
     customer_phone: str
     reason: str
     urgency: str = "medium"  # low, medium, high
+    # Accepted for old clients but ignored: the owner is the JWT's tenant.
     tenant_id: str = "coalcreek"
 
 
 # ============ Endpoints ============
+# Every route takes tenant_id from the signed-in user's Appwrite JWT
+# (core.auth.get_current_tenant_id), never from ?tenant_id= or the body. These
+# carry callers' names and phone numbers, and the writes complete/archive staff
+# tasks; with a query-param tenant anyone could read or act on any motel's queue.
+# A notification outside the caller's tenant is simply not in the tenant-filtered
+# list below, so it is the same 404 as one that does not exist.
 
 @router.post("")
-async def create_notification(data: NotificationCreate):
+async def create_notification(data: NotificationCreate, tenant_id: str = Depends(get_current_tenant_id)):
     """
     Manually create a staff notification (e.g., from dashboard).
     """
@@ -90,7 +98,7 @@ async def create_notification(data: NotificationCreate):
             customer_phone=data.customer_phone.strip(),
             reason=data.reason.strip(),
             urgency=data.urgency,
-            tenant_id=data.tenant_id
+            tenant_id=tenant_id
         )
         
         if not result:
@@ -106,7 +114,7 @@ async def create_notification(data: NotificationCreate):
 
 
 @router.get("/counts")
-async def get_notification_counts(tenant_id: str = "coalcreek"):
+async def get_notification_counts(tenant_id: str = Depends(get_current_tenant_id)):
     """
     Get notification counts by status for tab badges.
     Returns: {pending: N, in_progress: N, completed: N, dismissed: N, total: N}
@@ -136,7 +144,7 @@ async def list_notifications(
     type: Optional[str] = None,
     limit: int = 50,
     include_archived: bool = False,
-    tenant_id: str = "coalcreek"
+    tenant_id: str = Depends(get_current_tenant_id)
 ):
     """
     List all staff notifications with optional filters.
@@ -161,7 +169,7 @@ async def list_notifications(
 
 
 @router.get("/{notification_id}")
-async def get_notification(notification_id: str, tenant_id: str = "coalcreek"):
+async def get_notification(notification_id: str, tenant_id: str = Depends(get_current_tenant_id)):
     """Get a single notification by ID."""
     try:
         notifications = await db_service.get_staff_notifications(tenant_id=tenant_id)
@@ -179,7 +187,7 @@ async def get_notification(notification_id: str, tenant_id: str = "coalcreek"):
 
 
 @router.patch("/{notification_id}")
-async def update_notification(notification_id: str, update: NotificationUpdate, tenant_id: str = "coalcreek"):
+async def update_notification(notification_id: str, update: NotificationUpdate, tenant_id: str = Depends(get_current_tenant_id)):
     """
     Update a notification (change status, add notes).
     Enforces valid status transitions.
@@ -298,7 +306,7 @@ async def update_notification(notification_id: str, update: NotificationUpdate, 
 
 
 @router.delete("/{notification_id}")
-async def delete_notification(notification_id: str, tenant_id: str = "coalcreek"):
+async def delete_notification(notification_id: str, tenant_id: str = Depends(get_current_tenant_id)):
     """
     Soft delete (archive) a notification.
     Sets status to 'archived' instead of hard deleting.
@@ -335,7 +343,7 @@ async def delete_notification(notification_id: str, tenant_id: str = "coalcreek"
 
 
 @router.post("/{notification_id}/restore")
-async def restore_notification(notification_id: str, tenant_id: str = "coalcreek"):
+async def restore_notification(notification_id: str, tenant_id: str = Depends(get_current_tenant_id)):
     """
     Restore an archived notification back to pending status.
     """

@@ -514,12 +514,271 @@ _AGREEING = {
     "absolutely", "definitely", "correct", "right", "fine", "go ahead",
     "do it", "yes please", "that would be great", "if you could",
 }
+# Who a caller means when they ask for a person. A verb like "get me" or
+# "speak to" only counts as asking for a human when one of these follows it:
+# "get me a room for Friday" and "get me the price" used to read as transfer
+# requests because the old pattern matched "get me" on its own. A possessive
+# is not a person: "I'd like the owner's phone number" asks for a number.
+_PERSON = (
+    r"(?:whoever(?:'s|\s+is)?|"
+    r"(?:(?:someone|somebody|anyone|anybody)(?:\s+else)?|"
+    r"(?:(?:a|an|the|your)\s+)?(?:(?:real|actual|live)\s+)?"
+    r"(?:person|human(?:\s+being)?|people|manager|owner|receptionist|"
+    r"reception|front\s+desk|staff(?:\s+member)?|operator|agent|representative))"
+    r"\b(?!'s\b))"
+)
+# An explicit ask for a person. Every alternative either names the person or
+# is a phrase that only ever means "hand this call over" ("put me through").
+# Bare "manager" / "front desk" anywhere in a sentence no longer count —
+# "is the front desk open late?" is a question, not a request — unless the
+# caller says nothing else ("Reception, please.", "Agent.").
 _ASKED_FOR_A_PERSON = re.compile(
-    r"\b(transfer me|put me through|speak (?:to|with)|talk (?:to|with)|"
-    r"get me|connect me|human|real person|manager|receptionist|front desk|"
-    r"someone (?:else|there)|somebody (?:else|there))\b",
+    r"\b(?:"
+    r"transfer(?:ring)?\s+(?:me|the\s+call|this\s+call|my\s+call)|"
+    r"(?:be|being|get|getting)\s+transferred|"
+    r"transfer\s*,?\s*please|"
+    # "threw" / "thru": how the transcriber hears "through".
+    r"put(?:ting)?\s+me\s+(?:through|threw|thru|on\s*to\s+" + _PERSON + r")|"
+    r"get\s+me\s+(?:through|threw|thru|" + _PERSON + r")|"
+    r"get\s+(?:a\s+)?hold\s+of\s+" + _PERSON + r"|"
+    r"get\s+(?:on\s*to|through\s+to)\s+" + _PERSON + r"|"
+    r"connect\s+me(?:\s+(?:through\s+)?(?:to|with)\s+" + _PERSON
+    + r"|(?=\s*(?:please)?\s*(?:[.,!?;]|$)))|"
+    r"(?:speak|speaking|talk|talking|chat|chatting)\s+(?:to|with)\s+" + _PERSON + r"|"
+    r"(?:have|get)\s+a\s+(?:word|chat|yarn)\s+with\s+" + _PERSON + r"|"
+    r"(?:want|like|need)\s+(?:a|an|the|your)\s+(?:(?:real|actual|live)\s+)?"
+    r"(?:person|human|manager|owner|receptionist)\b(?!'s\b)|"
+    r"(?:someone|somebody|anyone|anybody)(?:\s+else)?(?:\s+there)?\s+i\s+(?:can|could)\s+(?:speak|talk)|"
+    r"human(?:\s+being)?\b|(?:real|actual|live)\s+person\b|"
+    + _PERSON + r",?\s+please|"
+    r"^\s*(?:um\s+|uh\s+|just\s+|(?:can|could)\s+i\s+(?:get|have)\s+)?(?:"
+    + _PERSON + r"|transfer)"
+    r",?\s*(?:please)?\s*[.!?]*\s*$"
+    r")",
     re.IGNORECASE,
 )
+# "Am I talking to a real person?" and "Are you a robot?" are questions about
+# the agent, not requests to leave it. Blanked out before asks are looked for.
+_ASKED_WHAT_THE_AGENT_IS = re.compile(
+    r"\b(?:am\s+i\s+(?:talking|speaking)\s+(?:to|with)|are\s+you|is\s+(?:this|that|it))\s+"
+    r"(?:(?:a|an)\s+)?(?:(?:real|actual|live)\s+)?"
+    r"(?:person|human(?:\s+being)?|robot|bot|machine|computer|ai)\b",
+    re.IGNORECASE,
+)
+# Words that negate what follows them in the same clause. "No" is deliberately
+# not one: at the front of a sentence it answers the agent's last question
+# ("No, I want to speak to a person"), so it is read as a refusal of its own
+# (below) and whatever the caller says after it still counts.
+#
+# Three negations that are really requests are carved out:
+#   "Can I not just speak to someone?" / "Could I not ..." — a polite ask in
+#     Australian and British English. ("Can YOU not transfer me" still refuses.)
+#   "Can't I just speak to someone?" — the same ask, contracted.
+#   "Why won't you put me through?" / "Why don't you just transfer me?" —
+#     frustration at NOT being transferred.
+_NEGATOR = (
+    r"(?:(?<!why\s)(?:don't|dont|do\s+not)|doesn't|does\s+not|didn't|did\s+not|"
+    r"won't(?!\s+you\b)|will\s+not|"
+    r"(?:can't|cant|cannot|can\s+not|couldn't)(?!\s+i\b)|"
+    r"(?<!can\si\s)(?<!could\si\s)not|never|no\s+need|no\s+longer|stop)"
+)
+# Words allowed between a negator and the ask it negates: "I don't REALLY WANT
+# TO speak to anyone", "please don't BOTHER transferring me", "I never ASKED
+# TO BE transferred". Anything else in between — "I don't want THE ROBOT put
+# me through" — means the negation was about something else. Punctuation is
+# never filler, so a comma ends the scope.
+_NEGATION_FILLER = (
+    r"(?:i|i'd|id|i'm|im|want|wanna|need|to|really|just|even|have|you|please|"
+    r"bother|bothering|think|actually|like|ever|gonna|going|be|trying|try|rather|"
+    r"asked|ask|wanted|said|mean|meant)"
+)
+_NEGATED_JUST_BEFORE = re.compile(
+    r"\b" + _NEGATOR + r"(?:\s+" + _NEGATION_FILLER + r")*\s*$", re.IGNORECASE
+)
+# A refusal standing on its own: a bare "no" (not "no problem" / "no one", and
+# not "no need to ...", which the negator handles), taking the ask back, or the
+# ways Australians decline an offer ("Nah, I'm right", "not right now",
+# "please don't", "leave it").
+_CLAUSE_END = r"(?=\s*(?:[,.!?;]|$))"
+_REFUSED = re.compile(
+    r"\b(?:(?:no|nope|nah)\b(?!\s+(?:need|one|longer|problem|problems|worries|rush|hurry)\b)|"
+    r"never\s*mind|forget\s+(?:it|that|about\s+it)|cancel\s+that|leave\s+it\b|"
+    r"not\s+(?:right\s+)?(?:now|yet|today|at\s+the\s+moment)\b|maybe\s+later\b|"
+    r"i'm\s+(?:good|right|alright|fine|ok|okay)(?:\s+(?:thanks|thank\s+you|ta|cheers|mate))*"
+    + _CLAUSE_END + r"|"
+    r"(?:please\s+)?(?:don't|dont|do\s+not)(?:\s+(?:bother|worry))?" + _CLAUSE_END + r")",
+    re.IGNORECASE,
+)
+
+# --- request form --------------------------------------------------------------
+# A person-word after an ask verb is not enough: "I'll speak to reception when
+# I check in", "I was talking to the manager this morning" and "should I speak
+# to the manager?" all have one, and none of them asks for a transfer. On a
+# call where the agent had just offered one, the first read as consent — a
+# caller who had said "No thanks" was about to be handed over.
+#
+# So the words of the ask's own clause (back to the last punctuation) are read.
+# Narration, deferral or musing in front of the ask disqualifies it ...
+_NOT_A_REQUEST_BEFORE = re.compile(
+    r"\b(?:i'll|ill|i\s+will|we'll|we\s+will|he'll|she'll|they'll|"
+    r"i'm\s+(?:going\s+to|gonna)|"
+    r"was|were|i've|ive|we've|i\s+have\s+(?:been|already)|had|already|"
+    r"when(?:\s+(?:can|could|will|would|should|do|does|is|are)\s+\w+)?|"
+    r"tomorrow|later|earlier|yesterday|tonight|"
+    r"this\s+(?:morning|afternoon|arvo|evening)|last\s+(?:week|night|time|year)|"
+    r"next\s+(?:time|week)|maybe|"
+    r"should\s+i|do\s+i\s+(?:need|have)\s+to|would\s+it|is\s+it\s+(?:worth|better)|"
+    # "I could talk to the owner, I suppose" muses; "any chance / if I could"
+    # asks.
+    r"(?<!chance\s)(?<!if\s)i\s+(?:could|might|may|should)|why\s+(?:would|did|do|does|are|is|should)\s+\w+)\b",
+    re.IGNORECASE,
+)
+# ... unless the caller then goes on to ask: "I'll be there Friday but CAN I
+# talk to reception now?", "I was HOPING to speak to the manager". These are
+# also what makes an ask "clearly a request" after a refusal earlier in the
+# same breath ("No, I WANT to speak to a person").
+_REQUEST_OPENER = re.compile(
+    r"\b(?:want|wanted|wanting|wanna|need|needs|like|love|prefer|rather|mind|"
+    r"hoping|wondering|keen|chance|can|could|may|would\s+you|will\s+you|"
+    r"please|let\s+me)\b",
+    re.IGNORECASE,
+)
+# A command needs no opener: "Nah, just get me the manager." — as long as
+# nothing but filler stands between the start of the clause and the verb.
+_IMPERATIVE_LEAD = re.compile(
+    r"^(?:\s*(?:just|um|uh|er|look|mate|please|ok|okay|i\s+said|yeah|honestly)\b)*\s*$",
+    re.IGNORECASE,
+)
+_IMPERATIVE_VERB = re.compile(
+    r"(?:transfer|put|get|connect|speak|talk|chat|have)\b", re.IGNORECASE
+)
+# A narrating "-ing" form ("I was talking to the owner", "speaking to someone
+# would help") is an ask only with an opener ("I wouldn't MIND talking to ...").
+_PROGRESSIVE = re.compile(
+    r"(?:speaking|talking|chatting|transferring|getting|being)\b", re.IGNORECASE
+)
+# Deferral after the ask, before the clause moves on to its subject: "transfer
+# me LATER", "speak to reception WHEN I check in", "the owner LAST WEEK". Words
+# after "about" / "for" belong to the subject: "can I talk to someone about my
+# booking for tomorrow" asks now.
+_SUBJECT_STARTS = re.compile(
+    r"\b(?:about|for|regarding|re|because|cause|since|as|so)\b", re.IGNORECASE
+)
+_DEFERRED_AFTER = re.compile(
+    r"\b(?:later|tomorrow|tonight|another\s+time|some\s+other\s+time|"
+    r"next\s+(?:time|week)|(?:when|once|after)\s+(?:i|we|he|she|they|he's|she's|they're)|"
+    r"in\s+the\s+morning|this\s+(?:morning|afternoon|arvo|evening)|yesterday|earlier|"
+    r"last\s+(?:week|night|time|year)|"
+    r"on\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|the\s+weekend))\b",
+    re.IGNORECASE,
+)
+_CLAUSE_BREAK = re.compile(r"[,.!?;:]")
+
+
+def _clause_before(text: str, start: int, floor: int = 0) -> str:
+    """The words from the last punctuation (or `floor`) up to `start`."""
+    breaks = [m.end() for m in _CLAUSE_BREAK.finditer(text, 0, start)]
+    return text[max([floor] + breaks):start]
+
+
+def _clause_after(text: str, end: int) -> str:
+    """The words after `end` up to the next punctuation."""
+    stop = _CLAUSE_BREAK.search(text, end)
+    return text[end:stop.start() if stop else len(text)]
+
+
+def _opens_a_request(lead: str) -> bool:
+    """Do the words in front of an ask turn it into a request?
+
+    Only the words after the last narrative marker count: "I'll just speak to
+    reception" has no opener after "I'll"; "I'll be there Friday, can I ..."
+    does.
+    """
+    markers = list(_NOT_A_REQUEST_BEFORE.finditer(lead))
+    tail = lead[markers[-1].end():] if markers else lead
+    return bool(_REQUEST_OPENER.search(tail))
+
+
+def _is_a_request(text: str, match, floor: int) -> bool:
+    """Is this ask said as a request for now — not narration, a deferral, or
+    a question about whether to?"""
+    lead = _clause_before(text, match.start(), floor)
+    said = match.group(0)
+    if _NOT_A_REQUEST_BEFORE.search(lead) and not _opens_a_request(lead):
+        return False
+    if _PROGRESSIVE.match(said) and not _opens_a_request(lead):
+        return False
+    after = _clause_after(text, match.end())
+    subject = _SUBJECT_STARTS.search(after)
+    if _DEFERRED_AFTER.search(after[: subject.start()] if subject else after):
+        return False
+    return True
+
+
+def _clearly_a_request(text: str, match, floor: int) -> bool:
+    """After a refusal, does this ask plainly take it back? "No, I want to
+    speak to a person" and "Nah, just get me the manager" do; a refusal
+    followed by a bare person-mention stays a refusal."""
+    lead = _clause_before(text, match.start(), floor)
+    if _opens_a_request(lead + match.group(0)):
+        return True
+    return bool(_IMPERATIVE_LEAD.match(lead) and _IMPERATIVE_VERB.match(match.group(0)))
+
+
+def transfer_intent(utterance: str):
+    """
+    "ask" if the caller's words ask for a person, "refuse" if they turn a
+    transfer down, None if they do neither.
+
+    Callers do both in one breath and the last thing they say is what they
+    mean: "No, I want to speak to a person" is an ask (the "no" answered the
+    agent, not the transfer); "Can I speak to someone about parking? Actually
+    no, just tell me" is a refusal. So every ask and every refusal is located
+    and the LAST one wins. An ask with a negation directly in front of it
+    ("don't transfer me", "I don't want to speak to anyone") is a refusal.
+
+    An ask must be a request for now. A person-mention inside narration or a
+    deferral ("I'll speak to reception when I check in", "I was talking to the
+    manager this morning") or a question about whether to ("should I speak to
+    the manager?") is not one. And once the caller has refused, a later
+    person-mention only overrides it when it is plainly a request ("No, I want
+    to ...", "Nah, put me through") — handing over a caller who declined is
+    the one mistake this gate exists to prevent.
+
+    Shared by the orchestrator's consent gate and the dispatcher's guard so
+    the two can never disagree about the same sentence — the old dispatcher
+    guard refused any utterance containing "no" or "don't", which looped
+    callers who said "No, I want a person" while the gate let them through.
+    """
+    text = re.sub(r"\s+", " ", (utterance or "").replace("’", "'")).strip()
+    if not text:
+        return None
+    text = _ASKED_WHAT_THE_AGENT_IS.sub(lambda m: " " * len(m.group(0)), text)
+
+    # (start, end, verdict) for every refusal and every ask.
+    events = [(m.start(), m.end(), "refuse") for m in _REFUSED.finditer(text)]
+    for match in _ASKED_FOR_A_PERSON.finditer(text):
+        if _NEGATED_JUST_BEFORE.search(text[: match.start()]):
+            events.append((match.start(), match.end(), "refuse"))
+            continue
+        # Refusals said before this ask. Its clause is read from the end of
+        # the latest one, so in "No I want ..." the lead is "I want".
+        refused_before = [end for start, end, verdict in events
+                          if verdict == "refuse" and start < match.start()]
+        floor = max(refused_before, default=0)
+        if not _is_a_request(text, match, floor):
+            continue
+        if refused_before and not _clearly_a_request(text, match, floor):
+            continue
+        events.append((match.start(), match.end(), "ask"))
+    return max(events)[2] if events else None
+
+
+def transfer_refused(utterance: str) -> bool:
+    """Did the caller's words turn a transfer down?"""
+    return transfer_intent(utterance) == "refuse"
+
+
 _OFFERED_A_PERSON = re.compile(
     r"\b(put you through|transfer you|reception|front desk|grab the front desk|"
     r"connect you|speak to (?:someone|a person|staff))\b",
@@ -551,8 +810,11 @@ def transfer_consent_given(history: list) -> bool:
     if not last_user.strip():
         return False
 
-    if _ASKED_FOR_A_PERSON.search(last_user):
-        return True
+    # An ask stands on its own; a refusal ("No, don't transfer me") vetoes even
+    # a "yes" that opened the same sentence.
+    intent = transfer_intent(last_user)
+    if intent is not None:
+        return intent == "ask"
 
     stripped = last_user.strip().strip(".!,").lower()
     agreeing = stripped in _AGREEING or any(

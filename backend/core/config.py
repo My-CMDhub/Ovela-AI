@@ -97,6 +97,22 @@ class Settings(BaseSettings):
     TWILIO_SIGNATURE_MODE: str = "report"
     # Optional. Unset -> derived from the magic-link secret (domain-separated).
     STREAM_TOKEN_SECRET: str = ""
+    # Seconds a Media Stream socket may stay open without sending `start`.
+    # The Deepgram and Cartesia sockets are opened before Twilio's first
+    # message, so a client that connects and goes quiet would otherwise hold
+    # both (and their billing) open indefinitely. Twilio sends `connected` and
+    # `start` within milliseconds, so 10 s only ever catches a stalled client.
+    STREAM_START_TIMEOUT_S: float = 10.0
+
+    # Inbound call rate limits (services/db/transcripts.py
+    # check_voice_rate_limit). Whitelisted numbers bypass both. The trade-off
+    # is abuse vs. turning real guests away: every call costs STT+LLM+TTS, and
+    # these cap what one number (or a flood of numbers) can run up — but the
+    # global cap is a hard hang-up, so in a genuinely busy hour the 11th real
+    # caller hears "try again later". Defaults are the owner's product call;
+    # change them via env, not here.
+    RATE_LIMIT_CALLS_PER_CALLER_PER_DAY: int = 2
+    RATE_LIMIT_CALLS_PER_HOUR_GLOBAL: int = 10
 
 
     # Personal Assistant Target Number

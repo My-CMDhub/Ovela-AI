@@ -58,7 +58,9 @@ class CoalCreekStripeService:
             return {"success": False, "error": "Stripe not configured"}
         
         try:
-            total_cents = int(price_per_night * num_nights * 100)
+            # round, not int: a per-night price derived from a total (e.g.
+            # $244 / 7) multiplies back to 24399.999…, which int() cut to a cent short.
+            total_cents = int(round(price_per_night * num_nights * 100))
             expiry_time = int(datetime.now().timestamp() + 86400) # 24 Hours from now
             
             # Create Coupon for Checkout Session (One-time, expires)
@@ -169,6 +171,26 @@ class CoalCreekStripeService:
             logger.error(f"❌ [Coal Creek] Stripe setup error: {e}")
             return {"success": False, "error": str(e)}
             
+    async def expire_checkout_from_url(self, url: str) -> bool:
+        """
+        Expire the Checkout Session behind a payment link, so it can no longer
+        be paid. The session id is not stored on bookings, but the link carries
+        it (checkout.stripe.com/c/pay/cs_...). Best effort: False when there is
+        no id, Stripe is not configured, or Stripe refuses (already paid or
+        expired sessions cannot be expired).
+        """
+        import re as _re
+        m = _re.search(r"(cs_(?:test|live)_[A-Za-z0-9]+)", url or "")
+        if not (self.configured and m):
+            return False
+        try:
+            await asyncio.to_thread(stripe.checkout.Session.expire, m.group(1))
+            logger.info("[Coal Creek] Expired superseded checkout %s…", m.group(1)[:16])
+            return True
+        except Exception as e:
+            logger.warning("[Coal Creek] Could not expire checkout %s…: %s", m.group(1)[:16], e)
+            return False
+
     def verify_webhook(self, payload: bytes, signature: str) -> dict:
         """Verify Stripe webhook signature."""
         try:

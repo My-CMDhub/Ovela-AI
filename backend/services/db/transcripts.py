@@ -356,14 +356,22 @@ class TranscriptsMixin:
         """
         Enforce rate limiting on incoming voice calls:
         - Admin / Whitelisted numbers bypass all limits.
-        - User-Level Limit: Max 2 calls/24hr (AEST-anchored).
-        - Global Limit: Max 10 calls/hr globally (for non-whitelisted callers).
+        - User-Level Limit: settings.RATE_LIMIT_CALLS_PER_CALLER_PER_DAY
+          calls in the last 24h (default 2).
+        - Global Limit: settings.RATE_LIMIT_CALLS_PER_HOUR_GLOBAL calls in the
+          last hour from non-whitelisted callers (default 10).
         
         Returns:
             (is_allowed, reason)
         """
         from datetime import timedelta
         from rules.whitelist import is_whitelisted
+        from core.config import settings
+
+        # Settings, not constants, so the owner can loosen them for a busy
+        # night without a deploy (see the trade-off note in core/config.py).
+        per_caller_limit = settings.RATE_LIMIT_CALLS_PER_CALLER_PER_DAY
+        global_limit = settings.RATE_LIMIT_CALLS_PER_HOUR_GLOBAL
         
         # 1. Admin/Whitelisted check
         if is_whitelisted(phone):
@@ -376,13 +384,16 @@ class TranscriptsMixin:
             now_utc = datetime.now(timezone.utc)
             
             # --- 2. User-Level Limit Check ---
-            # Max 2 calls / 24 hours (UTC comparison matching Appwrite's storage format)
+            # per_caller_limit calls / 24 hours (UTC comparison matching Appwrite's storage format)
             hour_24_ago = (now_utc - timedelta(hours=24)).isoformat()
             
+            # Blocked attempts are fetched too and filtered out below, so the
+            # page needs headroom over the limit or a raised limit would be
+            # undercounted. 5x keeps the original page sizes at the defaults.
             user_queries = [
                 AppwriteQuery.equal("caller_phone", phone),
                 AppwriteQuery.greater_than_equal("created_at", hour_24_ago),
-                AppwriteQuery.limit(10)
+                AppwriteQuery.limit(max(10, per_caller_limit * 5))
             ]
             
             user_result = await self._make_request(
@@ -394,18 +405,18 @@ class TranscriptsMixin:
             user_docs = user_result.get("documents", []) if user_result else []
             valid_user_calls = [d for d in user_docs if d.get("status") != "blocked" and d.get("outcome") != "blocked"]
             
-            if len(valid_user_calls) >= 2:
+            if len(valid_user_calls) >= per_caller_limit:
                 logger.warning(f"🚫 User rate limit exceeded for {mask_phone(phone)}: {len(valid_user_calls)} calls in last 24h")
                 return False, "user_limit_exceeded"
                 
             # --- 3. Global Limit Check ---
-            # Max 10 calls / hour globally (non-whitelisted)
+            # global_limit calls / hour globally (non-whitelisted)
             hour_ago = (now_utc - timedelta(hours=1)).isoformat()
 
             
             global_queries = [
                 AppwriteQuery.greater_than_equal("created_at", hour_ago),
-                AppwriteQuery.limit(50)
+                AppwriteQuery.limit(max(50, global_limit * 5))
             ]
             
             global_result = await self._make_request(
@@ -423,7 +434,7 @@ class TranscriptsMixin:
                 if doc_phone and not is_whitelisted(doc_phone) and doc_status != "blocked":
                     non_whitelisted_global_count += 1
                     
-            if non_whitelisted_global_count >= 10:
+            if non_whitelisted_global_count >= global_limit:
                 logger.warning(f"🚫 Global rate limit exceeded: {non_whitelisted_global_count} non-whitelisted calls in last hour")
                 return False, "global_limit_exceeded"
                 

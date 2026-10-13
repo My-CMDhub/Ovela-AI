@@ -324,7 +324,21 @@ def _map_room_type(raw_type) -> str:
     return mapped_type
 
 
-async def _check_appwrite_availability(db_service, check_in_str: str, check_out_str: str, room_type: str = None) -> dict:
+def _kb_rate(display_type: str):
+    """Knowledge-base nightly price for a display room type, or None."""
+    for room in COALCREEK_DATA.get("rooms", {}).values():
+        if room.get("name") == display_type:
+            return room.get("price")
+    return None
+
+
+def _hold_keys(doc: dict) -> set:
+    """What identifies a reservation row in an availability read."""
+    return {k for k in (doc.get("$id"), doc.get("booking_reference")) if k}
+
+
+async def _check_appwrite_availability(db_service, check_in_str: str, check_out_str: str, room_type: str = None,
+                                       exclude: set = None) -> dict:
     """
     Check availability purely from Appwrite DB.
     Mimics the scraper output format.
@@ -358,6 +372,12 @@ async def _check_appwrite_availability(db_service, check_in_str: str, check_out_
         # booking path assigned one anyway.
         if reservations is None:
             return {"success": False, "error": "reservations_unreadable"}
+        if exclude:
+            # A hold being moved still sits on its old nights until the new one
+            # is saved. Counted, it blocked moving onto overlapping dates
+            # whenever its own room was the last one free.
+            reservations = [r for r in reservations
+                            if r.get("$id") not in exclude and r.get("booking_reference") not in exclude]
         # get_motel_rooms still folds errors into [] (its contract is tested
         # elsewhere). A motel with no rooms is never true, so empty inventory is
         # a failed read too — otherwise an outage is told to callers as "fully
@@ -390,14 +410,20 @@ async def _check_appwrite_availability(db_service, check_in_str: str, check_out_
         candidates = []  # (room dict, set of nights it is free)
         for room in active_rooms:
             room_num = room.get("room_number")
+            display_type = _map_room_type(room.get("room_type"))
             candidates.append((
                 {
-                    "room_type": _map_room_type(room.get("room_type")),
+                    "room_type": display_type,
                     "room_number": room_num,
                     # CRITICAL: use `or` not .get(key, default) because Appwrite stores
                     # null values as None even when the key exists — .get() returns None,
                     # not the default, when the key is present but null.
-                    "price_per_night": room.get("base_rate") or 150,
+                    # This is THE nightly price: check_availability quotes it and
+                    # create_booking_request charges it (from the same room).
+                    # A room with no base_rate falls back to the KB price for its
+                    # type — the figure the prompt lists — not a flat $150 that
+                    # no booking ever charged.
+                    "price_per_night": room.get("base_rate") or _kb_rate(display_type) or 150,
                     "available": True,
                 },
                 {night for night in night_strs if room_num not in booked_by_night[night]},
@@ -447,7 +473,60 @@ async def _check_appwrite_availability(db_service, check_in_str: str, check_out_
 # BOOKING HANDLERS (Read-Only + Soft Hold)
 # =============================================================================
 
+def _reconcile_with_caller(args: dict, for_booking: bool = False):
+    """
+    The model's ISO dates, checked against the caller's own latest words.
+
+    Returns (args to use, a sentence to say first, a question to ask instead,
+    the Reconciled record). See services/voice_agent/date_phrases.py for what
+    is and is not read; in short: one date phrase, or a range, that is about
+    the stay. "Next weekend" the model turned into this weekend is corrected
+    and read back; "next Friday" said on a Wednesday is confirmed either way;
+    "Friday the 17th" when the 17th is a Saturday is asked about.
+    """
+    from services.voice_agent.date_phrases import reconcile
+    model_in = _parse_iso_date(args.get("check_in_date", ""))
+    model_out = _parse_iso_date(args.get("check_out_date", ""))
+    anchor = _parse_iso_date(args.get("_booking_check_in", ""))
+    rec = reconcile(model_in, model_out, args.get("_user_utterance", ""), _today_melbourne_date(), anchor,
+                    for_booking=for_booking)
+    if rec.ask:
+        return args, "", rec.ask, rec
+    if rec.changed and rec.check_in:
+        logger.info("📅 Dates corrected from the caller's words %r: %s→%s, %s→%s",
+                    rec.reading.phrase if rec.reading else "", model_in, rec.check_in, model_out, rec.check_out)
+        args = dict(args)
+        args["check_in_date"] = rec.check_in.isoformat()
+        args["check_out_date"] = (rec.check_out or rec.check_in + timedelta(days=1)).isoformat()
+    return args, rec.say_first, "", rec
+
+
 async def handle_check_availability(args: dict, db_service, context: dict | None = None) -> dict:
+    """
+    check_availability, with the dates checked against what the caller said.
+
+    The answer is prefixed with the dates actually used whenever they were
+    corrected or the caller's phrase had two readings, so a wrong reading is
+    heard and fixed in the same breath rather than found at check-in.
+    """
+    args, say_first, ask, _rec = _reconcile_with_caller(args)
+    if ask:
+        return {
+            "available": "unknown",
+            "verified": False,
+            "dates_unclear": True,
+            "message": "The caller's dates need confirming before checking",
+            "ai_should_say": ask,
+        }
+    result = await _check_availability(args, db_service, context=context)
+    if say_first and isinstance(result, dict) and result.get("ai_should_say"):
+        result = dict(result)
+        result["ai_should_say"] = f"{say_first} {result['ai_should_say']}"
+        result["dates_read_back"] = True
+    return result
+
+
+async def _check_availability(args: dict, db_service, context: dict | None = None) -> dict:
     """
     Check room availability using real-time scraping.
     
@@ -581,8 +660,9 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                 "_skip_ack": True,  # I1 already played "Got it, one moment" — skip LLM ack
                 "ai_should_say": "Sorry, I couldn't complete the live calendar check just now. If you want, I can put you through to reception."
             }
-            if isinstance(availability_cache, dict):
-                availability_cache[cache_key] = copy.deepcopy(payload)
+            # Never cached: the memo lives for the whole call, so caching one
+            # transient failure turned every retry of these dates into the same
+            # "couldn't check" without the calendar ever being asked again.
             return payload
 
         if result.get("partial_scan"):
@@ -598,8 +678,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
                 "skipped_nights": skipped,
                 "ai_should_say": f"I can run up to ten nights per live check right now, and I verified {checked_range}. If you want, I can put you through to reception for the full span.",
             }
-            if isinstance(availability_cache, dict):
-                availability_cache[cache_key] = copy.deepcopy(payload)
+            # Not cached: "unknown" is not an answer to remember (see above).
             return payload
         
         # 4. Parse result efficiently
@@ -752,8 +831,7 @@ async def handle_check_availability(args: dict, db_service, context: dict | None
             "_skip_ack": True,
             "ai_should_say": "Sorry, I couldn't complete the live calendar check just now. If you'd like, I can put you through to reception."
         }
-        if isinstance(availability_cache, dict):
-            availability_cache[cache_key] = copy.deepcopy(payload)
+        # Not cached: a transient error must not answer every retry this call.
         return payload
 
 
@@ -821,6 +899,28 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "error": "guest_name is missing. You must ask the user for their name before creating a booking."
         }
 
+    # The caller's latest words, if they name dates, must agree with the dates
+    # being booked. Usually they are "yes" and say nothing. When they don't
+    # agree, nothing is held: a hold on the wrong weekend takes a room and a
+    # payment from someone who asked for a different one.
+    _fixed_args, _say, ask, rec = _reconcile_with_caller(args, for_booking=True)
+    if ask or (rec.changed and rec.check_in and _parse_iso_date(check_in)):
+        said = (rec.reading.phrase if rec.reading and rec.reading.phrase
+                else f"{rec.reading.nights} nights" if rec.reading and rec.reading.nights else "their dates")
+        heard = (f"{_format_date_spoken(rec.check_in)} to {_format_date_spoken(rec.check_out)}"
+                 if rec.check_in and rec.check_out else "different dates")
+        return {
+            "success": False,
+            "dates_unclear": True,
+            "error": (
+                f"NOT BOOKED. The caller just said \"{said}\", which is {heard}, not the dates you sent "
+                f"({check_in} to {check_out}). Read the dates back and get a clear yes before booking."
+                if not ask else f"NOT BOOKED. The dates are unclear. Ask the caller: {ask}"
+            ),
+        }
+    if rec.changed and rec.check_in:  # no dates from the model at all: the caller's words are the dates
+        check_in, check_out = _fixed_args["check_in_date"], _fixed_args["check_out_date"]
+
     check_in_date, check_out_date, resolution_source = _resolve_relative_dates(check_in, check_out, user_utterance)
     if not check_in_date:
         return {
@@ -855,13 +955,17 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
     final_key = key_map.get(search_key, "queen")
     room_data = rooms_data.get(final_key, rooms_data["queen"])
     
+    # KB price: the fallback only. In PMS mode it is replaced below by the
+    # assigned room's quoted rate; live-scraping mode has no room to read.
     rate = room_data["price"]
     total = rate * num_nights
 
     # ── Duplicate check: update existing pending reservation instead of creating new one ──
+    caller_docs = None   # None = not read; [] = read, nothing on file
     if db_service and guest_phone:
         try:
             docs = await db_service.lookup_motel_reservation(phone=guest_phone, tenant_id="coalcreek")
+            caller_docs = list(docs or [])
             for doc in (docs or []):
                 _ci = doc.get("check_in_date")
                 _rt = doc.get("room_type", "").lower()
@@ -880,7 +984,7 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                 if _ci == check_in and _rt_final == final_key and is_pending:
                     logger.info("🔍 Found matching existing pending reservation: %s. Patching instead of duplicating.", doc.get("booking_reference"))
                     booking_ref = doc.get("booking_reference")
-                    
+
                     patch_data = {
                         "guest_name": guest_name,
                         "guest_email": guest_email,
@@ -888,28 +992,94 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                         "notes": notes or doc.get("notes") or "Updated via AI",
                         "updated_at": datetime.now().isoformat()
                     }
-                    
-                    await db_service.update_motel_reservation(
-                        booking_id=doc["$id"],
-                        data=patch_data
-                    )
-                    
-                    # Fire email and Stripe link handler for the updated booking
-                    asyncio.create_task(_handle_stripe_and_guest_email(
-                        booking_ref=booking_ref,
-                        room_type=doc.get("room_type", room_data["name"]),
-                        total_amt=float(doc.get("total_amount", total)),
-                        guest_email=guest_email,
-                        guest_name=guest_name,
-                        guest_phone=guest_phone,
-                        check_in=check_in,
-                        check_out=check_out,
-                        db_service=db_service,
-                        saved_doc_id=doc["$id"],
-                        existing_stripe_url=doc.get("payment_link_url"),
-                        existing_expires_at=doc.get("payment_expires_at", 0)
-                    ))
-                    
+
+                    # The match is same check-in + room type, so the stay can
+                    # only differ in its check-out. That used to be dropped: the
+                    # caller heard the new dates while the row, its total and
+                    # the Stripe amount kept the old ones. Keep the hold's own
+                    # agreed nightly rate; only the number of nights moves.
+                    old_co = doc.get("check_out_date")
+                    stay_changed = old_co != check_out
+                    doc_rate = doc.get("rate_per_night") or rate
+                    new_total = doc_rate * num_nights if stay_changed else (doc.get("total_amount") or total)
+                    if stay_changed:
+                        patch_data.update({
+                            "check_out_date": check_out,
+                            "num_nights": num_nights,
+                            "rate_per_night": doc_rate,
+                            "total_amount": new_total,
+                        })
+
+                    room_number = doc.get("room_number")
+                    ext_start = max(old_co or check_in, check_in)
+                    if stay_changed and room_number and check_out > ext_start and not settings.USE_LIVE_SCRAPING:
+                        # Extending onto nights this hold never covered: the room
+                        # must be free on them, checked and written under the same
+                        # per-type lock a new hold takes, or the extension would
+                        # double-book whoever holds those nights. Shortening only
+                        # frees nights, so it needs no check.
+                        async with _booking_lock("coalcreek", room_data["name"]):
+                            ext = await _check_appwrite_availability(db_service, ext_start, check_out, room_data["name"])
+                            if not ext.get("success"):
+                                return {
+                                    "success": False,
+                                    "available": "unknown",
+                                    "verified": False,
+                                    "message": (
+                                        "Sorry, I couldn't confirm the extra nights on the live calendar just now, "
+                                        "so your hold is unchanged. If you'd like, I can put you through to reception."
+                                    ),
+                                }
+                            free = {r.get("room_number") for r in
+                                    (ext.get("rooms_free_all_nights") or {}).get(room_data["name"], [])}
+                            if room_number not in free:
+                                return {
+                                    "success": False,
+                                    "message": (
+                                        "I'm sorry, your room isn't free for the extra nights, so I haven't changed "
+                                        f"your hold. It still checks out on {old_co}."
+                                    ),
+                                }
+                            patched = await db_service.update_motel_reservation(booking_id=doc["$id"], data=patch_data)
+                    else:
+                        patched = await db_service.update_motel_reservation(
+                            booking_id=doc["$id"],
+                            data=patch_data
+                        )
+                    # update_motel_reservation returns None on failure rather
+                    # than raising. Unchecked, a failed patch was reported as
+                    # "I've updated your hold" and the dispatcher mailed a link
+                    # for a total the booking never got. Refuse instead, and do
+                    # not fall through to creating a second hold either.
+                    if not patched:
+                        logger.error("🚨 Patch of existing hold %s failed; nothing changed", booking_ref)
+                        return {
+                            "success": False,
+                            "booking_reference": booking_ref,
+                            "message": (
+                                "Sorry, I couldn't update your existing hold just now, so nothing has "
+                                "changed. If you'd like, I can put you through to reception."
+                            ),
+                        }
+
+                    # No payment link from here: the dispatcher sends one for
+                    # every successful create_booking_request, built from the
+                    # total returned below. Sending one here as well mailed the
+                    # guest twice — one of them at the OLD total after a date
+                    # change.
+                    if stay_changed:
+                        message = (
+                            f"I've updated your hold to {num_nights} night{'s' if num_nights > 1 else ''}, "
+                            f"{ci_spoken} to {co_spoken}, total ${new_total}. Your reference number is still "
+                            f"{booking_ref.split('-')[-1]}. A new payment link for the new total has been sent to "
+                            f"{guest_email} — please check your inbox and confirm once you receive it."
+                        )
+                    else:
+                        message = (
+                            f"I've updated your existing hold for {ci_spoken}. Your reference number is still {booking_ref.split('-')[-1]}. "
+                            f"The payment link has been resent to {guest_email} — "
+                            "please check your inbox and confirm once you receive it."
+                        )
                     return {
                         "success": True,
                         "booking_reference": booking_ref,
@@ -917,17 +1087,84 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                         "guest_email": guest_email,
                         "check_in_date": check_in,
                         "check_out_date": check_out,
+                        "num_nights": num_nights,
                         "room_type": doc.get("room_type", room_data["name"]),
-                        "total_amount": float(doc.get("total_amount", total)),
+                        "total_amount": float(new_total),
                         "_saved_doc_id": doc["$id"],
-                        "message": (
-                            f"I've updated your existing hold for {ci_spoken}. Your reference number is still {booking_ref.split('-')[-1]}. "
-                            f"The payment link has been resent to {guest_email} — "
-                            "please check your inbox and confirm once you receive it."
-                        )
+                        "message": message,
                     }
         except Exception as dup_err:
             logger.error(f"Error checking for duplicate reservation in create_booking: {dup_err}", exc_info=True)
+
+    # ── A new hold must not quietly stand in for changing an existing booking ──
+    # "Can I move it to the weekend after?" used to reach this tool as an
+    # ordinary new booking: the paid stay kept its room and its payment, and
+    # the caller was sent a second checkout. The tool now has to be told which
+    # it is — a MOVE of a named booking, or an ADDITIONAL stay — whenever the
+    # caller already has a live booking, and a move is only done here for an
+    # unpaid hold. Paid, in-house and finished stays are refused in code, not
+    # left to a sentence in the prompt.
+    replaces_ref = _ref_key(args.get("replaces_booking_reference"))
+    additional = str(args.get("additional_stay", "")).strip().lower() in ("true", "yes", "1")
+    replacing_doc = None
+    if replaces_ref or (caller_docs and not additional):
+        today = _today_melbourne_date()
+        # The caller's OWN bookings only. With no caller number nothing is
+        # theirs: a stranger's reference, dates and payment must never be read
+        # back, and a stranger's hold must never be cancelled as a "move".
+        mine = [d for d in (caller_docs or []) if user_phone and caller_owns(d, user_phone)]
+        if replaces_ref:
+            replacing_doc = next((d for d in mine if _ref_key(d.get("booking_reference")) == replaces_ref), None)
+            if replacing_doc is None:
+                return {
+                    "success": False,
+                    "error": (f"NOT BOOKED. There is no booking {args.get('replaces_booking_reference')} on this "
+                              "caller's number to move. Check the reference with lookup_booking first."),
+                }
+            kind, rule = _change_rule(replacing_doc, today)
+            if kind == "released":
+                # Nothing holds a room any more, so this is a new booking —
+                # and like any new booking it faces the live-booking check
+                # below, or naming a lapsed hold would skip it.
+                replacing_doc = None
+                replaces_ref = ""
+            elif kind != "movable":
+                logger.info("🚫 Move refused: %s is %s", replacing_doc.get("booking_reference"), kind)
+                return {"success": False, "move_refused": kind,
+                        "booking_reference": replacing_doc.get("booking_reference"),
+                        "error": f"NOT BOOKED. {rule}"}
+        if not replaces_ref and not additional:
+            # A stay ending today is not what new dates could replace. Upcoming
+            # bookings come first: a guest in the room asking about next month
+            # is asking about the next-month booking, not the room they're in.
+            live = sorted(
+                (d for d in mine if _change_rule(d, today)[0] in ("paid", "in_house", "movable")
+                 and _stay_timing(d, today) != "checkout_today"),
+                key=lambda d: (_stay_timing(d, today) != "upcoming", d.get("check_in_date") or ""))
+            if live:
+                d = live[0]
+                kind, _rule = _change_rule(d, today)
+                ref = d.get("booking_reference") or "on file"
+                stay = f"{d.get('check_in_date')} to {d.get('check_out_date')}"
+                if kind == "movable":
+                    move = (f"If they want to MOVE it: call create_booking_request again with "
+                            f"replaces_booking_reference=\"{ref}\" (the old hold is released).")
+                else:
+                    move = ("If they want to MOVE or change it: you cannot — "
+                            + ("it is paid; " if kind == "paid" else "they are staying now; ")
+                            + "offer to put them through to reception (transfer_to_staff). Do not book.")
+                return {
+                    "success": False,
+                    "needs_intent": True,
+                    "existing_booking": ref,
+                    "error": (
+                        f"NOT BOOKED YET. This caller already has booking {ref} ({stay}, "
+                        f"{'unpaid hold' if kind == 'movable' else kind}). Ask whether these new dates are INSTEAD "
+                        f"of that booking or a SECOND stay as well — do not assume. {move} If it is a second, "
+                        "separate stay: once they have said so, call create_booking_request again with "
+                        "additional_stay=true."
+                    ),
+                }
 
     # Booking Ref — 36^6 = 2.17B combos, effectively zero collision risk
     booking_ref = f"CC-{''.join(random.choices(string.ascii_uppercase + string.digits, k=6))}"
@@ -988,7 +1225,9 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             # types book in parallel. It does NOT cover two dynos; that needs a
             # unique constraint in the DB.
             async with _booking_lock("coalcreek", room_data["name"]):
-                avail_res = await _check_appwrite_availability(db_service, check_in, check_out, room_data["name"])
+                avail_res = await _check_appwrite_availability(
+                    db_service, check_in, check_out, room_data["name"],
+                    exclude=_hold_keys(replacing_doc) if replacing_doc is not None else None)
                 if not avail_res.get("success"):
                     # Fail CLOSED. We could not read the calendar, so we neither
                     # assign a room nor claim one is free, and we do not save a
@@ -1017,6 +1256,15 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
                         "message": f"Unfortunately, the {room_data['name']} is no longer available for those dates."
                     }
                 room = free_rooms[0]
+                # Charge what check_availability quoted. It quotes this same
+                # room (the first free all nights, in inventory order) at its
+                # DB base_rate; the hold used to be written at the static KB
+                # price instead, so a caller told "$120 a night" was emailed a
+                # checkout for $135. The KB price stays only as the fallback.
+                rate = room.get("price_per_night") or rate
+                total = rate * num_nights
+                reservation_data["rate_per_night"] = rate
+                reservation_data["total_amount"] = total
                 reservation_data["room_number"] = room["room_number"]
                 reservation_data["status"] = "reserved"
                 reservation_data["source"] = "voice_ai_pms_auto"
@@ -1028,6 +1276,57 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             refusal = await _save()
         if refusal:
             return refusal
+
+        released_old = None
+        if replacing_doc is not None:
+            # The new hold exists; now give the old one's room back. Read it
+            # again first: the guest may have paid the old link while this call
+            # was going on, and a paid booking marked cancelled is money taken
+            # for a stay the system no longer shows.
+            old_ref = replacing_doc.get("booking_reference")
+            try:
+                # By reference, not through lookup_motel_reservation: that is
+                # memoised for the whole call (_CachedReservationLookup), so it
+                # would hand back the hold as it was at the start of the call,
+                # and it is capped at 5 rows per phone.
+                fresh_doc = await db_service.get_booking_by_reference(old_ref, tenant_id="coalcreek")
+                if fresh_doc and fresh_doc.get("$id") != replacing_doc.get("$id"):
+                    fresh_doc = None
+            except Exception as reread_err:
+                logger.error("Re-read of moved hold %s raised: %s", old_ref, reread_err)
+                fresh_doc = None
+            if fresh_doc is None or not _is_awaiting_payment(fresh_doc):
+                logger.error("🚨 Moved %s → %s but the old hold could not be confirmed unpaid; left as is",
+                             old_ref, booking_ref)
+            else:
+                try:
+                    released_old = await db_service.update_motel_reservation(
+                        booking_id=replacing_doc["$id"],
+                        data={"status": "cancelled", "updated_at": datetime.now().isoformat(),
+                              "notes": f"Moved by the caller to {booking_ref}. "
+                                       f"{replacing_doc.get('notes') or ''}".strip()},
+                    )
+                except Exception as move_err:
+                    logger.error("Release of moved hold %s raised: %s", old_ref, move_err)
+            if released_old:
+                # The old checkout is still in the guest's inbox and payable
+                # for up to 24 h. Paid, it would be held for staff while the new
+                # hold lapsed unpaid; expired, it cannot be paid at all.
+                try:
+                    from services.tenants.coalcreek.stripe import coalcreek_stripe_service
+                    await coalcreek_stripe_service.expire_checkout_from_url(
+                        fresh_doc.get("payment_link_url") or replacing_doc.get("payment_link_url") or "")
+                except Exception as expire_err:
+                    logger.warning("Could not expire the old checkout of %s: %s", old_ref, expire_err)
+            else:
+                logger.error("🚨 Moved %s → %s but the old hold was NOT released", old_ref, booking_ref)
+                try:
+                    import sentry_sdk
+                    sentry_sdk.capture_message(
+                        f"Moved hold {old_ref} to {booking_ref}; old hold not released — check it by hand",
+                        level="error")
+                except Exception:
+                    pass
 
         # Speak the booking reference — natural cadence: "CC, AB 1 2 3 4"
         # Split on dash: "CC-AB1234" → prefix="CC", suffix="AB1234"
@@ -1049,7 +1348,12 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "room_type": room_data["name"],
             "total_amount": total,
             "_saved_doc_id": reservation_data.get("_saved_doc_id"),
+            "stay_timing": "upcoming",
+            "change_rule": _change_rule(reservation_data, _today_melbourne_date())[1],
+            **({"replaced_booking_reference": replacing_doc.get("booking_reference"),
+                "old_hold_released": bool(released_old)} if replacing_doc is not None else {}),
             "message": (
+                (f"I've moved your booking: the old hold is cancelled. " if replacing_doc is not None else "") +
                 f"I've placed a {num_nights} night hold for {ci_spoken}. Your reference is {ref_spoken}. "
                 f"A payment link has been sent to {guest_email} — "
                 "could you check your inbox now to confirm it arrived? I'll stay on the line."
@@ -1223,6 +1527,9 @@ async def handle_lookup_booking(args: dict, db_service, user_phone: str) -> dict
             "total_amount":           doc.get("total_amount", ""),
             "other_bookings":         total_docs - 1,
         }
+        _kind, _rule = _change_rule(doc, _today_melbourne_date())
+        result["stay_timing"] = _stay_timing(doc, _today_melbourne_date())
+        result["change_rule"] = _rule
         
         _pstatus = doc.get("payment_status") or ""   # null / missing treated as outstanding
         _bstatus = doc.get("status") or ""
@@ -1480,6 +1787,116 @@ async def handle_request_human_callback(args: dict, user_phone: str) -> dict:
     }
 
 
+# Booking statuses that mean "room held, money not yet taken".
+_HOLD_STATUSES = frozenset({"reserved", "pending", "pending_payment", "link_sent"})
+# Payment states that mean "a link is out, or should be" — deliberately WITHOUT
+# the empty string. Walk-ins and PMS imports are written with no payment_status
+# at all, so "" says nothing about money owed; counting it as pending is how a
+# confirmed walk-in giving their name over the phone was flipped back to
+# pending_payment and emailed a checkout for a stay already settled at the desk.
+_UNPAID_PAYMENT_STATUSES = frozenset({"pending", "pending_payment", "email_failed"})
+
+
+def _is_awaiting_payment(doc: dict) -> bool:
+    """Whether a payment link may be (re)sent for this booking.
+
+    A hold status (reserved/pending/...) is enough on its own: a fresh hold has
+    no payment_status until its link goes out. Otherwise the payment state has
+    to say so explicitly — legacy rows were written `confirmed` before payment
+    (see the N6 guard) and still carry `pending_payment`. Expired holds and
+    anything paid or carded never qualify.
+    """
+    bs = (doc.get("status") or "").lower()
+    ps = (doc.get("payment_status") or "").lower()
+    if bs == "expired" or ps in ("paid", "card_on_file"):
+        return False
+    return bs in _HOLD_STATUSES or ps in _UNPAID_PAYMENT_STATUSES
+
+
+def _stay_timing(doc: dict, today) -> str:
+    """'upcoming', 'in_house', 'checkout_today', 'finished', or 'unknown'."""
+    ci = _parse_iso_date(doc.get("check_in_date") or "")
+    if not ci:
+        return "unknown"
+    co = _parse_iso_date(doc.get("check_out_date") or "") or ci + timedelta(days=1)
+    if co < today:
+        return "finished"
+    if co == today:
+        return "checkout_today"
+    if ci <= today:
+        return "in_house"
+    return "upcoming"
+
+
+def _ref_key(raw) -> str:
+    """A booking reference for comparison: "cc ab12 34" and "CC-AB1234" are one."""
+    return re.sub(r"[^A-Z0-9]", "", str(raw or "").upper())
+
+
+def _change_rule(doc: dict, today) -> tuple:
+    """
+    (kind, instruction): what may be done with this booking today, decided in
+    Python rather than left to a sentence in the prompt.
+
+    The Kaggle probe "move a paid booking" (dpquote/probe-move-a-paid-booking)
+    measured the prompt-only design: asked "can I move it to the weekend
+    after?", no model ever said a finished stay was over (0 of 108 runs), and
+    one model offered to re-book a paid stay 15 times in 18. Nothing in the
+    tools refused. So the kind decides what create_booking_request will do,
+    and the instruction travels with the booking into the call state.
+
+      finished  checked out before today: over, nothing to move
+      released  expired / cancelled / rejected: nothing to move
+      in_house  staying now: reception
+      movable   an unpaid hold: the agent may move it itself
+      paid      paid, carded or confirmed: reception, never a second hold
+    """
+    from services.db.bookings import RELEASED_STATUSES
+
+    ref = doc.get("booking_reference") or "this booking"
+    status = (doc.get("status") or "").lower()
+    timing = _stay_timing(doc, today)
+    if timing == "finished":
+        co = _parse_iso_date(doc.get("check_out_date") or "") or _parse_iso_date(doc.get("check_in_date"))
+        days = (today - co).days
+        return "finished", (
+            f"FINISHED STAY — they checked out on {_format_date_spoken(co)}, {days} day{'s' if days != 1 else ''} ago. "
+            "The stay is over, so it cannot be moved or changed. If they ask to move it, say first that this stay "
+            "has already finished. Do NOT check availability, offer a hold or send a payment link for it. "
+            "Coming again is a new booking, made only if they ask for one."
+        )
+    if status in RELEASED_STATUSES:
+        return "released", (
+            f"This hold is no longer active ({status}), so there is nothing to move. If they still want to come, "
+            "that is a new booking: check availability for the dates they want."
+        )
+    if timing == "checkout_today":
+        # In the room this morning: telling them their stay "is over" is wrong,
+        # and moving dates already slept in is impossible.
+        return "in_house", (
+            "THEY CHECK OUT TODAY. The dates can't be moved. A late checkout or an extra night is arranged "
+            "by reception: offer to put them through (transfer_to_staff). Do not create a new booking for it."
+        )
+    if timing == "in_house":
+        return "in_house", (
+            "THEY ARE STAYING NOW. Changes to a stay in progress are made by reception: say so and offer to put "
+            "them through (transfer_to_staff) or arrange a callback. Do not create a new booking for it."
+        )
+    if _is_awaiting_payment(doc):
+        return "movable", (
+            f"UNPAID HOLD — you can move it yourself. Check availability for the new dates, read the new summary "
+            f"back, then call create_booking_request with replaces_booking_reference=\"{ref}\". The old hold is "
+            "released automatically and a new payment link goes out. Do not send them to reception for this."
+        )
+    paid = (doc.get("payment_status") or "").lower() or status or "confirmed"
+    return "paid", (
+        f"PAID ({paid}) — you cannot change its dates, room or guest yourself, and you must NOT create a new "
+        "booking or hold to 'move' it: that would take a second payment for one stay. Changes to a paid booking "
+        "are made by reception — say that plainly and offer to put them through (transfer_to_staff), or arrange "
+        "a callback outside reception hours."
+    )
+
+
 async def handle_update_guest_info(args: dict, db_service, user_phone: str = None) -> dict:
     """
     Save guest details to CRM for persistent memory.
@@ -1505,17 +1922,10 @@ async def handle_update_guest_info(args: dict, db_service, user_phone: str = Non
             # Find most recent active reservation with incomplete payment
             active_doc = None
             for doc in (docs or []):
-                _ps = doc.get("payment_status") or ""
-                _bs = doc.get("status") or ""
-                # Same guard as resend_payment_link: an expired hold keeps
-                # payment_status "pending_payment", and correcting an email on
-                # it would mail a fresh checkout for a room back on sale.
-                is_pending = (_bs or "").lower() != "expired" and (
-                    _bs in ("reserved", "pending", "pending_payment", "link_sent")
-                    or _ps in ("pending", "pending_payment", "email_failed", "")
-                )
-                is_paid = _ps == "paid" and _bs in ("paid", "confirmed")
-                if is_pending and not is_paid:
+                # Same guard as resend_payment_link. This path runs on a caller
+                # merely giving their name, so a wrong "pending" here both
+                # rewrites payment_status and emails a checkout unprompted.
+                if _is_awaiting_payment(doc):
                     active_doc = doc
                     break
             if active_doc and active_doc.get("$id"):
@@ -1775,22 +2185,12 @@ async def handle_resend_payment_link(args: dict, db_service, user_phone: str) ->
 
         active_doc = None
         for doc in (docs or []):
-            _ps = doc.get("payment_status") or ""
-            _bs = doc.get("status") or ""
-            # Accept any booking that is on-hold / pending payment — includes:
-            # - 'reserved' (PMS hold, payment not yet started)
-            # - 'pending' / 'pending_payment' (explicit payment pending statuses)
-            # - 'link_sent' (link was sent but not paid)
-            # - null/empty payment_status (pipeline glitch — treat as outstanding)
-            # An expired hold keeps payment_status "pending_payment", so the
-            # status check has to come first: a fresh link would take money for
-            # a room that was released when the old link lapsed.
-            is_pending = _bs != "expired" and (
-                _bs in ("reserved", "pending", "pending_payment", "link_sent")
-                or _ps in ("pending", "pending_payment", "email_failed", "")
-            )
-            is_paid = _ps == "paid" and _bs in ("paid", "confirmed")
-            if is_pending and not is_paid:
+            # On hold (reserved/pending/pending_payment/link_sent) or explicitly
+            # unpaid. An empty payment_status no longer counts on its own — a
+            # confirmed walk-in has none and must not be sent a checkout. An
+            # expired hold keeps payment_status "pending_payment", and a fresh
+            # link would take money for a room released when the old one lapsed.
+            if _is_awaiting_payment(doc):
                 active_doc = doc
                 break
 
@@ -2122,6 +2522,10 @@ class CoalCreekFunctionDispatcher:
     Dispatches Coal Creek specific function calls.
     Ensures 'coalcreek' context is set for all KB operations.
     """
+
+    # Per-tool ceiling in execute(); check_availability scales it with nights.
+    # A class attribute so a test can shrink it instead of waiting 18 s.
+    TOOL_TIMEOUT_S = 18.0
     
     def __init__(self, db_service, user_phone: str, save_reservation_fn, abuse_protection, caller_memory_bank=None, call_sid: str = "", adk_orchestrator=None):
         # Wrap reads in a per-call memo. Repeated `lookup_booking` calls in one
@@ -2263,7 +2667,7 @@ class CoalCreekFunctionDispatcher:
         
         # Dynamic timeout: scale with nights for availability checks.
         # Parallel scraping completes in ~10s, but we add headroom.
-        TIMEOUT = 18.0
+        TIMEOUT = self.TOOL_TIMEOUT_S
         if function_name == "check_availability":
             try:
                 ci = args.get("check_in_date", "")
@@ -2272,7 +2676,7 @@ class CoalCreekFunctionDispatcher:
                     from datetime import datetime as dt
                     nights = max(1, (dt.strptime(co, "%Y-%m-%d") - dt.strptime(ci, "%Y-%m-%d")).days)
                     # Parallel: base 15s + 3s per extra night (safety margin)
-                    TIMEOUT = max(18.0, 15.0 + nights * 3.0)
+                    TIMEOUT = max(self.TOOL_TIMEOUT_S, 15.0 + nights * 3.0)
                     logger.info(f"⏱️ Dynamic timeout for {nights}-night check: {TIMEOUT}s")
             except Exception:
                 pass
@@ -2281,14 +2685,10 @@ class CoalCreekFunctionDispatcher:
         set_tenant_context("coalcreek")
         
         try:
-             result = await asyncio.wait_for(
+             return await asyncio.wait_for(
                 self._dispatch(function_name, args, context),
                 timeout=TIMEOUT
              )
-             if function_name not in _RESERVATION_READ_ONLY_TOOLS:
-                 # Unknown or writing tool: assume the reservation moved.
-                 self.db_service.invalidate()
-             return result
         except asyncio.TimeoutError:
              logger.error(f"Function {function_name} timed out after {TIMEOUT}s")
              # For availability checks, return "unknown" and let AI transparently
@@ -2304,6 +2704,16 @@ class CoalCreekFunctionDispatcher:
         except Exception as e:
              logger.error(f"Function error {function_name}: {e}")
              return {"error": str(e), "message": "I encountered a system error."}
+        finally:
+             # Unknown or writing tool: assume the reservation moved — on EVERY
+             # exit, not just success. A timeout or error can land after the
+             # hold was written; the model then retries, and a memo still
+             # holding the pre-write "no booking on this number" hid the new
+             # hold from create_booking_request's duplicate check, so the retry
+             # saved a second hold and mailed a second Stripe link. With the
+             # memo dropped, the retry finds its own hold and patches it.
+             if function_name not in _RESERVATION_READ_ONLY_TOOLS:
+                 self.db_service.invalidate()
 
     async def _dispatch(self, function_name: str, args: dict, context: dict = None) -> dict:
         """Internal dispatch map."""
@@ -2330,7 +2740,11 @@ class CoalCreekFunctionDispatcher:
                 guest_name  = args.get("guest_name", "")
                 check_in    = result.get("check_in_date", "")
                 check_out   = result.get("check_out_date", "")
-                guest_email = args.get("guest_email", "")
+                # The address the handler normalised and SAVED, not the raw
+                # transcript. Raw "james at g mail dot com" fails the format
+                # check, the hold is marked email_failed and the caller is told
+                # to spell an address that was in fact understood — on a loop.
+                guest_email = result.get("guest_email", args.get("guest_email", ""))
                 num_nights  = max(1, result.get("num_nights", 1))
 
                 # P11-C: Use saved doc $id to skip race-prone get_booking_by_reference
@@ -2481,10 +2895,14 @@ class CoalCreekFunctionDispatcher:
             }
              
         elif function_name == "transfer_to_staff":
-             user_utt = (args.get("_user_utterance") or "").lower().strip()
-             negation_words = {"no", "dont", "don't", "stop", "never", "cancel"}
-             words = set(re.sub(r'[^\w\s]', '', user_utt).split())
-             if negation_words & words or user_utt in ("no", "no no", "no thanks", "no thank you"):
+             # A bag-of-words check ("no"/"don't" anywhere) refused callers who
+             # said "No, I want to speak to a person" or "I don't want the
+             # robot, put me through", so the model looped unable to transfer.
+             # Only a negation of the transfer itself refuses now — the same
+             # parse the orchestrator's consent gate uses, so they agree.
+             from services.voice_agent.text_utils import transfer_refused
+             user_utt = (args.get("_user_utterance") or "").strip()
+             if transfer_refused(user_utt):
                  logger.debug("tool args: %s", _args_for_log(args)); logger.warning("🚫 Programmatic transfer guard: LLM called transfer_to_staff but user said: '%s'", user_utt)
                  return {
                      "success": False,
