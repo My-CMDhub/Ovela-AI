@@ -8,7 +8,12 @@ import { NextRequest, NextResponse } from "next/server";
  * both Legacy/Production backends (which use /api/motel) and New/Local backends.
  */
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { resolveBackendUrl } from "@/lib/backend-url";
+
+// Unset stays local for development; a stale Cloud Run value is replaced (see lib/backend-url.ts).
+const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL
+    ? resolveBackendUrl(process.env.NEXT_PUBLIC_API_URL)
+    : "http://localhost:8000";
 const API_KEY = process.env.DASHBOARD_API_KEY || "";
 
 async function proxyRequest(request: NextRequest, path: string) {
