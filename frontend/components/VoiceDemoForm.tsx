@@ -4,6 +4,7 @@ import { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Phone, Check, Loader2, AlertCircle, ArrowRight } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { BACKEND_URL } from "@/lib/backend-url"
 
 interface VoiceDemoFormProps {
     className?: string
@@ -46,7 +47,7 @@ export function VoiceDemoForm({ className }: VoiceDemoFormProps) {
                 ? `+61${cleanedPhone.substring(1)}`
                 : cleanedPhone
 
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/voice/demo-request`, {
+            const response = await fetch(`${BACKEND_URL}/api/voice/demo-request`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

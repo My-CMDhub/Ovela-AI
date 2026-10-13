@@ -84,6 +84,10 @@ class DateReading:
     past: bool = False
     conflict: str = ""
     weekend: bool = False
+    # Say the date out loud even when the model already had it right: "next"
+    # and "the weekend" are where a caller and the agent most often mean
+    # different days, and hearing it is the only way the caller can catch it.
+    confirm: bool = False
 
     @property
     def ambiguous(self) -> bool:
@@ -255,6 +259,7 @@ class _Point:
     span: Optional[tuple] = None
     weekend: bool = False
     conflict: str = ""
+    confirm: bool = False
     kind: str = ""   # "weekday" | "dom" (day of month) | "dated" (day + month) | "veto" | ""
 
 
@@ -264,6 +269,9 @@ _VETO = _Point(kind="veto")   # words that are about dates, but not ones we can 
 _COUNT_RE = r"(\d{1,2}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fourteen)"
 
 _PATTERNS = []
+
+# A weekend stay: Saturday and Sunday nights (Saturday in, Monday out).
+WEEKEND_NIGHTS = 2
 
 
 def _pattern(regex):
@@ -390,19 +398,18 @@ def _weekday(m, today, anchor):
         base = _upcoming(today, wd, include_today=False)
         if "fortnight" in m["after"]:
             return _Point(day=base + timedelta(days=14), kind="weekday")
-        if "after next" in m["after"] and base - today < timedelta(days=7 - today.weekday()):
-            # "Friday after next" said on a Wednesday: the Friday after this
-            # one to some, after next week's to others.
-            return _Point(day=base + timedelta(days=7), alternative=base + timedelta(days=14), kind="weekday")
-        return _Point(day=base + timedelta(days=7), kind="weekday")  # "Friday week"
+        if "after next" in m["after"]:
+            # One week after "next Friday", which is next week's Friday.
+            this_one = _upcoming(today, wd, include_today=True)
+            return _Point(day=this_one + timedelta(days=14), kind="weekday", confirm=True)
+        return _Point(day=base + timedelta(days=7), kind="weekday", confirm=True)  # "Friday week"
     if q == "next":
+        # The owner's rule: "next" means NEXT, never the upcoming one. Said on
+        # a Wednesday, "next Friday" is next week's Friday, not the day after
+        # tomorrow. One reading, and the agent says the date so a caller who
+        # meant otherwise hears it.
         this_one = _upcoming(today, wd, include_today=True)
-        if wd == today.weekday():
-            return _Point(day=this_one + timedelta(days=7), kind="weekday")
-        # Said on a Wednesday, "next Friday" is this Friday to some people and
-        # the one after to others. Default to the week after (the old rule and
-        # the prompt's), and carry the other so the agent confirms.
-        return _Point(day=this_one + timedelta(days=7), alternative=this_one, kind="weekday")
+        return _Point(day=this_one + timedelta(days=7), kind="weekday", confirm=True)
     if q in ("this", "coming", "upcoming"):
         return _Point(day=_upcoming(today, wd, include_today=True), kind="weekday")
     # Bare "Friday" / "on Friday": the coming one. Said on a Friday it could be
@@ -471,9 +478,7 @@ def _nth_weekday_of_month(m, today, anchor):
 @_pattern(r"\b(?:the\s+)?weekend\s+after\s+next\b")
 def _weekend_after_next(m, today, anchor):
     sat = _this_saturday(today)
-    if today.weekday() in (4, 5):   # Fri/Sat: "next weekend" is unambiguous, this is the one after
-        return _Point(day=sat + timedelta(days=14), weekend=True)
-    return _Point(day=sat + timedelta(days=14), alternative=sat + timedelta(days=7), weekend=True)
+    return _Point(day=sat + timedelta(days=14), weekend=True, confirm=True)
 
 
 @_pattern(r"\b(?:the\s+)?weekend\s+after(?!\s+next)\b")
@@ -481,7 +486,7 @@ def _weekend_after(m, today, anchor):
     # "Can I move it to the weekend after?" — after the booking being talked about.
     if anchor is None:
         return _VETO
-    return _Point(day=_saturday_of(anchor) + timedelta(days=7), weekend=True)
+    return _Point(day=_saturday_of(anchor) + timedelta(days=7), weekend=True, confirm=True)
 
 
 @_pattern(r"\b(?P<q>this\s+coming|this|the|coming|upcoming|next|over\s+the)\s+weekend\b(?!\s+after)")
@@ -489,10 +494,8 @@ def _weekend(m, today, anchor):
     q = m["q"]
     sat = _this_saturday(today)
     if q != "next":
-        return _Point(day=sat, weekend=True)
-    if today.weekday() in (4, 5):   # said on a Friday or Saturday: clearly the following one
-        return _Point(day=sat + timedelta(days=7), weekend=True)
-    return _Point(day=sat + timedelta(days=7), alternative=sat, weekend=True)
+        return _Point(day=sat, weekend=True, confirm=True)
+    return _Point(day=sat + timedelta(days=7), weekend=True, confirm=True)
 
 
 @_pattern(r"\b(?P<q>this|next|the)\s+week(?P<after>\s+after(?:\s+next)?)?\b(?!end|\s+(?:on|from))")
@@ -714,15 +717,13 @@ def read_dates(text: str, today: date, anchor: Optional[date] = None) -> Optiona
     if p.span:
         return DateReading(phrase=phrase, span=p.span, nights=nights)
     day, alternative = p.day, p.alternative
-    if p.weekend and nights == 2:
-        # "this weekend, two nights": Friday and Saturday nights.
-        day = day - timedelta(days=1)
-        alternative = alternative - timedelta(days=1) if alternative else None
     check_out = day + timedelta(days=nights) if nights else None
     if p.weekend and not nights:
-        check_out = day + timedelta(days=1)  # AU motel convention: Saturday in, Sunday out
+        # The owner's rule: a weekend is Saturday AND Sunday nights — in on
+        # Saturday, out on Monday — and the agent confirms it out loud.
+        check_out = day + timedelta(days=WEEKEND_NIGHTS)
     return DateReading(phrase=phrase, check_in=day, check_out=check_out, alternative=alternative,
-                       nights=nights, weekend=p.weekend)
+                       nights=nights, weekend=p.weekend, confirm=p.confirm or p.weekend)
 
 
 def _roll_forward(end: date, point: _Point) -> Optional[date]:
@@ -822,20 +823,14 @@ def reconcile(model_in: Optional[date], model_out: Optional[date], utterance: st
         if not (for_booking and (r.check_out or r.nights) and about_the_stay(utterance)):
             return keep   # a range or a length at booking time is still checked
 
-    if r.weekend and r.check_in and model_in and model_out and \
+    if for_booking and r.weekend and r.check_in and model_in and model_out and \
             (not r.nights or r.nights == (model_out - model_in).days):
-        # "this weekend" covers Friday-to-Sunday as much as Saturday-to-Sunday.
-        # The model's stay stands if it starts that Friday or Saturday and
-        # includes the Saturday night.
-        for cand in (r.check_in, r.alternative):
-            if cand is None:
-                continue
-            sat = cand + timedelta(days=(5 - cand.weekday()) % 7)
-            if sat - timedelta(days=1) <= model_in <= sat < model_out:
-                other = r.alternative if cand == r.check_in else r.check_in
-                say = (f"Just so we're on the same page, that's {spoken_short(model_in)}, "
-                       f"not {spoken_short(other)}.") if other else ""
-                return Reconciled(model_in, model_out, say_first=say, reading=r)
+        # At booking, "yes, this weekend is perfect" restates the summary the
+        # caller just agreed to. Their stay stands if it includes that
+        # Saturday night; the nights were confirmed in the read-back.
+        sat = r.check_in + timedelta(days=(5 - r.check_in.weekday()) % 7)
+        if sat - timedelta(days=1) <= model_in <= sat < model_out:
+            return keep
 
     if r.conflict:
         if r.alternative:
@@ -880,7 +875,13 @@ def reconcile(model_in: Optional[date], model_out: Optional[date], utterance: st
         out = chosen + timedelta(days=1)
 
     say = ""
-    if r.ambiguous:
+    if r.weekend and r.confirm and (out - chosen).days == 2 and chosen.weekday() == 5:
+        say = (f"Just to confirm, that's Saturday the {chosen.day}{_suffix(chosen.day)} and Sunday the "
+               f"{(chosen + timedelta(days=1)).day}{_suffix((chosen + timedelta(days=1)).day)} nights, "
+               f"checking out {spoken_short(out)}.")
+    elif r.confirm and not r.ambiguous:
+        say = f"That's {spoken_short(chosen)}."
+    elif r.ambiguous:
         say = f"Just so we're on the same page, that's {spoken_short(chosen)}, not {spoken_short(other)}."
     elif model_in != chosen:
         say = f"That's {spoken_short(chosen)}."

@@ -1352,8 +1352,16 @@ async def handle_create_booking_request(args: dict, user_phone: str, save_reserv
             "change_rule": _change_rule(reservation_data, _today_melbourne_date())[1],
             **({"replaced_booking_reference": replacing_doc.get("booking_reference"),
                 "old_hold_released": bool(released_old)} if replacing_doc is not None else {}),
+            # After a move the caller has TWO links in their inbox and only the
+            # new one works, so the receipt check is not optional: the agent
+            # must hear "got it" before moving on (prompt rule 10).
+            **({"must_confirm_link_received": True} if replacing_doc is not None and guest_email else {}),
             "message": (
-                (f"I've moved your booking: the old hold is cancelled. " if replacing_doc is not None else "") +
+                (f"I've moved your booking to {ci_spoken}, and cancelled the old hold. Your new reference is "
+                 f"{ref_spoken}. I've just sent a new payment link to {guest_email} — please use only the new "
+                 "link, not the earlier one. Could you check your inbox now and tell me once it's arrived? "
+                 "I'll stay on the line."
+                 if replacing_doc is not None and guest_email else "") or
                 f"I've placed a {num_nights} night hold for {ci_spoken}. Your reference is {ref_spoken}. "
                 f"A payment link has been sent to {guest_email} — "
                 "could you check your inbox now to confirm it arrived? I'll stay on the line."

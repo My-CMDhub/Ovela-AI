@@ -306,3 +306,21 @@ async def test_a_departing_guest_booking_a_new_stay_is_not_asked_instead_or_as_w
     db = MovesDb([_booking(_d(-2), _d(0))])
     out = await _book(db)
     assert out["success"] is True
+
+
+async def test_a_move_asks_the_caller_to_confirm_the_new_link_arrived():
+    """The owner's rule: two links are now in their inbox and only one is good,
+    so the agent must hear that the new one arrived before moving on."""
+    db = MovesDb([UNPAID_AHEAD])
+    out = await _book(db, replaces_booking_reference="CC-41273")
+    assert out["must_confirm_link_received"] is True
+    msg = out["message"]
+    assert "use only the new link" in msg and "tell me once it's arrived" in msg and "stay on the line" in msg
+
+
+def test_the_prompt_tells_the_agent_to_wait_for_that_confirmation():
+    from services.voice_agent.prompts_coalcreek import get_coalcreek_prompt
+    prompt = get_coalcreek_prompt("Wednesday, 14 October 2026", "10:00 AM")
+    assert "WAIT until they say the new link has arrived" in prompt
+    assert "A WEEKEND is Saturday AND Sunday nights" in prompt
+    assert "NEXT always means next" in prompt

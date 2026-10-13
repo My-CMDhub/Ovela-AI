@@ -307,10 +307,15 @@ function IPhoneMockup() {
 }
 
 export function Hero() {
-  const [currentTime, setCurrentTime] = useState(new Date())
+  // Null until mounted. Seeding this with new Date() rendered the SERVER's date
+  // into the HTML (UTC on the host) and the browser's on hydration — across
+  // midnight in Melbourne the two differ, and React threw error #418 (text
+  // content mismatch) on the home page.
+  const [currentTime, setCurrentTime] = useState<Date | null>(null)
   const [activeBooking, setActiveBooking] = useState(0)
   const [isDemoOpen, setIsDemoOpen] = useState(false) // State for modal
   useEffect(() => {
+    setCurrentTime(new Date())
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
     return () => clearInterval(timer)
   }, [])
@@ -616,7 +621,7 @@ export function Hero() {
                     <div>
                       <h2 className="text-base font-semibold"> Good morning, Lisa </h2>
                       <p className="text-xs text-muted-foreground">
-                        {currentTime.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
+                        {currentTime?.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" }) ?? "\u00a0"}
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
