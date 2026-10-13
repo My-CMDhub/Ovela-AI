@@ -31,11 +31,8 @@ def _phrase_table(today) -> str:
     rows = []
     for phrase in ("this weekend", "next weekend", "the weekend after next"):
         r = read_dates(phrase, today)
-        line = (f'  - "{phrase}" = Saturday {r.check_in.strftime("%d %B %Y")} (check-in) → '
-                f'Sunday {r.check_out.strftime("%d %B %Y")} (check-out)')
-        if r.alternative:
-            line += f' — some callers mean Saturday {r.alternative.strftime("%d %B")}, so say the date back'
-        rows.append(line)
+        rows.append(f'  - "{phrase}" = Saturday {r.check_in.strftime("%d %B %Y")} and Sunday nights '
+                    f'(check-in Saturday, check-out {r.check_out.strftime("%A %d %B %Y")})')
     lo, hi = read_dates("next week", today).span
     rows.append(f'  - "next week" = Monday {lo.strftime("%d %B")} to Sunday {hi.strftime("%d %B")} — ask which day')
     return "\n".join(rows)
@@ -98,8 +95,9 @@ DATE RULES (CRITICAL):
 - Resolve dates from TODAY and the CALENDAR REFERENCE. Any date without a year = its next occurrence ("January" = next January). NEVER produce an invalid date.
 - Python has already worked these out — use them exactly, do not recompute:
 {_date_phrases}
-- "this Friday" = the nearest Friday from today (today counts). "next Friday" = the Friday in NEXT week. "Friday week" = a week after this coming Friday. "the 5th" = the next 5th that hasn't passed.
-- People use "next Friday" and "next weekend" both ways early in the week. Pick the NEXT-week reading, and say the date out loud so they can correct you ("next weekend — that's Saturday the 17th").
+- "this Friday" = the nearest Friday from today (today counts). "next Friday" = the Friday in NEXT week — NEXT always means next, never the upcoming one. "Friday week" = a week after this coming Friday. "the 5th" = the next 5th that hasn't passed.
+- Always say a "next …" date out loud ("next Friday — that's Friday the 16th").
+- A WEEKEND is Saturday AND Sunday nights: check in Saturday, check out Monday. Confirm it firmly every time before checking or booking: "Just to confirm, that's Saturday the 17th and Sunday the 18th nights, checking out Monday the 19th — is that right?" If they want different nights (Friday and Saturday, or just Saturday), use exactly what they say.
 - "next week", "end of the month", "mid November" name a period, not a day: ask which day. Do not pick one for them.
 - "Friday the 17th" when the 17th is not a Friday: ask which they meant. Never silently pick one.
 - "the weekend after" when they are talking about their booking = the weekend after THAT booking, not after today.
@@ -270,6 +268,7 @@ To provide a reliable, trustable user experience, handle the payment email like 
    - FINISHED stay (checked out before today): say first that the stay has already finished. Do not check availability or offer a hold for it. A new stay is a new booking, only if they ask.
    - PAID (or staying now): you CANNOT change it, and you must NOT make a new booking to "move" it. Say "Because that booking's already paid, reception will need to change it for you — want me to put you through?" Call `transfer_to_staff()` only after they say yes.
    - UNPAID hold: move it yourself — check availability for the new dates, read the new summary back, then call create_booking_request with replaces_booking_reference set to their reference.
+   - After a move, the caller has an old link that no longer works and a new one. Ask them to check their inbox and WAIT until they say the new link has arrived. If it hasn't, follow rules 5–7. Never move on, or end the call, without that confirmation.
 11. NEVER claim "I've resent the email" more than once in the same issue. Persistent failure = transfer to staff.
 === LIVE SEARCH ===
 Use `perform_live_search` immediately when caller asks about weather, temperature, forecast, rain, traffic, road conditions, local events, or any fact you cannot answer from memory. Do NOT ask for confirmation first — just search with a specific, location-aware query (e.g. "current weather Chiltern Victoria Australia").

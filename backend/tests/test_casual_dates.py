@@ -34,19 +34,19 @@ def _year():
 # ── what phrases mean, on Wednesday 7 October 2026 ──────────────────────────
 
 @pytest.mark.parametrize("phrase, check_in, check_out, alternative", [
-    ("this weekend", "2026-10-10", "2026-10-11", None),
-    ("the weekend", "2026-10-10", "2026-10-11", None),
-    ("next weekend", "2026-10-17", "2026-10-18", "2026-10-10"),
-    ("weekend after next", "2026-10-24", "2026-10-25", "2026-10-17"),
-    ("the last weekend of October", "2026-10-31", "2026-11-01", None),
-    ("the first weekend of November", "2026-11-07", "2026-11-08", None),
+    ("this weekend", "2026-10-10", "2026-10-12", None),
+    ("the weekend", "2026-10-10", "2026-10-12", None),
+    ("next weekend", "2026-10-17", "2026-10-19", None),
+    ("weekend after next", "2026-10-24", "2026-10-26", None),
+    ("the last weekend of October", "2026-10-31", "2026-11-02", None),
+    ("the first weekend of November", "2026-11-07", "2026-11-09", None),
     ("this Friday", "2026-10-09", None, None),
     ("Friday", "2026-10-09", None, None),
     ("on Friday night", "2026-10-09", None, None),
-    ("next Friday", "2026-10-16", None, "2026-10-09"),
-    ("next Saturday", "2026-10-17", None, "2026-10-10"),
+    ("next Friday", "2026-10-16", None, None),
+    ("next Saturday", "2026-10-17", None, None),
     ("Friday week", "2026-10-16", None, None),
-    ("Friday after next", "2026-10-16", None, "2026-10-23"),
+    ("Friday after next", "2026-10-23", None, None),
     ("Tuesday next week", "2026-10-13", None, None),
     ("next week on Thursday", "2026-10-15", None, None),
     ("tonight", "2026-10-07", None, None),
@@ -75,7 +75,7 @@ def _year():
     ("Easter Monday", "2027-03-29", None, None),
     # ranges and lengths
     ("Friday to Sunday", "2026-10-09", "2026-10-11", None),
-    ("next Friday to Sunday", "2026-10-16", "2026-10-18", "2026-10-09"),
+    ("next Friday to Sunday", "2026-10-16", "2026-10-18", None),
     ("from the 10th till the 12th", "2026-10-10", "2026-10-12", None),
     ("the 30th to the 2nd", "2026-10-30", "2026-11-02", None),
     ("Friday for two nights", "2026-10-09", "2026-10-11", None),
@@ -124,7 +124,7 @@ def test_the_weekend_after_a_booking_is_after_the_booking_not_today():
     """The Kaggle probe's words: "Actually, can I move it to the weekend after instead?"."""
     booked = D("2026-10-16")
     r = read_dates("Actually, can I move it to the weekend after instead?", WED, anchor=booked)
-    assert (r.check_in, r.check_out) == (D("2026-10-24"), D("2026-10-25"))
+    assert (r.check_in, r.check_out) == (D("2026-10-24"), D("2026-10-26"))
     # Without a booking to be "after", the phrase says nothing.
     assert read_dates("can I move it to the weekend after instead?", WED) is None
 
@@ -138,8 +138,9 @@ def test_weekends_are_saturdays_in_order(today):
     after = read_dates("the weekend after next", today).check_in
     assert this.weekday() == nxt.check_in.weekday() == after.weekday() == 5
     assert today <= this and nxt.check_in - this == timedelta(days=7) and after - nxt.check_in == timedelta(days=7)
-    # Two-way only early in the week; on a Friday or Saturday "next weekend" is plain.
-    assert nxt.ambiguous == (today.weekday() not in (4, 5))
+    # "next" means next: one reading, always said out loud.
+    assert not nxt.ambiguous and nxt.confirm
+    assert nxt.check_out - nxt.check_in == timedelta(days=2)   # Saturday and Sunday nights
 
 
 @pytest.mark.parametrize("today", _year())
@@ -150,8 +151,7 @@ def test_weekdays_land_on_the_right_day_and_never_in_the_past(today):
         assert this.weekday() == nxt.check_in.weekday() == i
         assert today <= this < today + timedelta(days=7)
         assert nxt.check_in - this == timedelta(days=7)
-        assert nxt.ambiguous == (i != today.weekday())
-        assert nxt.alternative in (None, this)
+        assert not nxt.ambiguous and nxt.confirm
 
 
 @pytest.mark.parametrize("today", _year()[::7])
@@ -207,14 +207,20 @@ def test_another_topic_never_overrides_the_models_dates(words):
 def test_a_wrong_next_weekend_is_corrected_and_read_back():
     """The live failure: "next weekend" booked as a weekend nobody asked for."""
     rec = reconcile(D("2026-10-03"), D("2026-10-04"), "anything free next weekend?", WED)
-    assert (rec.check_in, rec.check_out) == (D("2026-10-17"), D("2026-10-18"))
-    assert rec.changed and "Saturday the 17th" in rec.say_first and "not Saturday the 10th" in rec.say_first
+    assert (rec.check_in, rec.check_out) == (D("2026-10-17"), D("2026-10-19"))
+    assert rec.changed and rec.say_first == ("Just to confirm, that's Saturday the 17th and Sunday the 18th "
+                                             "nights, checking out Monday the 19th.")
 
 
-def test_either_reading_of_a_two_way_phrase_is_kept_and_named():
+def test_next_weekend_is_never_this_weekend():
+    """The owner's rule: next means next. The model's "this weekend" is corrected."""
     rec = reconcile(D("2026-10-10"), D("2026-10-11"), "next weekend please", WED)
-    assert (rec.check_in, rec.check_out) == (D("2026-10-10"), D("2026-10-11")) and not rec.changed
-    assert rec.say_first == "Just so we're on the same page, that's Saturday the 10th, not Saturday the 17th."
+    assert (rec.check_in, rec.check_out) == (D("2026-10-17"), D("2026-10-19")) and rec.changed
+
+
+def test_next_friday_is_said_even_when_the_model_had_it():
+    rec = reconcile(D("2026-10-16"), D("2026-10-17"), "next Friday", WED)
+    assert not rec.changed and rec.say_first == "That's Friday the 16th."
 
 
 def test_a_right_unambiguous_date_is_left_alone_and_silent():
@@ -264,9 +270,8 @@ async def test_check_availability_checks_the_dates_the_caller_meant(wednesday):
         out = await H.handle_check_availability(
             {"check_in_date": "2026-10-10", "check_out_date": "2026-10-11", "room_type": "queen",
              "_user_utterance": "do you have anything the weekend after next?"}, MagicMock())
-    # 10 Oct is neither reading of "the weekend after next" (24th, or 17th): corrected to the default.
-    assert seen["check_in_date"] == "2026-10-24"
-    assert out["ai_should_say"].startswith("Just so we're on the same page, that's Saturday the 24th")
+    assert (seen["check_in_date"], seen["check_out_date"]) == ("2026-10-24", "2026-10-26")
+    assert out["ai_should_say"].startswith("Just to confirm, that's Saturday the 24th and Sunday the 25th nights")
     assert out["ai_should_say"].endswith("The Queen is available.")
 
 
@@ -361,14 +366,24 @@ def test_a_month_said_once_belongs_to_both_ends_of_the_range(words, check_in, ch
     assert (r.check_in, r.check_out) == (D(check_in), D(check_out)) and not r.conflict, (words, r)
 
 
-def test_this_weekend_keeps_a_friday_to_sunday_stay():
-    rec = reconcile(D("2026-10-16"), D("2026-10-18"), "yes this weekend", date(2026, 10, 14))
+def test_this_weekend_means_saturday_and_sunday_nights_and_is_confirmed():
+    """The owner's rule: a weekend covers both nights. A Friday-to-Sunday guess is
+    corrected on an availability check, and the caller hears it firmly."""
+    rec = reconcile(D("2026-10-16"), D("2026-10-18"), "this weekend", date(2026, 10, 14))
+    assert (rec.check_in, rec.check_out) == (D("2026-10-17"), D("2026-10-19"))
+    assert rec.say_first.startswith("Just to confirm, that's Saturday the 17th and Sunday the 18th nights")
+
+
+def test_at_booking_a_restated_weekend_keeps_the_confirmed_summary():
+    rec = reconcile(D("2026-10-16"), D("2026-10-18"), "yes this weekend", date(2026, 10, 14), for_booking=True)
     assert (rec.check_in, rec.check_out) == (D("2026-10-16"), D("2026-10-18")) and not rec.changed
 
 
-def test_this_weekend_for_two_nights_is_friday_and_saturday():
-    r = read_dates("this weekend, two nights", date(2026, 10, 14))
-    assert (r.check_in, r.check_out) == (D("2026-10-16"), D("2026-10-18"))
+def test_a_weekend_with_a_stated_length_starts_saturday():
+    r = read_dates("this weekend, one night", date(2026, 10, 14))
+    assert (r.check_in, r.check_out) == (D("2026-10-17"), D("2026-10-18"))
+    r = read_dates("this weekend for 3 nights", date(2026, 10, 14))
+    assert (r.check_in, r.check_out) == (D("2026-10-17"), D("2026-10-20"))
 
 
 @pytest.mark.parametrize("words", [
@@ -426,7 +441,7 @@ def test_a_holiday_season_is_not_a_check_in_day(words):
 ])
 def test_a_correction_means_the_second_date(words, check_in):
     r = read_dates(words, SAT)
-    assert r.check_in == D(check_in) and r.check_out in (None, D(check_in) + timedelta(days=1)), (words, r)
+    assert r.check_in == D(check_in), (words, r)
 
 
 
