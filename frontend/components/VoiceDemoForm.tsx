@@ -6,6 +6,9 @@ import { Phone, Check, Loader2, AlertCircle, ArrowRight } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { BACKEND_URL } from "@/lib/backend-url"
 
+const FRIENDLY_FAILURE =
+    "Sorry — our demo line is taking a quick breather right now. Please try again in a little while."
+
 interface VoiceDemoFormProps {
     className?: string
 }
@@ -61,8 +64,14 @@ export function VoiceDemoForm({ className }: VoiceDemoFormProps) {
             })
 
             if (!response.ok) {
-                const errorData = await response.json()
-                throw new Error(errorData.detail || "Failed to initiate call")
+                // Only our own short, friendly messages (validation, rate
+                // limits, "demo line is busy") are shown as they are. A server
+                // error never reaches the visitor verbatim: a suspended Twilio
+                // account once put its raw 401, account SID and all, on screen.
+                const errorData = await response.json().catch(() => ({}))
+                const detail = typeof errorData.detail === "string" ? errorData.detail : ""
+                const friendly = response.status < 500 || response.status === 503
+                throw new Error(friendly && detail ? detail : FRIENDLY_FAILURE)
             }
 
             const data = await response.json()
@@ -71,7 +80,8 @@ export function VoiceDemoForm({ className }: VoiceDemoFormProps) {
             setStep("calling")
         } catch (err: unknown) {
             console.error("Demo request error:", err)
-            const message = err instanceof Error ? err.message : "Something went wrong. Please try again."
+            // A network failure ("Failed to fetch") is also ours to explain kindly.
+            const message = err instanceof Error && err.message !== "Failed to fetch" ? err.message : FRIENDLY_FAILURE
             setError(message)
         } finally {
             setIsLoading(false)
@@ -223,7 +233,7 @@ export function VoiceDemoForm({ className }: VoiceDemoFormProps) {
                                 <div className="space-y-3">
                                     <h4 className="text-xl font-semibold text-gray-900 dark:text-white">Request Submitted!</h4>
                                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                                        Thanks! Your phone will ring shortly—keep it close.
+                                        Thanks! We've got your request. Once our team gives it the go-ahead, your phone will ring — keep it close.
                                     </p>
                                 </div>
 
