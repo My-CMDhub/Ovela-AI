@@ -118,6 +118,14 @@ def _demo_ip_allowed(ip: str, now: Optional[float] = None) -> bool:
     return True
 
 
+# Shown to a website visitor whenever we can't take their demo request. Never
+# the underlying error: that is for our logs, not for the public.
+DEMO_BUSY_MESSAGE = (
+    "Sorry — our demo line is taking a quick breather right now. "
+    "Please try again in a little while, or drop us a line and we'll ring you."
+)
+
+
 @router.post("/demo-request")
 async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks, http_request: Request):
     """
@@ -162,31 +170,24 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks, 
     except Exception as e:
         logger.warning(f"Failed to create demo lead: {e}")
 
-    # ============================================================
-    # WHITELISTED PHONES: Immediate call (bypass approval)
-    # ============================================================
-    if is_whitelisted(request.phone):
-        logger.info(f"Whitelisted phone {mask_phone(request.phone)} - immediate call")
-        try:
-            call = _trigger_demo_call(request.name, request.business_name, request.phone, tenant)
-            
-            if lead_id:
-                await db_service.update_demo_lead(lead_id=lead_id, data={"status": "called", "call_sid": call.sid})
-            
-            return {"status": "success", "call_sid": call.sid, "message": "Calling you now..."}
-        except Exception as e:
-            logger.error(f"Failed to initiate call: {str(e)}")
-            raise HTTPException(status_code=500, detail=str(e))
-
+    # Every request waits for the team's approval email — no instant-call
+    # whitelist. The bypass dialled straight from this endpoint, so when Twilio
+    # suspended the account the visitor saw Twilio's raw error (account SID
+    # included) instead of a request that simply waits for approval.
     # ============================================================
     # REGULAR PHONES: Pending approval flow
     # ============================================================
+    if not lead_id:
+        # No lead means no approval email can go out, so nobody would ever
+        # call them back. Say so kindly rather than promise a call.
+        raise HTTPException(status_code=503, detail=DEMO_BUSY_MESSAGE)
     if lead_id:
         # Update status to pending_approval
         await db_service.update_demo_lead(lead_id=lead_id, data={"status": "pending_approval"})
         
         # Generate magic links for approve/reject
-        extra_data = {"name": request.name, "phone": request.phone, "business": request.business_name}
+        extra_data = {"name": request.name, "phone": request.phone, "business": request.business_name,
+                      "tenant": tenant}
         approve_url = generate_demo_approval_url(lead_id, "demo-approve", extra_data)
         reject_url = generate_demo_approval_url(lead_id, "demo-reject", extra_data)
         
@@ -206,8 +207,11 @@ async def request_demo(request: DemoRequest, background_tasks: BackgroundTasks, 
         logger.info(f"Demo request {lead_id} pending approval for {mask_phone(request.phone)}")
     
     return {
-        "status": "pending", 
-        "message": "Thanks! Your phone will ring shortly—keep it close."
+        "status": "pending",
+        "message": (
+            "Thanks! We've got your request. Someone on our team will give it the go-ahead "
+            "shortly, and your phone will ring then — keep it close."
+        ),
     }
 
 
@@ -337,7 +341,10 @@ async def approve_demo(token: str = Form(...)):
 
         # Defaults to ovela_demo for approved website leads
         # If call fails, we should probably revert status, but typically 'approved' is fine
-        call = _trigger_demo_call(name, business, phone, tenant_id="ovela_demo", demo_type="brand_rep")
+        # The tenant chosen at request time (an admin phone may demo a known
+        # motel; everyone else gets the demo tenant), signed into the link.
+        call = _trigger_demo_call(name, business, phone, tenant_id=extra.get("tenant") or "ovela_demo",
+                                  demo_type="brand_rep")
         
         # Update with call SID
         await db_service.update_demo_lead(lead_id=lead_id, data={
@@ -362,19 +369,37 @@ async def approve_demo(token: str = Form(...)):
         
     except Exception as e:
         logger.error(f"Failed to trigger demo call: {e}")
+        # Put the lead back so this same approval link works once the cause
+        # is fixed; left "approved", it read as already processed forever.
+        try:
+            await db_service.update_demo_lead(lead_id=lead_id, data={"status": "pending_approval"})
+        except Exception as revert_err:
+            logger.error(f"Could not reset demo lead {lead_id}: {revert_err}")
+        reason = _call_failure_reason(e)
         return HTMLResponse(
             content=f"""
             <html>
             <head><title>Demo Approval</title></head>
             <body style="font-family: system-ui; padding: 40px; text-align: center;">
                 <h1>❌ Call Failed</h1>
-                <p>Could not initiate call: {html.escape(str(e))}</p>
-                <p>Please try calling manually or check the logs.</p>
+                <p>{html.escape(reason)}</p>
+                <p>The request is still pending: once that's fixed, open the same approval link again.</p>
             </body>
             </html>
             """,
-            status_code=500
+            status_code=502
         )
+
+
+def _call_failure_reason(e: Exception) -> str:
+    """What the TEAM sees when an approved demo call can't be placed."""
+    text = str(e).lower()
+    if "not active" in text or "suspended" in text or "status 4" in text:
+        return ("Twilio says the account isn't active (usually suspended for low credit). "
+                "Top up or reactivate it in the Twilio console.")
+    if "authenticat" in text or "20003" in text:
+        return "Twilio rejected our credentials. Check TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN."
+    return "Twilio couldn't place the call. The full error is in the server logs."
 
 
 @router.post("/demo-reject")

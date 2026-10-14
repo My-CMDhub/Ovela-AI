@@ -164,8 +164,10 @@ def test_admin_phone_may_pick_only_a_known_tenant(env, sent, used):
     client, db, call, _ = env
     body = dict(FORM, phone="+61499999999", tenant_id=sent)
     resp = client.post("/api/voice/demo-request", json=body)
-    assert resp.status_code == 200 and resp.json()["status"] == "success"
-    assert call.call_args.args[3] == used
+    # Even an admin phone now waits for the approval email; its tenant choice
+    # rides in the signed approval link.
+    assert resp.status_code == 200 and resp.json()["status"] == "pending"
+    call.assert_not_called()
     assert db.create_demo_lead.await_args.kwargs["tenant_id"] == used
 
 
@@ -194,7 +196,7 @@ def test_admin_phone_skips_ip_cap(env):
     client, _, call, _ = env
     for _ in range(voice._DEMO_IP_LIMIT + 2):
         assert _post_from(client, "203.0.113.7", phone="+61499999999").status_code == 200
-    assert call.call_count == voice._DEMO_IP_LIMIT + 2
+    call.assert_not_called()   # approval first, for everyone
 
 
 def test_ip_allowance_returns_after_the_window(monkeypatch):
@@ -226,3 +228,45 @@ def test_client_ip_reads_the_last_hop_across_repeated_header_lines():
         "client": ("10.0.0.1", 1234),
     }
     assert _client_ip(Request(scope)) == "203.0.113.9"
+
+
+# --- a third-party failure never reaches the visitor -----------------------------
+
+_SUSPENDED = Exception("HTTP 401 error: Unable to create record: authentication failed, "
+                       "account ACb66131b5c9fb546415b297179c8a6164 with status 4 is not active")
+
+
+def test_an_admin_phone_never_dials_from_the_public_endpoint(env):
+    """The live failure: a whitelisted number dialled at once, Twilio was
+    suspended, and the visitor got Twilio's raw 401 with the account SID."""
+    client, db, call, email = env
+    call.side_effect = _SUSPENDED
+    resp = client.post("/api/voice/demo-request", json=dict(FORM, phone="+61499999999"))
+    assert resp.status_code == 200 and resp.json()["status"] == "pending"
+    assert "go-ahead" in resp.json()["message"]
+    assert "AC" not in resp.text and "401" not in resp.text
+    call.assert_not_called()
+
+
+def test_no_lead_means_a_friendly_busy_message_not_a_promise(env):
+    client, db, _, _ = env
+    db.create_demo_lead.return_value = None
+    resp = client.post("/api/voice/demo-request", json=FORM)
+    assert resp.status_code == 503 and resp.json()["detail"] == voice.DEMO_BUSY_MESSAGE
+
+
+def test_a_failed_call_on_approval_keeps_the_lead_pending_and_says_why(env):
+    client, db, call, _ = env
+    call.side_effect = _SUSPENDED
+    resp = client.post("/api/voice/demo-approve", data={"token": _token("demo-approve")})
+    assert resp.status_code == 502
+    assert "Twilio says the account" in resp.text and "Top up" in resp.text
+    assert "ACb66131" not in resp.text          # the SID stays in the logs
+    assert db.update_demo_lead.await_args.kwargs["data"] == {"status": "pending_approval"}
+
+
+def test_approval_calls_with_the_tenant_chosen_at_request_time(env):
+    client, db, call, _ = env
+    token = _token("demo-approve", extra={"phone": "+61400000001", "name": "Ada", "tenant": "coalcreek"})
+    client.post("/api/voice/demo-approve", data={"token": token})
+    assert call.call_args.kwargs.get("tenant_id") == "coalcreek"
